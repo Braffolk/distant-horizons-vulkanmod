@@ -1,6 +1,6 @@
 # Distant Horizons → VulkanMod: Implementation Roadmap
 
-Status as of 2026-03-06: LODs are **rendering with correct colors** ✅ Phase 1 complete. Next: depth, lightmap, transparency.
+Status as of 2026-03-06: LODs render with **correct colors, depth, lightmap, and transparency** ✅ Phases 1-3 complete. Next: buffer management & performance.
 
 ## Architecture Overview
 
@@ -21,22 +21,23 @@ DH's `LodRenderer` detects VulkanMod via `GLProxy.isVulkanModActive()` and deleg
 3. **Dark colors**: `VTextureSelector.getImage(0)` returns block atlas, not lightmap. Sampling atlas with lightmap UVs → garbage. Bypassed with full brightness constant
 4. **Transparency**: MC's blend state inherited by DH pipeline. Disabled `PipelineState.blendInfo.enabled`
 5. **No depth writes**: MC had `depthMask=false`. Overridden to `true`
+6. **Lightmap always daytime**: Three bugs — (a) texelFetch coordinates swapped (blockLight,skyLight) vs original (skyLight,blockLight), (b) unnecessary `.bgr` swizzle, (c) replaced CPU `LightmapManager` with MC's framebuffer lightmap via `GlTexture.glId()` → `VkGlTexture` → `VulkanImage`
 
 ---
 
 ## Remaining Implementation Tasks
 
-### Phase 2: Depth Integration (Current)
-- [ ] Fix LODs rendering over MC terrain — add `vkCmdSetDepthBias` or adjust DH projection for Vulkan [0,1] depth range
-- [ ] LODs should always be behind MC terrain (currently only at < 0.25 blocks)
-- [ ] Handle LOD-only mode (no MC terrain) vs mixed mode
+### Phase 2: Depth Integration ✅ COMPLETE
+- [x] LODs render behind MC terrain via `polygonOffset(8.0f, 256.0f)` depth bias
+- [x] Uses MC's projection matrix (not DH's) for compatible depth values
+- [x] Lightmap: uses MC's framebuffer-rendered lightmap via VulkanMod's GL emulation layer
 
-### Phase 3: Transparency / Blending
-- [ ] Transparent LOD pass (water, glass) — needs alpha blending state
-  - GL path: `GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA`
-  - Vulkan: Set `PipelineState.blendInfo` before binding pipeline
-- [ ] Deferred transparent rendering (`deferTransparentRendering` flag)
-- [ ] Ensure transparent LODs render in correct order (back-to-front)
+### Phase 3: Transparency / Blending ✅ COMPLETE
+- [x] Added `setBlendState(boolean)` to `IVulkanRenderDelegate` — toggles `PipelineState.blendInfo`
+- [x] Sets blend functions: `SRC_ALPHA/ONE_MINUS_SRC_ALPHA` (RGB), `ONE/ONE_MINUS_SRC_ALPHA` (alpha)
+- [x] Re-binds pipeline after blend state change (VulkanMod bakes blend into pipeline objects)
+- **Known limitation**: LOD/MC water overlap causes double-transparency at transition zone
+  - Proper fix requires separate framebuffer + composite step (Phase 6)
 
 ### Phase 4: Buffer Management & Performance
 - [ ] VBO caching: current impl creates new `VertexBuffer` per VBO per frame
@@ -71,10 +72,10 @@ DH's `LodRenderer` detects VulkanMod via `GLProxy.isVulkanModActive()` and deleg
 - [ ] Wireframe debug rendering — needs `VK_POLYGON_MODE_LINE` pipeline variant
 - [ ] SSAO — currently GL-only, would need a separate Vulkan compute/render pass
 
-### Phase 8: Iris/Shader Pack Compatibility
-- [ ] DH has extensive Iris integration (`IRIS_ACCESSOR`) — all skipped for Vulkan
-- [ ] If VulkanMod adds shader pack support, DH would need equivalent hooks
-- [ ] Custom shader overrides via `IDhApiShaderProgram` — currently only works for GL
+### Phase 8: Iris/Shader Pack Compatibility — N/A
+- VulkanMod does not support shader packs — this phase is blocked until it does
+- DH's Iris integration (`IRIS_ACCESSOR`) is skipped for Vulkan path
+- Custom shader overrides via `IDhApiShaderProgram` remain GL-only
 
 ### Phase 9: Edge Cases & Robustness
 - [ ] Handle renderer reset (e.g., resource pack reload, window resize)

@@ -609,6 +609,8 @@ public class LodRenderer {
 			} else {
 				GLMC.disableBlend();
 			}
+		} else if (this.vulkanDelegate != null) {
+			this.vulkanDelegate.setBlendState(!opaquePass);
 		}
 
 		// ===========//

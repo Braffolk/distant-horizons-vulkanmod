@@ -48,6 +48,12 @@ public interface IVulkanRenderDelegate {
      */
     void drawBuffer(GLVertexBuffer vbo, int indexCount);
 
+    /**
+     * Enable or disable alpha blending for the current render pass.
+     * Called before drawing transparent LODs (water, glass).
+     */
+    void setBlendState(boolean enabled);
+
     /** End the current frame's rendering */
     void endFrame();
 

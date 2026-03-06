@@ -41,7 +41,6 @@ public class VulkanRenderDelegate implements IVulkanRenderDelegate {
     private final VulkanRenderContext renderContext;
     private boolean initialized = false;
     private boolean initFailed = false;
-    private int debugFrameCount = 0;
 
     /** Shared index buffer for quad rendering (6 indices per quad) */
     private IndexBuffer quadIndexBuffer;
@@ -129,7 +128,7 @@ public class VulkanRenderDelegate implements IVulkanRenderDelegate {
         PipelineState.blendInfo.enabled = false; // Opaque LODs don't need blending
 
         // Push LOD depth slightly behind MC terrain so MC always wins depth test
-        VRenderSystem.polygonOffset(8.0f, 256.0f);
+        VRenderSystem.polygonOffset(1.0f, 256.0f);
         VRenderSystem.enablePolygonOffset();
 
         // Bind MC's lightmap texture to slot 2.
@@ -140,33 +139,14 @@ public class VulkanRenderDelegate implements IVulkanRenderDelegate {
             if (lightmapView != null) {
                 com.mojang.blaze3d.opengl.GlTexture glTex = (com.mojang.blaze3d.opengl.GlTexture) lightmapView
                         .texture();
-                int glId = glTex.glId();
-                net.vulkanmod.gl.VkGlTexture vkGlTex = net.vulkanmod.gl.VkGlTexture.getTexture(glId);
+                net.vulkanmod.gl.VkGlTexture vkGlTex = net.vulkanmod.gl.VkGlTexture.getTexture(glTex.glId());
                 if (vkGlTex != null && vkGlTex.getVulkanImage() != null) {
-                    var vkImage = vkGlTex.getVulkanImage();
-                    VTextureSelector.setLightTexture(vkImage);
-
-                    if (this.debugFrameCount % 300 == 0) {
-                        LOGGER.info(
-                                "[DH-Vulkan] Lightmap: glId={}, VulkanImage {}x{}, imgHandle=0x{}, viewHandle=0x{}, slot2={}",
-                                glId, vkImage.width, vkImage.height,
-                                Long.toHexString(vkImage.getId()),
-                                Long.toHexString(vkImage.getImageView()),
-                                VTextureSelector.getImage(2) == vkImage ? "MATCH" : "MISMATCH");
-                    }
-                } else {
-                    if (this.debugFrameCount % 300 == 0) {
-                        LOGGER.warn("[DH-Vulkan] Lightmap resolve FAILED: glId={}, vkGlTex null={}",
-                                glId, vkGlTex == null);
-                    }
+                    VTextureSelector.setLightTexture(vkGlTex.getVulkanImage());
                 }
-            } else if (this.debugFrameCount % 300 == 0) {
-                LOGGER.warn("[DH-Vulkan] lightmapView is null");
             }
         } catch (Exception e) {
             LOGGER.error("[DH-Vulkan] Failed to bind MC lightmap", e);
         }
-        this.debugFrameCount++;
 
         this.renderContext.bindTerrainPipeline();
     }
@@ -303,6 +283,22 @@ public class VulkanRenderDelegate implements IVulkanRenderDelegate {
         } catch (Exception e) {
             LOGGER.error("[DH-Vulkan] Error during drawBuffer: {}", e.getMessage());
         }
+    }
+
+    @Override
+    public void setBlendState(boolean enabled) {
+        PipelineState.blendInfo.enabled = enabled;
+        if (enabled) {
+            // Match GL path: glBlendFuncSeparate(SRC_ALPHA, ONE_MINUS_SRC_ALPHA, ONE,
+            // ONE_MINUS_SRC_ALPHA)
+            PipelineState.blendInfo.srcRgbFactor = 6; // VK_BLEND_FACTOR_SRC_ALPHA
+            PipelineState.blendInfo.dstRgbFactor = 7; // VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA
+            PipelineState.blendInfo.srcAlphaFactor = 1; // VK_BLEND_FACTOR_ONE
+            PipelineState.blendInfo.dstAlphaFactor = 7; // VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA
+            PipelineState.blendInfo.blendOp = 0; // VK_BLEND_OP_ADD
+        }
+        // Re-bind pipeline so VulkanMod picks up the new blend state
+        this.renderContext.bindTerrainPipeline();
     }
 
     @Override
