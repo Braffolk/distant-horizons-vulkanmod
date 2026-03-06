@@ -2,25 +2,20 @@
     "schemaVersion": 1,
     "id": "distanthorizons",
     "version": "${version}",
-
-    "provides": [ "lod" ],
-    
-    
+    "provides": [
+        "lod"
+    ],
     "name": "${mod_name}",
     "description": "${description}",
-    "authors": $authors,
-    
+    "authors": [],
     "contact": {
         "homepage": "${homepage}",
         "sources": "${source}",
         "issues": "${issues}"
     },
-    
     "license": "LGPL-3",
     "icon": "assets/distanthorizons/icon.png",
-    
     "accessWidener": "distanthorizons.accesswidener",
-    
     "environment": "*",
     "entrypoints": {
         "client": [
@@ -33,11 +28,9 @@
             "com.seibel.distanthorizons.fabric.wrappers.config.ModMenuIntegration"
         ]
     },
-    
     "mixins": [
         "DistantHorizons.fabric.mixins.json"
     ],
-    
     "depends": {
         "fabricloader": "*",
         "fabric-api-base": "*",
@@ -46,7 +39,6 @@
         "minecraft": $compatible_minecraft_versions,
         "java": ">=${java_version}"
     },
-    
     "custom": {
         "modmenu": {
             "links": {
@@ -54,10 +46,7 @@
             }
         }
     },
-    
-    "suggests": {
-    },
-    
+    "suggests": {},
     "breaks": $fabric_incompatibility_list,
     "recommends": $fabric_recommend_list
 }

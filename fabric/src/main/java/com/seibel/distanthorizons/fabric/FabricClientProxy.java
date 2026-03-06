@@ -98,9 +98,17 @@ public class FabricClientProxy implements AbstractModInitializer.IEventProxy {
 	{
 		LOGGER.info("Registering Fabric Client Events");
 		
+		// VulkanMod integration: wire the Vulkan rendering delegate into the core renderer
+		// Note: we do NOT call init() here — VulkanMod's Renderer may not be ready yet.
+		// Init is deferred to the first beginFrame() call during actual rendering.
+		if (com.seibel.distanthorizons.core.render.glObject.GLProxy.isVulkanModActive())
+		{
+			LOGGER.info("[DH-VulkanMod] VulkanMod detected — setting up Vulkan rendering delegate (init deferred to first render)");
+			com.seibel.distanthorizons.fabric.vulkan.VulkanRenderDelegate vulkanDelegate = 
+				new com.seibel.distanthorizons.fabric.vulkan.VulkanRenderDelegate();
+			com.seibel.distanthorizons.core.render.renderer.LodRenderer.INSTANCE.setVulkanDelegate(vulkanDelegate);
+		}
 		
-		
-
 		
 		//==============//
 		// chunk events //
