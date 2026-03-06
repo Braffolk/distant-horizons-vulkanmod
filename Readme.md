@@ -1,16 +1,41 @@
-# <img src="https://gitlab.com/distant-horizons-team/distant-horizons-core/-/raw/main/_Misc%20Files/logo%20files/new/SVG/Distant-Horizons.svg" height="128px"> 
-_See farther without turning your game into a slide show._
+# Distant Horizons — VulkanMod Port
+
+A fork of [Distant Horizons](https://gitlab.com/distant-horizons-team/distant-horizons) with native **Vulkan rendering** via [VulkanMod](https://github.com/xCollateral/VulkanMod).
+
+LODs are rendered using VulkanMod's Vulkan pipeline instead of OpenGL, enabling Distant Horizons to work on systems and configurations running VulkanMod.
+
+![Distant Horizons running on VulkanMod](docs/dh-vulkanmod.jpg)
+*Distant Horizons LODs rendered via VulkanMod's Vulkan backend (MC 1.21.11)*
+
+## Status
+
+### ✅ Working
+- LOD terrain rendering with correct colors and vertex format
+- Lightmap support (day/night cycle, block light)
+- Depth integration (LODs render behind MC terrain)
+- Transparency / alpha blending (water, glass, etc.)
+
+### ⚠️ Not Yet Implemented
+- **Noise / dithering** — procedural noise texture not applied to LODs
+- **SSAO** (ambient occlusion) — requires a separate Vulkan render pass
+- **Fog rendering** — currently GL-only, skipped on Vulkan
+- **Shader pack support** — VulkanMod does not support shader packs (Iris/OptiFine)
+- **Some DH rendering settings** — GL-only features (wireframe debug, far clip fade, custom framebuffers) do not work on the Vulkan path
+
+See [docs/vulkan_implementation_roadmap.md](docs/vulkan_implementation_roadmap.md) for the full technical roadmap.
+
+## Building
+
+```bash
+./gradlew :fabric:build -PmcVer="1.21.11"
+```
 
 <br>
 
-# What is Distant Horizons?
+## What is Distant Horizons?
 
-Distant Horizons is a mod which implements a [Level of Detail](https://en.wikipedia.org/wiki/Level_of_detail_(computer_graphics)) system to Minecraft.\
+Distant Horizons is a mod which implements a [Level of Detail](https://en.wikipedia.org/wiki/Level_of_detail_(computer_graphics)) system to Minecraft.
 This allows for far greater render distances without harming performance by gradually lowering the quality of distant terrain.
-
-Below is a video demonstrating the system:
-
-<a href="https://youtu.be/SxQdbtjGEsc" target="_blank">![Distant Horizons - Alpha 2.0](https://i.ytimg.com/vi/SxQdbtjGEsc/hqdefault.jpg)</a>
 
 <br>
 
