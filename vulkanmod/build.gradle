@@ -1,0 +1,113 @@
+plugins {
+	id 'fabric-loom' version '1.12-SNAPSHOT'
+	id 'maven-publish'
+}
+
+version = project.mod_version
+group = project.maven_group
+
+base {
+	archivesName = project.archives_base_name
+}
+
+loom {
+	accessWidenerPath = file("src/main/resources/vulkanmod.accesswidener")
+}
+
+dependencies {
+	// To change the versions see the gradle.properties file
+	minecraft "com.mojang:minecraft:${project.minecraft_version}"
+	mappings loom.officialMojangMappings()
+	modImplementation "net.fabricmc:fabric-loader:${project.loader_version}"
+
+	// Fabric API.
+	modImplementation "net.fabricmc.fabric-api:fabric-api:${project.fabric_version}"
+
+	ext.includeModule = { name ->
+		var module = fabricApi.module(name, project.fabric_version)
+		modImplementation(module)
+		include(module)
+	}
+
+	includeModule("fabric-api-base")
+	includeModule("fabric-resource-loader-v0")
+	includeModule("fabric-resource-loader-v1")
+	includeModule("fabric-rendering-v1")
+	includeModule("fabric-renderer-api-v1")
+	includeModule("fabric-rendering-fluids-v1")
+	includeModule("fabric-block-view-api-v2")
+	includeModule("fabric-lifecycle-events-v1")
+	includeModule("fabric-transitive-access-wideners-v1")
+}
+
+project.ext.lwjglVersion = "3.3.3"
+project.ext.jomlVersion = "1.10.4"
+project.ext.winNatives = "natives-windows"
+project.ext.linuxNatives = "natives-linux"
+project.ext.macosNatives = "natives-macos"
+project.ext.macosArmNatives = "natives-macos-arm64"
+
+dependencies {
+	include(implementation("org.lwjgl:lwjgl-vulkan:$lwjglVersion"))
+
+	ext.includeNatives = { name ->
+		include(implementation("$name:$lwjglVersion"))
+		include(runtimeOnly("$name:$lwjglVersion:$winNatives"))
+		include(runtimeOnly("$name:$lwjglVersion:$linuxNatives"))
+		include(runtimeOnly("$name:$lwjglVersion:$macosNatives"))
+		include(runtimeOnly("$name:$lwjglVersion:$macosArmNatives"))
+	}
+
+	includeNatives("org.lwjgl:lwjgl-vma")
+	includeNatives("org.lwjgl:lwjgl-shaderc")
+
+	//MoltenVK
+	include(runtimeOnly("org.lwjgl:lwjgl-vulkan:$lwjglVersion:$macosNatives"))
+	include(runtimeOnly("org.lwjgl:lwjgl-vulkan:$lwjglVersion:$macosArmNatives"))
+}
+
+processResources {
+	inputs.property "version", project.version
+
+	filesMatching("fabric.mod.json") {
+		expand "version": project.version
+	}
+}
+
+tasks.withType(JavaCompile).configureEach {
+	it.options.release = 21
+}
+
+java {
+	// Loom will automatically attach sourcesJar to a RemapSourcesJar task and to the "build" task
+	// if it is present.
+	// If you remove this line, sources will not be generated.
+	withSourcesJar()
+
+	sourceCompatibility = JavaVersion.VERSION_21
+	targetCompatibility = JavaVersion.VERSION_21
+}
+
+jar {
+	from("LICENSE") {
+		rename { "${it}_${project.base.archivesName.get()}"}
+	}
+}
+
+// configure the maven publication
+publishing {
+	publications {
+		create("mavenJava", MavenPublication) {
+			artifactId = project.archives_base_name
+			from components.java
+		}
+	}
+
+	// See https://docs.gradle.org/current/userguide/publishing_maven.html for information on how to set up publishing.
+	repositories {
+		// Add repositories to publish to here.
+		// Notice: This block does NOT have the same function as the block in the top level.
+		// The repositories here will be used for publishing your artifact, not for
+		// retrieving dependencies.
+	}
+}

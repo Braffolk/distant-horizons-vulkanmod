@@ -1,0 +1,89 @@
+import com.github.jengelman.gradle.plugins.shadow.tasks.ShadowJar
+
+plugins {
+    id "java"
+
+    id "com.github.johnrengelman.shadow" version '8.1.1' apply false
+}
+
+
+shadowJar {
+    // required for basic shadowJar setup
+    configurations = [project.configurations.shadow]
+}
+
+task addSourcesToCompiledJar(type: ShadowJar) {
+    
+    def sourceJarPath = "build/libs/DistantHorizons-api-${rootProject.versionStr}-sources.jar"
+    def secondJarFile = file(sourceJarPath)
+    
+    // doFirst is so these only run when the task is actually executed
+    doFirst {
+        System.out.println("Adding source files from: \n" +
+                "[" + sourceJarPath + "] to compiled API jar: \n" +
+                "[" + shadowJar.archivePath + "]")
+        
+        // Validate the input JAR file
+        if (!secondJarFile.exists()) {
+            throw new GradleException("Second JAR file not found: [${secondJarFile}]")
+        }
+    }
+    
+    // Set the name of the combined JAR file
+    archiveFileName.set("DistantHorizonsApi-${rootProject.api_version}.jar")
+    
+    // Set the destination directory for the combined JAR file
+    destinationDirectory = file('build/libs/merged/')
+    
+    // Set the input JAR files to be combined
+    from sourceSets.main.allJava
+    from {
+        configurations.shadow.collect { it.isDirectory() ? it : zipTree(it) }
+    }
+    
+    // set the jars to merge
+    from shadowJar.archivePath
+    from secondJarFile
+    
+    // alternative method to Include the source files in the combined JAR
+    // and/or see which files are being included
+    eachFile { file ->
+        // can be set to true for debugging
+        def useAlternateEmbedMethod = false
+        def showFileEmbedding = false
+        
+        if (showFileEmbedding || useAlternateEmbedMethod) {
+            System.out.println("attempting to add file: " + file)
+            
+            def relativePath = file.relativePath.pathString
+            if (relativePath.endsWith('.class')) {
+                System.out.println("class file: " + relativePath)
+                def sourceFile = file.file.parentFile.resolveSibling('src/main/java/' + relativePath.replace('.class', '.java'))
+                if (sourceFile.exists()) {
+                    System.out.println("adding source file: " + sourceFile)
+                    if (useAlternateEmbedMethod) {
+                        file.withInputStream { inputStream ->
+                            copy {
+                                from(inputStream)
+                                into(relativePath.replace('.class', '.java'))
+                            }
+                        }
+                    }
+                } else {
+                    System.out.println('missing source file: ' + sourceFile)
+                }
+            }
+        }
+    }
+    
+}
+
+javadoc {
+    options {
+        // Don't log warnings.
+        // There are a lot of warnings related to missing @param and @return javadocs
+        // that aren't necessary and would clutter up said javadocs.
+        // For more info see: https://docs.oracle.com/javase/8/docs/technotes/tools/windows/javadoc.html
+        addStringOption('Xdoclint:all,-missing', '-quiet')
+    }
+}

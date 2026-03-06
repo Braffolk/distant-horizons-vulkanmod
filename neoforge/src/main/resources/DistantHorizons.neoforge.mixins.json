@@ -1,0 +1,25 @@
+{
+  "required": true,
+  "minVersion": "0.8",
+  "package": "com.seibel.distanthorizons.neoforge.mixins",
+  "mixins": [
+    "server.MixinChunkGenerator",
+    "server.MixinChunkMap",
+    "server.MixinServerPlayer",
+    "server.MixinTFChunkGenerator",
+    "server.MixinTracingExecutor",
+    "server.MixinUtilBackgroundThread",
+    "server.MixinLevelTicks"
+  ],
+  "client": [
+    "client.MixinClientPacketListener",
+    "client.MixinDebugScreenOverlay",
+    "client.MixinFogRenderer",
+    "client.MixinLevelRenderer",
+    "client.MixinLightTexture",
+    "client.MixinMinecraft",
+    "client.MixinOptionsScreen"
+  ],
+  "server": [],
+  "plugin": "com.seibel.distanthorizons.neoforge.mixins.NeoforgeMixinPlugin"
+}

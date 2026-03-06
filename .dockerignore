@@ -1,0 +1,19 @@
+**/.git
+**/.gitlab
+**/.cache
+
+buildAllJars
+
+**/_Misc Files
+*.bat
+*.md
+*.sh
+*.txt
+
+coreSubProjects/*.md
+coreSubProjects/*.txt
+
+**/.gitignore
+**/.gitattributes
+**/.gitlab-cy.yml
+**/.gitmodules

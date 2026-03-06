@@ -1,0 +1,689 @@
+import com.github.jengelman.gradle.plugins.shadow.transformers.Transformer
+import com.github.jengelman.gradle.plugins.shadow.transformers.TransformerContext
+import org.apache.tools.zip.ZipEntry
+
+import javax.annotation.Nonnull
+import org.apache.tools.zip.ZipOutputStream
+
+import java.util.function.Function
+import java.util.function.Predicate
+
+
+plugins {
+    id "java"
+
+    // Plugin to put dependencies inside our final jar
+    id "com.github.johnrengelman.shadow" version '8.1.1' apply false
+
+    // Plugin to create merged jars
+    id "io.github.pacifistmc.forgix" version "1.3.4"
+
+    // Manifold preprocessor
+    id "systems.manifold.manifold-gradle-plugin" version "0.0.2-alpha"
+
+    // Architectury is used here only as a replacement for forge's own loom
+    id "dev.architectury.loom" version "1.13-SNAPSHOT" apply false
+}
+
+
+/**
+ * Creates the list of preprocessors to use.
+ *
+ * @param mcVers array of all MC versions
+ * @param mcIndex array index of the currently active MC version
+ */
+def writeBuildGradlePredefine(List<String> mcVers, int mcIndex)
+{
+    // Build the list of preprocessors to use
+    StringBuilder sb = new StringBuilder();
+
+    sb.append("# DON'T TOUCH THIS FILE, This is handled by the build script\n");
+    
+    
+    for (int i = 0; i < mcVers.size(); i++)
+    {
+        String verStr = mcVers[i].replace(".", "_");
+        sb.append("MC_" + verStr + "=" + i.toString() + "\n");
+        
+        if (mcIndex == i) 
+        {
+            sb.append("MC_VER=" + i.toString() + "\n");
+        }
+    }
+    
+
+    // Check if this is a development build
+    if (mod_version.toLowerCase().contains("dev"))
+    {
+        // WARNING: only use this for logging, we don't want to have confusion
+        // when a method doesn't work correctly in the release build.
+        sb.append("DEV_BUILD=\n");
+    }
+
+    new File(projectDir, "build.properties").text = sb.toString()
+}
+
+
+// Transfers the values set in settings.gradle to the rest of the project
+project.gradle.ext.getProperties().each { prop ->
+    rootProject.ext.set(prop.key, prop.value)
+    //println "Added prop [key:" + prop.key + ", value:" + prop.value + "]"
+}
+// Sets up manifold stuff
+writeBuildGradlePredefine(rootProject.mcVers, rootProject.mcIndex)
+
+// Sets up the version string (the name we use for our jar)
+rootProject.versionStr = rootProject.mod_version + "-" + rootProject.minecraft_version // + "-" + new Date().format("yyyy_MM_dd_HH_mm")
+
+class NativeTransformer implements Transformer {
+    private Predicate<String> fileMatcher
+    private Function<String, String> filePathMapper
+
+    private final HashMap<String, String> replacements = new HashMap()
+    private final HashMap<String, byte[]> rewrittenFiles = new HashMap()
+    private var nativeRelocator
+
+    public File rootDir
+
+    void matchFiles(Predicate<String> matcher) {
+        fileMatcher = matcher
+    }
+
+    void mapPaths(Function<String, String> mapper) {
+        filePathMapper = mapper
+    }
+
+    void relocateNative(String target, String replacement) {
+        if (replacement.length() > target.length()) {
+            throw new GradleException("Length of value \"${replacement}\" exceeds the length of \"${target}\": ${replacement.length()} > ${target.length()}")
+        }
+
+        replacements.put(target, replacement)
+    }
+
+    @Override
+    boolean canTransformResource(@Nonnull FileTreeElement element) {
+        return fileMatcher.test(element.name)
+    }
+
+    @Override
+    void transform(@Nonnull TransformerContext context) {
+        byte[] content = context.is.readAllBytes()
+
+        if (nativeRelocator == null) {
+            nativeRelocator = new NativeRelocator(rootDir.toPath().resolve("relocate_natives"))
+        }
+
+        try {
+            String path = filePathMapper != null
+                ? filePathMapper.apply(context.path)
+                : context.path
+            content = nativeRelocator.processBinary(path, content, replacements)
+
+            rewrittenFiles.put(path, content)
+        }
+        catch (Throwable e) {
+            throw new GradleException("Failed to relocate", e)
+        }
+    }
+
+    @Override
+    boolean hasTransformedResource() { return !rewrittenFiles.isEmpty() }
+
+    @Override
+    void modifyOutputStream(@Nonnull ZipOutputStream os, boolean preserveFileTimestamps) {
+        for (Map.Entry<String, byte[]> rewrittenFile : rewrittenFiles.entrySet()) {
+            os.putNextEntry(new ZipEntry(rewrittenFile.key))
+            os.write(rewrittenFile.value)
+        }
+    }
+}
+
+subprojects { p ->
+    // Does the same as "p == project(":common") || p == project(":fabric") || p == project(":quilt")  || p == project(":forge") || p == project("WhateverWeAddLaterOn")"
+    // Useful later on so we dont have duplicated code
+    def isMinecraftSubProject = p != project(":core") && p != project(":api")
+
+
+    // Apply plugins
+    apply plugin: "java"
+    apply plugin: "com.github.johnrengelman.shadow"
+    if (isMinecraftSubProject)
+        apply plugin: "systems.manifold.manifold-gradle-plugin"
+    
+    // Apply forge's loom
+    if ((findProject(":forge") && p == project(":forge")) ||
+        (findProject(":neoforge") && p == project(":neoforge"))
+        )
+    {
+        apply plugin: "dev.architectury.loom"
+    }
+
+
+    // Set the manifold version (may not be required tough)
+    manifold {
+        manifoldVersion = rootProject.manifold_version
+    }
+    
+
+    // set up custom configurations (configurations are a way to handle dependencies) 
+    configurations {
+        // extends the shadowJar configuration
+        shadowMe
+        // have implemented dependencies automatically embedded in the final jar
+        implementation.extendsFrom(shadowMe)
+
+        // Configuration fpr core & api
+        coreProjects
+        shadowMe.extendsFrom(coreProjects)
+
+
+        // FIXME this additional configuration is necessary because forge 
+        //  needs forgeRuntimeLibrary, although adding it to shadowMe
+        //  causes runtime issues where the libraries aren't properly added
+        forgeShadowMe
+        // this should match shadowMe pretty closely
+        implementation.extendsFrom(forgeShadowMe)
+        shadowMe.extendsFrom(forgeShadowMe)
+        forgeRuntimeLibrary.extendsFrom(forgeShadowMe)
+
+
+        if (isMinecraftSubProject && p != project(":common")) {
+            // Shadow common
+            common
+            shadowCommon // Don't use shadow from the shadow plugin because we don't want IDEA to index this.
+            compileClasspath.extendsFrom common
+            runtimeClasspath.extendsFrom common
+            if (findProject(":forge"))
+                developmentForge.extendsFrom common
+            if (findProject(":neoforge"))
+                developmentNeoForge.extendsFrom common
+            compileClasspath.extendsFrom coreProjects
+            runtimeClasspath.extendsFrom coreProjects
+            if (findProject(":forge"))
+                developmentForge.extendsFrom coreProjects
+            if (findProject(":neoforge"))
+                developmentNeoForge.extendsFrom coreProjects
+        }
+    }
+
+
+    dependencies {
+        //=====================//
+        // shared dependencies //
+        //=====================//
+        
+        // Manifold
+        if (isMinecraftSubProject) {
+            annotationProcessor("systems.manifold:manifold-preprocessor:${rootProject.manifold_version}")
+        }
+
+        // Log4j
+        if (p == project(":core"))
+        {
+            // the standalone core jar needs logging shaded otherwise it won't run
+            forgeShadowMe("org.apache.logging.log4j:log4j-api:${rootProject.log4j_version}")
+            forgeShadowMe("org.apache.logging.log4j:log4j-core:${rootProject.log4j_version}")
+        }
+        else
+        {
+            // When running in MC, MC already includes logging
+            implementation("org.apache.logging.log4j:log4j-api:${rootProject.log4j_version}")
+            implementation("org.apache.logging.log4j:log4j-core:${rootProject.log4j_version}")
+        }
+        
+
+        // JOML
+        if (project.hasProperty("embed_joml") && embed_joml == "true")
+            forgeShadowMe("org.joml:joml:${rootProject.joml_version}")
+        else
+            implementation("org.joml:joml:${rootProject.joml_version}")
+        
+        // JUnit tests
+        implementation("org.junit.jupiter:junit-jupiter:5.8.2")
+        implementation("org.junit.jupiter:junit-jupiter-engine:5.8.2")
+        implementation("junit:junit:4.13")
+
+        // FastUtil
+        // Note: MC 1.16 uses 8.2.1, and versions after use 8.5.12
+        // We cannot relocate this library since we call some MC classes that reference it
+        implementation("it.unimi.dsi:fastutil:${rootProject.fastutil_version}")
+
+        forgeShadowMe("com.github.luben:zstd-jni:${rootProject.zstd_version}")
+        
+        // Compression
+        forgeShadowMe("org.lz4:lz4-java:${rootProject.lz4_version}") // LZ4
+        forgeShadowMe("org.tukaani:xz:${rootProject.xz_version}") // LZMA
+
+        // Sqlite Database
+        forgeShadowMe("org.xerial:sqlite-jdbc:${rootProject.sqlite_jdbc_version}")
+        
+        // NightConfig (includes Toml & Json)
+        forgeShadowMe("com.electronwill.night-config:toml:${rootProject.nightconfig_version}")
+        forgeShadowMe("com.electronwill.night-config:json:${rootProject.nightconfig_version}")
+
+        // SVG (not needed atm)
+//        forgeShadowMe("com.formdev:svgSalamander:${rootProject.svgSalamander_version}")
+        
+        // Netty
+        implementation("io.netty:netty-buffer:${rootProject.netty_version}")
+
+        // Remember, for lwjgl dependencies that arent included in Minecraft, you need to also need to add it to the ShadowJar thing
+        forgeShadowMe("org.lwjgl:lwjgl-jawt:${rootProject.lwjgl_version}") {
+            exclude group: "org.lwjgl", module: "lwjgl" // This module is imported by Minecraft so exclude it
+        }
+        
+        
+        
+        //==========================//
+        // conditional dependencies //
+        //==========================//
+
+
+        // Add core
+        if (isMinecraftSubProject) {
+            coreProjects(project(":core")) {
+                // Remove Junit test libraries
+                exclude group: "org.junit.jupiter", module: "junit-jupiter"
+                exclude group: "org.junit.jupiter", module: "junit-jupiter-engine"
+                exclude group: "junit", module: "junit"
+                // Removed dependencies
+                transitive false
+            }
+        }
+
+        // Add the api
+        if (p != project(":api")) {
+            coreProjects(project(":api")) {
+                // Remove Junit test libraries
+                exclude group: "org.junit.jupiter", module: "junit-jupiter"
+                exclude group: "org.junit.jupiter", module: "junit-jupiter-engine"
+                exclude group: "junit", module: "junit"
+                // Removed dependencies
+                transitive false
+            }
+        }
+
+        // Add common
+        if (isMinecraftSubProject && p != project(":common")) {
+            // Common
+            common(project(":common")) { transitive false }
+            shadowCommon(project(":common")) { transitive false }
+        }
+    }
+
+
+    shadowJar {
+        configurations = [project.configurations.shadowMe]
+        if (isMinecraftSubProject && p != project(":common")) {
+            configurations.push(project.configurations.shadowCommon) // Shadow the common subproject
+            relocate "com.seibel.distanthorizons.common", "loaderCommon.${p.name}.com.seibel.distanthorizons.common" // Move the loader files to a different location
+        }
+        def librariesLocation = "DistantHorizons.libraries"
+
+        // LWJGL
+        // Only ever shadow the dependencies we use otherwise some stuff would break when running on an external client
+        relocate "org.lwjgl.system.jawt", "${librariesLocation}.lwjgl.system.jawt"
+
+        // Compression (LZ4)
+        relocate "net.jpountz", "${librariesLocation}.jpountz"
+        
+        // Logging
+        relocate "org.slf4j", "${librariesLocation}.slf4j"
+
+        // Sqlite Database
+        // librariesLocation isn't used because it's too long for replacing paths in native libraries
+        // Allowing strings larger than the original string would require shifting the entire binary's contents
+        relocate "org.sqlite", "dh_sqlite", {
+            exclude "org/sqlite/native/**"
+        }
+        relocate "jdbc:sqlite", "jdbc:dh_sqlite"
+
+        transform(NativeTransformer) {
+            rootDir = project.rootDir
+
+            matchFiles { it.startsWith("org/sqlite") }
+            mapPaths { it.replace("org/sqlite", "dh_sqlite") }
+
+            relocateNative "org/sqlite", "dh_sqlite"
+            relocateNative "org_sqlite", "dh_1sqlite"
+        }
+
+        // ZStd
+        // librariesLocation isn't used because it's too long for replacing paths in native libraries
+        // Allowing strings larger than the original string would require shifting the entire binary's contents
+        relocate "com.github.luben", "dhcomgithubluben"
+        relocate "libzstd-jni", "libzstd-jni_dh"
+        relocate "zstd-jni", "zstd-jni_dh"
+
+        transform(NativeTransformer) {
+            rootDir = project.rootDir
+
+            matchFiles { it.contains("libzstd-jni") && !it.contains("aix/ppc64") }
+            mapPaths { it.replace("libzstd-jni", "libzstd-jni_dh") }
+
+            relocateNative "com/github/luben", "dhcomgithubluben"
+            relocateNative "com_github_luben", "dhcomgithubluben"
+        }
+        
+        
+        // JOML
+        if (project.hasProperty("embed_joml") && embed_joml == "true")
+            relocate "org.joml", "${librariesLocation}.joml"
+
+        // NightConfig (includes Toml & Json)
+        relocate "com.electronwill.nightconfig", "${librariesLocation}.electronwill.nightconfig"
+
+        // Netty
+        // Don't relocate, it causes problems with using MC's FriendlyByteBufs
+//        relocate "io.netty", "${librariesLocation}.netty"
+
+        mergeServiceFiles()
+    }
+    // Using jar.finalizedBy(shadowJar) causes issues so we do this scuffed bypass
+    jar.dependsOn(shadowJar)
+
+
+    // Put stuff from gradle.properties into the mod info
+    // Note: these resources are only included in the mod jars, the core and API jars don't include these files
+    processResources {
+        def resourceTargets = [ // Location of where to inject the properties
+                                // Holds info like git commit
+                                "build_info.json",
+
+                                // Properties for each of the loaders
+                                "fabric.mod.json",
+                                "quilt.mod.json",
+                                "META-INF/mods.toml",
+                                "META-INF/neoforge.mods.toml",
+
+                                // The mixins for each of the loaders
+                                //"DistantHorizons."+ p.name +".fabricLike.mixins.json"
+        ]
+        def intoTargets = ["$buildDir/resources/main/"] // Location of the built resources folder
+
+        // Fix forge version numbering system as it is weird
+        // For whatever reason forge uses [1.18, 1.18.1, 1.18.2) instead of the standard ["1.18", "1.18.1", "1.18.2"]
+        def compatible_forgemc_versions = "${compatible_minecraft_versions}".replaceAll("\"", "").replaceAll("]", ",)")
+//        println compatible_forgemc_versions
+
+        // Quilt's custom contributors system
+        // This has to be like
+        // "Person": "Developer", "Another person": "Developer"
+        def quilt_contributors = []
+        def mod_author_list = mod_authors.replaceAll("\"", "").replace("[", "").replace("]", "").split(",")
+        for (dev in mod_author_list) {
+            quilt_contributors.push("\"${dev.strip()}\": \"Developer\"")
+        }
+        quilt_contributors.reverse()
+        //println quilt_contributors.join(", ")
+
+        
+        // These "hasProperty"'s are so that they can be passed through the cli (ie in the CI)
+        try {
+            if (infoGitCommit == "null")
+                infoGitCommit = 'git rev-parse --verify HEAD'.execute().text.trim()
+            if (infoGitBranch == "null")
+                infoGitBranch = 'git symbolic-ref --short HEAD'.execute().text.trim()
+        } catch (Exception e) {
+            infoGitCommit = infoGitBranch = "Git not found"
+            println "Git or Git project not found"
+        }
+
+        // The left side is what gets replaced in the mod info and the right side is where to get it from in the gradle.properties
+        def replaceProperties = [
+                version                      : mod_version,
+                mod_name                     : mod_readable_name,
+                group                        : maven_group,
+                authors                      : mod_authors,
+                description                  : mod_description,
+                homepage                     : mod_homepage,
+                source                       : mod_source,
+                issues                       : mod_issues,
+                discord                      : mod_discord,
+                minecraft_version            : minecraft_version,
+                compatible_minecraft_versions: compatible_minecraft_versions,
+                compatible_forgemc_versions  : compatible_forgemc_versions,
+                java_version                 : java_version,
+                quilt_contributors           : "{"+quilt_contributors.join(", ")+"}",
+
+                info_git_commit              : infoGitBranch,
+                info_git_branch              : infoGitCommit,
+                info_build_source            : infoBuildSource,
+
+                fabric_incompatibility_list  : fabric_incompatibility_list,
+                fabric_recommend_list        : fabric_recommend_list,
+
+                neoforge_version_range       : neoforge_version_range,
+        ]
+        
+        // replace any properties in the sub-projects with the values defined here
+        inputs.properties replaceProperties
+        replaceProperties.put "project", project
+        filesMatching(resourceTargets) {
+            expand replaceProperties
+        }
+        
+        intoTargets.each { target ->
+            if (file(target).exists()) {
+                copy {
+                    from(sourceSets.main.resources) {
+                        include resourceTargets
+                        expand replaceProperties
+                    }
+                    into target
+                }
+            }
+        }
+
+
+
+        // ==================== Delete un-needed files ====================
+        // Jank solution to remove all unused accesswideners
+        // (neo)forge (well, mainly architectury) requires the original accesswidener file, meaning we require this jank solution to keep it
+        exclude { file ->
+            if (file.name.contains(".distanthorizons.accesswidener") && file.name != "${accessWidenerVersion}.distanthorizons.accesswidener") {
+                return true
+            }
+            return false
+        }
+    }
+
+
+    // Adds the standalone jar's entrypoint
+    jar {
+        from "LICENSE.txt"
+        manifest {
+            attributes( 
+                'Implementation-Title': rootProject.mod_name,
+                'Implementation-Version': rootProject.mod_version,
+                'Multi-Release': true, // needed for logging in the standalone core jar
+                'Main-Class': 'com.seibel.distanthorizons.core.jar.JarMain', // When changing the main of the jar change this line
+            )
+        }
+    }
+
+    // this can be un-commented if we ever wanted to make DH modular (AKA use a module-info.java file) again
+    /*
+    // Tells gradle where to look for other modules
+    // Why isn't the classpath added to the modules path by default?
+    if (p == project(":core")) {
+        compileJava {
+            inputs.property('moduleName', 'dhApi')
+            doFirst {
+                options.compilerArgs = [
+                        '--module-path', classpath.asPath
+                ]
+                classpath = files()
+            }
+        }
+    }
+    */
+}
+
+allprojects { p ->
+    // Does the same as "p == project(":common") || p == project(":fabric") || p == project(":quilt")  || p == project(":forge") || p == project("WhateverWeAddLaterOn")"
+    // Useful later on so we dont have duplicated code
+    def isMinecraftSubProject = p != project(":core") && p != project(":api")
+
+
+    apply plugin: "java"
+    apply plugin: "maven-publish"
+    
+    // Sets the name of the jar, the version will contain the name of the project if it isn't the root project
+    archivesBaseName = rootProject.mod_name
+    version = (project == rootProject ? "" : project.name + "-") + rootProject.versionStr
+    group = rootProject.maven_group
+    
+    // this is the text that appears at the top of the overview (home) page
+    // and is used when bookmarking a page
+    javadoc.title = rootProject.mod_name + "-" + project.name
+
+    // Some annotations arent "technically" part of the official java standard,
+    //  so we define it ourself here
+    javadoc {
+        configure( options ) {
+            tags(
+                    'todo:X"',
+                    'apiNote:a:API Note:',
+                    'implSpec:a:Implementation Requirements:',
+                    'implNote:a:Implementation Note:'
+            )
+        }
+    }
+
+
+    repositories {
+        // Mojang overrides (added to fix downloading the wrong LWJGL libs on M1 Mac's and potentially other arm64 based machines)
+        maven { url "https://libraries.minecraft.net/" }
+
+        // The central repo
+        mavenCentral()
+
+        // Used for Google's Collect library
+        maven { url "https://repo.enonic.com/public/" }
+
+        // For parchment mappings
+        // versions can be found here: https://ldtteam.jfrog.io/ui/native/parchmentmc-public/org/parchmentmc/data/
+        maven { url "https://maven.parchmentmc.org" }
+
+        // For Architectury API
+        maven { url "https://maven.architectury.dev" }
+
+        // For Git repositories
+        maven { url "https://jitpack.io" }
+
+        // For Manifold Preprocessor
+        maven { url "https://oss.sonatype.org/content/repositories/snapshots/" }
+
+        // Required for importing Modrinth mods
+        maven {
+            name = "Modrinth"
+            url = "https://api.modrinth.com/maven"
+            content {
+                includeGroup "maven.modrinth"
+            }
+        }
+
+        // Required for importing CursedForge mods
+        maven {
+            url "https://www.cursemaven.com"
+            content {
+                includeGroup "curse.maven"
+            }
+        }
+
+        // VanillaGradle and Mixins in common
+        maven { url "https://repo.spongepowered.org/maven/" }
+
+        // Canvas mod
+        maven { url "https://maven.vram.io/" }
+        // ModMenu mod
+        maven { url "https://maven.terraformersmc.com/" }
+
+        // neoforge
+        maven { url "https://maven.neoforged.net/releases/" }
+        
+        // These 3 are for importing mods that arnt on CursedForge, Modrinth, GitHub, GitLab or anywhere opensource
+        flatDir {
+            dirs "${rootDir}/mods/fabric"
+            content {
+                includeGroup "fabric-mod"
+            }
+        }
+        flatDir {
+            dirs "${rootDir}/mods/quilt"
+            content {
+                includeGroup "quilt-mod"
+            }
+        }
+        flatDir {
+            dirs "${rootDir}/mods/forge"
+            content {
+                includeGroup "forge-mod"
+            }
+        }
+    }
+
+    // Adds some dependencies that are in vanilla but not in core
+    if (p == project(":core")) {
+        OperatingSystem os = org.gradle.nativeplatform.platform.internal.DefaultNativePlatform.currentOperatingSystem;
+
+        // Set the OS lwjgl is using to the current os
+        project.ext.lwjglNatives = "natives-" + os.toFamilyName()
+
+        dependencies { // All of these dependencies are in Vanilla Minecraft, but we need to depend on it as we arent importing Minecraft in the core
+            // Imports most of lwjgl's libraries (well, only the ones that we need)
+            implementation platform("org.lwjgl:lwjgl-bom:${rootProject.lwjgl_version}")
+
+            // REMEMBER: Dont shadow stuff here, these are just the libs that are included in Minecraft so that the core can use
+            implementation "org.lwjgl:lwjgl"
+            implementation "org.lwjgl:lwjgl-assimp"
+            implementation "org.lwjgl:lwjgl-glfw"
+            implementation "org.lwjgl:lwjgl-openal"
+            implementation "org.lwjgl:lwjgl-opengl"
+            implementation "org.lwjgl:lwjgl-stb"
+            implementation "org.lwjgl:lwjgl-tinyfd"
+            runtimeOnly "org.lwjgl:lwjgl::$lwjglNatives"
+            runtimeOnly "org.lwjgl:lwjgl-assimp::$lwjglNatives"
+            runtimeOnly "org.lwjgl:lwjgl-glfw::$lwjglNatives"
+            runtimeOnly "org.lwjgl:lwjgl-openal::$lwjglNatives"
+            runtimeOnly "org.lwjgl:lwjgl-opengl::$lwjglNatives"
+            runtimeOnly "org.lwjgl:lwjgl-stb::$lwjglNatives"
+            runtimeOnly "org.lwjgl:lwjgl-tinyfd::$lwjglNatives"
+            implementation "org.joml:joml:${rootProject.joml_version}"
+
+
+            // Some other dependencies
+            implementation("org.jetbrains:annotations:16.0.2")
+            implementation("com.google.code.findbugs:jsr305:3.0.2")
+            implementation("com.google.common:google-collect:0.5")
+            implementation("com.google.guava:guava:31.1-jre")
+        }
+    }
+
+
+    task copyCommonLoaderResources(type: Copy) {
+        from project(":common").file("src/main/resources/${accessWidenerVersion}.distanthorizons.accesswidener")
+        into(file(p.file("build/resources/main")))
+        rename "${accessWidenerVersion}.distanthorizons.accesswidener", "distanthorizons.accesswidener"
+    }
+
+    task copyCoreResources(type: Copy) {
+        from fileTree(project(":core").file("src/main/resources"))
+        into p.file("build/resources/main")
+    }
+
+    tasks.withType(JavaCompile) {
+        if (isMinecraftSubProject) {
+            options.release = rootProject.java_version as Integer
+        } else {
+            options.release = 8; // Core & Api should use Java 8 no matter what
+        }
+        options.encoding = "UTF-8"
+    }
+
+    java {
+        withSourcesJar()
+    }
+}

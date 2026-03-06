@@ -1,0 +1,159 @@
+plugins {
+    id "fabric-loom" version "1.10-SNAPSHOT"
+}
+
+loom {
+    accessWidenerPath = project(":common").file("src/main/resources/${accessWidenerVersion}.distanthorizons.accesswidener")
+    
+    // "runs" isn't required, but when we do need it then it can be useful
+    runs {
+        client {
+            client()
+            setConfigName("Fabric Client")
+            ideConfigGenerated(true) // When true a run configuration file will be generated for IDE's. By default only set to true for the root project.
+            runDir("../run/client")
+            vmArgs(
+                    // https://github.com/FabricMC/fabric-loom/issues/915#issuecomment-1609154390
+                    "-Dminecraft.api.auth.host=https://nope.invalid",
+                    "-Dminecraft.api.account.host=https://nope.invalid",
+                    "-Dminecraft.api.session.host=https://nope.invalid",
+                    "-Dminecraft.api.services.host=https://nope.invalid",
+                    // https://netty.io/wiki/reference-counted-objects.html#leak-detection-levels
+                    "-Dio.netty.leakDetection.level=advanced",
+                    "-XX:+UseZGC",
+                    "-XX:+ZGenerational"
+            )
+            programArgs("--username", "Dev")
+        }
+        server {
+            server()
+            setConfigName("Fabric Server")
+            ideConfigGenerated(true)
+            runDir("../run/server")
+            vmArgs("-Dio.netty.leakDetection.level=advanced")
+        }
+    }
+}
+
+remapJar {
+    inputFile = shadowJar.archiveFile
+    dependsOn shadowJar
+}
+
+
+configurations {
+    // The addModJar basically embeds the mod to the built jar
+    addModJar
+    include.extendsFrom addModJar
+    modImplementation.extendsFrom addModJar
+}
+    
+    
+
+def addMod(path, enabled) {
+    if (enabled == "2")
+        dependencies { modImplementation(path) }
+    else if (enabled == "1")
+        dependencies { modCompileOnly(path) }
+}
+
+dependencies {
+    minecraft "com.mojang:minecraft:${rootProject.minecraft_version}"
+    mappings loom.layered() {
+        // Mojmap mappings
+        officialMojangMappings()
+        // Parchment mappings (it adds parameter mappings & javadoc)
+        parchment("org.parchmentmc.data:parchment-${rootProject.parchment_version}@zip")
+    }
+    // Fabric loader
+    modImplementation "net.fabricmc:fabric-loader:${rootProject.fabric_loader_version}"
+
+    // Fabric API
+    addModJar(fabricApi.module("fabric-api-base", rootProject.fabric_api_version))
+    addModJar(fabricApi.module("fabric-lifecycle-events-v1", rootProject.fabric_api_version))
+    if (buildVersionBefore(minecraft_version, "1.21.9")) 
+    {
+        addModJar(fabricApi.module("fabric-resource-loader-v0", rootProject.fabric_api_version))
+    }
+    else // > 1.21.9
+    {
+        addModJar(fabricApi.module("fabric-resource-loader-v0", rootProject.fabric_api_version))
+        addModJar(fabricApi.module("fabric-resource-loader-v1", rootProject.fabric_api_version))
+    }
+    addModJar(fabricApi.module("fabric-events-interaction-v0", rootProject.fabric_api_version))
+    addModJar(fabricApi.module("fabric-rendering-v1", rootProject.fabric_api_version))
+    addModJar(fabricApi.module("fabric-networking-api-v1", rootProject.fabric_api_version))
+    addModJar(fabricApi.module("fabric-entity-events-v1", rootProject.fabric_api_version))
+    if (buildVersionBefore(minecraft_version, "1.19.2"))
+        addModJar(fabricApi.module("fabric-command-api-v1", rootProject.fabric_api_version))
+    else
+        addModJar(fabricApi.module("fabric-command-api-v2", rootProject.fabric_api_version))
+    
+    // used by mod menu in MC 1.20.6+
+    addModJar(fabricApi.module("fabric-screen-api-v1", rootProject.fabric_api_version))
+    addModJar(fabricApi.module("fabric-key-binding-api-v1", rootProject.fabric_api_version))
+
+    // Mod Menu
+    addMod("com.terraformersmc:modmenu:${rootProject.modmenu_version}", rootProject.enable_mod_menu)
+
+    // VulkanMod - compile-only dependency for native Vulkan rendering backend
+    modCompileOnly files("${rootDir}/vulkanmod/VulkanMod_1.21.11-0.6.1.jar")
+}
+
+private static boolean buildVersionBefore(String minecraft_version, String compareVersion)
+{
+    int sortValue = sortSemanticVersionOldestToNewest(minecraft_version, compareVersion);
+    return sortValue == -1;
+}
+/**
+ * input format: "major.minor.patch"
+ * needed so we can sort versions with different length strings
+ * IE: 1.21.1 should come before 1.21.10
+ */
+private static int sortSemanticVersionOldestToNewest(String version1, String version2)
+{
+    String[] parts1 = version1.split("\\.");
+    String[] parts2 = version2.split("\\.");
+
+    int major1 = Integer.parseInt(parts1[0]);
+    int major2 = Integer.parseInt(parts2[0]);
+    if (major1 != major2)
+    {
+        return Integer.compare(major1, major2);
+    }
+
+    int minor1 = Integer.parseInt(parts1[1]);
+    int minor2 = Integer.parseInt(parts2[1]);
+    if (minor1 != minor2)
+    {
+        return Integer.compare(minor1, minor2);
+    }
+
+    int patch1 = Integer.parseInt(parts1[2]);
+    int patch2 = Integer.parseInt(parts2[2]);
+    return Integer.compare(patch1, patch2);
+}
+
+
+task deleteResources(type: Delete) {
+    delete file("build/resources/main")
+}
+
+processResources {
+    dependsOn(copyCoreResources)
+    dependsOn(copyCommonLoaderResources)
+}
+
+runClient {
+    dependsOn(copyCoreResources)
+    dependsOn(copyCommonLoaderResources)
+//    jvmArgs([ "-XX:-OmitStackTraceInFastThrow", minecraftMemoryJavaArg ])
+    finalizedBy(deleteResources)
+}
+
+
+sourcesJar {
+    def commonSources = project(":common").sourcesJar
+    dependsOn commonSources
+    from commonSources.archiveFile.map { zipTree(it) }
+}

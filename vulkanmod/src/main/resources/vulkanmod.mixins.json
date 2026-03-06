@@ -1,0 +1,110 @@
+{
+  "required": true,
+  "minVersion": "0.8",
+  "package": "net.vulkanmod.mixin",
+  "compatibilityLevel": "JAVA_17",
+  "plugin": "net.vulkanmod.mixin.MixinPlugin",
+  "mixins": [
+  ],
+  "client": [
+    "window.WindowMixin",
+    "window.WindowAccessor",
+
+    "chunk.ClientPacketListenerM",
+    "chunk.ClientChunkCacheM",
+    "chunk.DirectionMixin",
+    "chunk.FrustumMixin",
+    "chunk.LevelRendererMixin",
+    "chunk.SectionBufferBuilderPoolM",
+    "chunk.SectionRenderDispatcherM",
+    "chunk.ViewAreaM",
+    "chunk.VisibilitySetMixin",
+
+    "compatibility.gl.GL11M",
+    "compatibility.gl.GL15M",
+    "compatibility.gl.GL30M",
+
+    "debug.crash_report.SystemReportM",
+    "debug.DebugEntryMemoryM",
+    "debug.DebugScreenEntriesM",
+    "debug.KeyboardHandlerM",
+
+    "fix.MainMixin",
+
+    "matrix.Matrix4fM",
+    "matrix.PoseAccessor",
+
+    "profiling.ClientMetricsSamplersProviderMixin",
+    "profiling.GuiMixin",
+    "profiling.KeyboardHandlerM",
+    "profiling.LevelRendererMixin",
+    "profiling.TimerQueryM",
+
+    "render.CompositeStateAccessor",
+    "render.CompositeRenderTypeM",
+    "render.FogRendererMixin",
+    "render.GameRendererMixin",
+    "render.GuiRendererMixin",
+    "render.GlStateManagerM",
+    "render.MinecraftMixin",
+    "render.PictureInPictureRendererM",
+    "render.RenderSystemMixin",
+    "render.RenderTypeM",
+    "render.biome.BiomeManagerM",
+    "render.block.BakedQuadM",
+    "render.clouds.LevelRendererM",
+    "render.color.BlockColorsM",
+    "render.entity.EntityRendererM",
+    "render.entity.LevelRendererM",
+    "render.entity.model.ModelPartCubeM",
+    "render.entity.model.ModelPartM",
+    "render.frame.MinecraftMixin",
+    "render.frame.RenderSystemMixin",
+    "render.frapi.BatchingRenderCommandQueueM",
+    "render.frapi.BlockModelRendererM",
+    "render.frapi.BlockRenderDispatcherAccessor",
+    "render.frapi.BlockRenderManagerM",
+    "render.frapi.ItemFeatureRendererM",
+    "render.frapi.ItemRendererAccessor",
+    "render.frapi.ItemRenderStateLayerRenderStateM",
+    "render.frapi.ItemRenderStateM",
+    "render.frapi.OrderedRenderCommandQueueImplM",
+    "render.particle.QuadParticleGroupM",
+    "render.particle.QuadParticleRenderStateM",
+    "render.shader.RenderPipelineM",
+    "render.shader.ShaderManagerM",
+    "render.target.MainTargetMixin",
+    "render.target.RenderTargetMixin",
+    "render.vertex.BufferBuilderM",
+    "render.vertex.IndexTypeMixin",
+    "render.vertex.VertexFormatMixin",
+
+    "screen.ScreenM",
+    "screen.OptionsScreenM",
+
+    "texture.mip.MipmapGeneratorM",
+    "texture.image.NativeImageAccessor",
+    "texture.update.MLightTexture",
+    "texture.update.MSpriteContents",
+    "texture.update.MTextureManager",
+    "util.ScreenshotMixin",
+
+    "vertex.EntityOutlineGeneratorM",
+    "vertex.SpriteCoordinateExpanderM",
+    "vertex.VertexMultiConsumersM$DoubleM",
+    "vertex.VertexMultiConsumersM$MultipleM",
+    "vertex.VertexMultiConsumersM$SheetDecalM",
+
+    "wayland.InputConstantsM",
+    "wayland.MinecraftMixin",
+
+    "texture.mip.MipmapGeneratorM",
+
+    "compatibility.PostPassM",
+
+    "voxel.VoxelShapeMixin"
+  ],
+  "injectors": {
+    "defaultRequire": 1
+  }
+}

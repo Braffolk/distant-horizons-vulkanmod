@@ -1,0 +1,20 @@
+accessWidener	v1	named
+
+accessible class net/minecraft/client/model/geom/ModelPart$Polygon
+accessible class net/minecraft/client/model/geom/ModelPart$Vertex
+accessible class net/minecraft/client/gui/Gui$HeartType
+
+accessible class net/minecraft/client/renderer/OutlineBufferSource$EntityOutlineGenerator
+
+accessible class net/minecraft/client/renderer/texture/SpriteContents$Ticker
+accessible class net/minecraft/client/renderer/texture/SpriteContents$FrameInfo
+accessible class net/minecraft/client/renderer/texture/SpriteContents$AnimatedTexture
+accessible field net/minecraft/client/renderer/texture/SpriteContents$AnimatedTexture frames Ljava/util/List;
+accessible field net/minecraft/client/renderer/texture/SpriteContents$FrameInfo time I
+
+#1.20
+accessible field net/minecraft/client/renderer/RenderStateShard name Ljava/lang/String;
+
+accessible class net/minecraft/client/renderer/ShaderManager$ShaderSourceKey
+accessible method net/minecraft/client/renderer/ShaderManager$ShaderSourceKey <init> (Lnet/minecraft/resources/ResourceLocation;Lcom/mojang/blaze3d/shaders/ShaderType;)V
+accessible class net/minecraft/client/renderer/ShaderManager$CompilationCache

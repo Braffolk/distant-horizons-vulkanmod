@@ -1,0 +1,154 @@
+pluginManagement {
+    repositories {
+        maven {
+            name "Fabric"
+            url "https://maven.fabricmc.net/"
+        }
+        maven {
+            name "Forge"
+            url "https://maven.minecraftforge.net/"
+        }
+        maven {
+            name "NeoForge Releases"
+            url "https://maven.neoforged.net/releases/"
+        }
+        maven {
+            name "NeoForge Snapshot"
+            url "https://maven.neoforged.net/snapshots/"
+        }
+        maven {
+            name "Architectury"
+            url "https://maven.architectury.dev/"
+        }
+        maven {
+            name "Quilt"
+            url "https://maven.quiltmc.org/repository/release"
+        }
+        maven { // Used for Vanilla Minecraft's libraries
+            name "Sponge"
+            url "https://repo.spongepowered.org/repository/maven-public/"
+        }
+        maven {
+            name "ParchmentMC"
+            url "https://maven.parchmentmc.org"
+        }
+        mavenCentral()
+        gradlePluginPortal()
+        
+        // Not needed, but useful for debugging gradle plugins
+        mavenLocal()
+    }
+}
+
+
+
+// Throw an error and a little help message if the user forgot to clone the core sub-project
+if (!file("./coreSubProjects/LICENSE.txt").exists()) { // the LICENCE.txt file should always, and only exist if the core-sub-project was cloned
+    println('''
+It seems that the core sub project was not included...
+ please make sure that when you were cloning the repo, you were using the `--recurse-submodules` flag on git.
+ and if its too late now to re-clone the project, please grab the core sub project in whatever way you can from https://gitlab.com/jeseibel/distant-horizons-core.git
+
+If you still need help with compiling, please read the Readme.md
+    ''')
+    throw new GradleException("coreSubProject not found")
+}
+
+
+
+
+/** Loads the VersionProperties fiel for the currently selected Minecraft version. */
+def loadProperties() 
+{
+    def defaultMcVersion = "1.20.1" // 1.20.1 is our current most stable version so we use that if no version was defined
+
+    def mcVersion = ""
+    def mcVers = fileTree("versionProperties").files.name // Get all the files in "versionProperties"
+    for (int i = 0; i < mcVers.size(); i++) 
+    {
+        String version = mcVers[i];
+        version = version.replaceAll("\\.properties", "") // As we are getting the file names, we should remove the ".properties" at the end to get the versions
+        mcVers[i] = version;
+    }
+
+    mcVers.sort((a,b) -> sortSemanticVersionOldestToNewest(a,b)) // Sort so it always goes from oldest to newest
+
+    int mcIndex = -1
+    println "Avalible MC versions: ${mcVers}"
+    if (hasProperty("mcVer")) 
+    {
+        mcVersion = mcVer
+        mcIndex = mcVers.indexOf(mcVer)
+    }
+    
+    if (mcIndex == -1) 
+    {
+        println "No mcVer set or the set mcVer is invalid! Defaulting to ${defaultMcVersion}."
+        println "Tip: Use -PmcVer=\"${defaultMcVersion}\" in cmd arg to set mcVer."
+        mcVersion = defaultMcVersion
+        mcIndex = mcVers.indexOf(defaultMcVersion)
+        assert mcIndex != -1
+    }
+
+    println "Loading properties file at " + mcVersion + ".properties"
+    def props = new Properties()
+    props.load(new FileInputStream("$rootDir/versionProperties/"+"$mcVersion"+".properties"))
+
+    props.each { prop ->
+        gradle.ext.set(prop.key, prop.value)
+        // println "Added prop [key:" + prop.key + ", value:" + prop.value + "]"
+    }
+    gradle.ext.mcVers = mcVers
+    gradle.ext.mcIndex = mcIndex
+}
+/** 
+ * input format: "major.minor.patch"
+ * needed so we can sort versions with different length strings
+ * IE: 1.21.1 should come before 1.21.10
+ */
+private static int sortSemanticVersionOldestToNewest(String version1, String version2) 
+{
+    String[] parts1 = version1.split("\\.");
+    String[] parts2 = version2.split("\\.");
+    
+    int major1 = Integer.parseInt(parts1[0]);
+    int major2 = Integer.parseInt(parts2[0]);
+    if (major1 != major2) 
+    {
+        return Integer.compare(major1, major2);
+    }
+    
+    int minor1 = Integer.parseInt(parts1[1]);
+    int minor2 = Integer.parseInt(parts2[1]);
+    if (minor1 != minor2) 
+    {
+        return Integer.compare(minor1, minor2);
+    }
+    
+    int patch1 = Integer.parseInt(parts1[2]);
+    int patch2 = Integer.parseInt(parts2[2]);
+    return Integer.compare(patch1, patch2);
+}
+
+loadProperties()
+
+
+
+
+// Minecraft independent sub-projects
+include("core")
+project(":core").projectDir = file('coreSubProjects/core')
+include("api")
+project(":api").projectDir = file('coreSubProjects/api')
+
+// Minecraft dependent sub-projects
+include("common")
+// Enables or disables the subprojects depending on whats in the versionProperties/mcVer.properties
+for (loader in ((String) gradle.builds_for).split(",")) {
+    def loaderName = loader.strip() // Strip it in case a space is added before or after the comma
+    println "Adding loader " + loaderName
+    include(loaderName)
+}
+
+
+rootProject.name = "DistantHorizons"

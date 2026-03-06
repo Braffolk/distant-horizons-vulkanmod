@@ -1,0 +1,69 @@
+plugins {
+    id "java"
+    id "com.github.johnrengelman.shadow" version '8.1.1' apply false // Set this to true if you're using the standalone Core project
+}
+
+apply plugin: "application"
+
+application {
+    mainClass.set("com.seibel.distanthorizons.core.jar.JarMain")
+}
+
+configurations {
+    shadowedArtifact // Used by DH to specify that we want to implement the shadowed core JAR file instead of the regular JAR file
+    shade
+    implementation.extendsFrom shade
+}
+
+OperatingSystem os = org.gradle.nativeplatform.platform.internal.DefaultNativePlatform.currentOperatingSystem;
+
+// Set the OS lwjgl is using to the current os
+project.ext.lwjglNatives = "natives-" + os.toFamilyName()
+
+dependencies { // All of these dependencies are in Vanilla Minecraft, but we need to depend on it as we arent importing Minecraft in the core
+    // Imports most of lwjgl's libraries (well, only the ones that we need)
+    implementation platform("org.lwjgl:lwjgl-bom:${rootProject.lwjgl_version}")
+
+    // REMEMBER: Dont shadow stuff here, these are just the libs that are included in Minecraft so that the core can use
+    implementation "org.lwjgl:lwjgl"
+    implementation "org.lwjgl:lwjgl-assimp"
+    implementation "org.lwjgl:lwjgl-glfw"
+    implementation "org.lwjgl:lwjgl-openal"
+    implementation "org.lwjgl:lwjgl-opengl"
+    implementation "org.lwjgl:lwjgl-stb"
+    implementation "org.lwjgl:lwjgl-tinyfd"
+    runtimeOnly "org.lwjgl:lwjgl::$lwjglNatives"
+    runtimeOnly "org.lwjgl:lwjgl-assimp::$lwjglNatives"
+    runtimeOnly "org.lwjgl:lwjgl-glfw::$lwjglNatives"
+    runtimeOnly "org.lwjgl:lwjgl-openal::$lwjglNatives"
+    runtimeOnly "org.lwjgl:lwjgl-opengl::$lwjglNatives"
+    runtimeOnly "org.lwjgl:lwjgl-stb::$lwjglNatives"
+    runtimeOnly "org.lwjgl:lwjgl-tinyfd::$lwjglNatives"
+
+    // FIXME for some reason this line doesn't actually shade in the library
+//    shade "it.unimi.dsi:fastutil:${rootProject.fastutil_version}" // Add our own fastutil version
+
+
+    // Some other dependencies
+    implementation("org.jetbrains:annotations:16.0.2")
+    implementation("com.google.code.findbugs:jsr305:3.0.2")
+    implementation("com.google.common:google-collect:0.5")
+    implementation("com.google.guava:guava:31.1-jre")
+    
+}
+
+artifacts {
+    shadowedArtifact shadowJar // Setup the configuration shadowedArtifact to be the shadowJar
+}
+
+shadowJar {
+    def librariesLocation = "DistantHorizons.libraries"
+//    relocate "it.unimi.dsi.fastutil", "${librariesLocation}.unimi.dsi.fastutil"
+    mergeServiceFiles()
+}
+
+test {
+    // this is necessary specifically for the Compression tests since those
+    // need more than the default 512 MB of RAM
+    jvmArgs '-Xmx4096m'
+}

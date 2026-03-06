@@ -1,0 +1,7 @@
+<component name="ProjectRunConfigurationManager">
+  <configuration default="false" name="Fabric Client &amp; Server" type="CompoundRunConfigurationType">
+    <toRun name="Fabric Client (:fabric)" type="Application" />
+    <toRun name="Fabric Server (:fabric)" type="Application" />
+    <method v="2" />
+  </configuration>
+</component>
