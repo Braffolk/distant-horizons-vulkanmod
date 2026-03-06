@@ -7,6 +7,8 @@
 
 package com.seibel.distanthorizons.fabric.vulkan;
 
+import com.mojang.blaze3d.vertex.VertexFormat;
+import com.mojang.blaze3d.vertex.VertexFormatElement;
 import com.seibel.distanthorizons.core.logging.DhLogger;
 import com.seibel.distanthorizons.core.logging.DhLoggerBuilder;
 import com.seibel.distanthorizons.core.render.glObject.GLProxy;
@@ -350,25 +352,44 @@ public class VulkanRenderContext {
 
     /**
      * Convert DH's GLSL 1.50 shaders to GLSL 4.50 for Vulkan/SPIR-V compilation.
+     * Key changes:
+     * - Version 150 → 450
+     * - Add layout(location=N) qualifiers to inputs/outputs
+     * - Convert individual uniforms to a UBO block
+     * - Convert sampler to descriptor set binding
+     * - Change uvec4 vPosition → ivec4 (matches VK_FORMAT_R16G16B16A16_SINT)
+     * and add uvec4 cast for unsigned bitwise operations
      */
     static String convertGlslForVulkan(String source, boolean isVertex) {
         source = source.replace("#version 150 core", "#version 450");
         source = source.replace("#version 150", "#version 450");
 
         if (isVertex) {
-            source = source.replaceFirst("in uvec4 vPosition;", "layout(location = 0) in uvec4 vPosition;");
-            source = source.replaceFirst("in vec4 color;", "layout(location = 1) in vec4 color;");
+            // Change uvec4 → ivec4 to match VK_FORMAT_R16G16B16A16_SINT from vertex format
+            source = source.replaceFirst("in uvec4 vPosition;",
+                    "layout(location = 0) in ivec4 vPosition;");
+            source = source.replaceFirst("in vec4 color;",
+                    "layout(location = 1) in vec4 color;");
 
             source = source.replaceFirst("out vec4 vPos;", "layout(location = 0) out vec4 vPos;");
             source = source.replaceFirst("out vec4 vertexColor;", "layout(location = 1) out vec4 vertexColor;");
             source = source.replaceFirst("out vec3 vertexWorldPos;", "layout(location = 2) out vec3 vertexWorldPos;");
             source = source.replaceFirst("out float vertexYPos;", "layout(location = 3) out float vertexYPos;");
+
+            // In main(), add a uvec4 conversion and fix type casts:
+            // ivec4 → vec4 for vPos, ivec4 → vec3/float for worldPos/yPos
+            source = source.replace("vPos = vPosition;",
+                    "uvec4 uVPosition = uvec4(vPosition);\n    vPos = vec4(vPosition);");
+            source = source.replace("vertexWorldPos = vPosition.xyz", "vertexWorldPos = vec3(vPosition.xyz)");
+            source = source.replace("vertexYPos = vPosition.y", "vertexYPos = float(vPosition.y)");
+            source = source.replace("uint meta = vPosition.a;", "uint meta = uVPosition.a;");
         } else {
             source = source.replaceFirst("in vec4 vPos;", "layout(location = 0) in vec4 vPos;");
             source = source.replaceFirst("in vec4 vertexColor;", "layout(location = 1) in vec4 vertexColor;");
             source = source.replaceFirst("in vec3 vertexWorldPos;", "layout(location = 2) in vec3 vertexWorldPos;");
 
-            source = source.replace("in vec4 gl_FragCoord;", "// gl_FragCoord is a built-in");
+            // gl_FragCoord is a built-in in GLSL 4.50; remove the redeclaration
+            source = source.replace("in vec4 gl_FragCoord;", "");
 
             source = source.replaceFirst("out vec4 fragColor;", "layout(location = 0) out vec4 fragColor;");
         }
@@ -385,6 +406,7 @@ public class VulkanRenderContext {
         };
 
         for (String name : uniformNames) {
+            // Match "uniform TYPE name" optionally with "= defaultValue"
             String regex = "uniform\\s+(\\w+)\\s+" + name + "\\s*(=\\s*[^;]+)?;";
             Matcher matcher = Pattern.compile(regex).matcher(source);
             if (matcher.find()) {
@@ -402,6 +424,9 @@ public class VulkanRenderContext {
         // Insert UBO block after version declaration
         int versionEnd = source.indexOf('\n') + 1;
         source = source.substring(0, versionEnd) + "\n" + uboBlock + source.substring(versionEnd);
+
+        // Debug: log the converted shader
+        LOGGER.info("[DH-Vulkan] Converted {} shader:\n{}", isVertex ? "VERTEX" : "FRAGMENT", source);
 
         return source;
     }

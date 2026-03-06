@@ -17,6 +17,7 @@ import com.seibel.distanthorizons.core.util.RenderUtil;
 import com.seibel.distanthorizons.core.util.math.Mat4f;
 import com.seibel.distanthorizons.core.util.math.Vec3f;
 import net.vulkanmod.vulkan.Renderer;
+import net.vulkanmod.vulkan.VRenderSystem;
 import net.vulkanmod.vulkan.memory.MemoryTypes;
 import net.vulkanmod.vulkan.memory.buffer.Buffer;
 import net.vulkanmod.vulkan.memory.buffer.IndexBuffer;
@@ -47,6 +48,9 @@ public class VulkanRenderDelegate implements IVulkanRenderDelegate {
      * vulkanBufferHandle identity hash.
      */
     private final Map<Integer, VertexBuffer> vulkanBufferCache = new ConcurrentHashMap<>();
+
+    /** Saved VRenderSystem state — restored in endFrame() */
+    private boolean savedCullState;
 
     public VulkanRenderDelegate() {
         this.renderContext = VulkanRenderContext.getInstance();
@@ -109,6 +113,10 @@ public class VulkanRenderDelegate implements IVulkanRenderDelegate {
         if (this.initFailed) {
             return;
         }
+
+        // Save and override VulkanMod render state for DH rendering
+        this.savedCullState = VRenderSystem.cull;
+        VRenderSystem.cull = false; // DH handles its own face culling
 
         this.renderContext.bindTerrainPipeline();
     }
@@ -243,7 +251,8 @@ public class VulkanRenderDelegate implements IVulkanRenderDelegate {
 
     @Override
     public void endFrame() {
-        // Nothing needed currently
+        // Restore VulkanMod render state
+        VRenderSystem.cull = this.savedCullState;
     }
 
     @Override
