@@ -40,6 +40,7 @@ public class VulkanRenderDelegate implements IVulkanRenderDelegate {
     private boolean initialized = false;
     private boolean initFailed = false;
     private int frameCount = 0;
+    private final LightmapManager lightmapManager = new LightmapManager();
 
     /** Shared index buffer for quad rendering (6 indices per quad) */
     private IndexBuffer quadIndexBuffer;
@@ -130,18 +131,13 @@ public class VulkanRenderDelegate implements IVulkanRenderDelegate {
         VRenderSystem.polygonOffset(8.0f, 256.0f);
         VRenderSystem.enablePolygonOffset();
 
-        if (this.frameCount++ < 3) {
-            var lightImg = net.vulkanmod.vulkan.texture.VTextureSelector.getImage(2);
-            LOGGER.info(
-                    "[DH-Vulkan] beginFrame: lightmap[2]={} depthMask={} depthFun={}",
-                    lightImg != null ? lightImg.width + "x" + lightImg.height : "NULL",
-                    VRenderSystem.depthMask, VRenderSystem.depthFun);
-        }
-
-        // Ensure MC's lightmap is at VTextureSelector slot 2.
-        // MC/VulkanMod sets this during world rendering, but verify it's non-null.
-        if (net.vulkanmod.vulkan.texture.VTextureSelector.getImage(2) == null) {
-            // Fallback: use the white texture so we don't crash
+        // Compute and upload our own lightmap (MC's framebuffer-based lightmap
+        // doesn't work under VulkanMod — the MLightTexture mixin is disabled).
+        this.lightmapManager.update();
+        var lightmapImage = this.lightmapManager.getVulkanImage();
+        if (lightmapImage != null) {
+            net.vulkanmod.vulkan.texture.VTextureSelector.setLightTexture(lightmapImage);
+        } else {
             net.vulkanmod.vulkan.texture.VTextureSelector.setLightTexture(
                     net.vulkanmod.vulkan.texture.VTextureSelector.getWhiteTexture());
         }
