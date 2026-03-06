@@ -384,11 +384,18 @@ public class VulkanRenderContext {
             source = source.replace("vertexYPos = vPosition.y", "vertexYPos = float(vPosition.y)");
             source = source.replace("uint meta = vPosition.a;", "uint meta = uVPosition.a;");
 
-            // Bypass lightmap lookup — VulkanMod binds wrong texture to sampler.
-            // Use full brightness until proper lightmap binding is implemented.
-            source = source.replaceAll(
-                    "vec4\\(texture\\(uLightMap,\\s*vec2\\(skyLight,\\s*blockLight\\)\\)\\.xyz,\\s*1\\.0\\)",
-                    "vec4(1.0, 1.0, 1.0, 1.0)  /* TODO: bind real lightmap */");
+            // Lightmap lookup: VulkanMod uses texelFetch with integer coords, not texture()
+            // with normalized UVs. Replace individual lines to avoid whitespace mismatch.
+            // VulkanMod convention: texelFetch(lightMap, ivec2(blockLight, skyLight), 0)
+            source = source.replace(
+                    "float skyLight = (float(lights/16u)+0.5) / 16.0;",
+                    "int iSkyLight = int(lights / 16u);");
+            source = source.replace(
+                    "float blockLight = (mod(float(lights), 16.0)+0.5) / 16.0;",
+                    "int iBlockLight = int(lights) & 0xF;");
+            source = source.replace(
+                    "vec4(texture(uLightMap, vec2(skyLight, blockLight)).xyz, 1.0)",
+                    "vec4(texelFetch(uLightMap, ivec2(iBlockLight, iSkyLight * 4), 0).bgr, 1.0)");
         } else {
             source = source.replaceFirst("in vec4 vPos;", "layout(location = 0) in vec4 vPos;");
             source = source.replaceFirst("in vec4 vertexColor;", "layout(location = 1) in vec4 vertexColor;");
@@ -438,10 +445,9 @@ public class VulkanRenderContext {
         source = source.replace("if (uDitherDhRendering)", "if (uDitherDhRendering != 0)");
         source = source.replace("if (uNoiseEnabled)", "if (uNoiseEnabled != 0)");
 
-        // Sampler binding — DISABLED: lightmap bypassed with constant brightness
-        // TODO: Re-enable when proper lightmap binding is implemented
+        // Sampler binding — lightmap at descriptor set 0, binding 1
         source = source.replace("uniform sampler2D uLightMap;",
-                "// uniform sampler2D uLightMap; // DISABLED — using full brightness");
+                "layout(set = 0, binding = 1) uniform sampler2D uLightMap;");
 
         // Insert UBO block after version declaration
         int versionEnd = source.indexOf('\n') + 1;

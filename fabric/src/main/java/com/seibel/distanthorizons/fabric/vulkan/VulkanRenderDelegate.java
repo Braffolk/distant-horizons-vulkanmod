@@ -131,10 +131,19 @@ public class VulkanRenderDelegate implements IVulkanRenderDelegate {
         VRenderSystem.enablePolygonOffset();
 
         if (this.frameCount++ < 3) {
+            var lightImg = net.vulkanmod.vulkan.texture.VTextureSelector.getImage(2);
             LOGGER.info(
-                    "[DH-Vulkan] beginFrame: savedCull={} cull={} depthTest={} depthMask={} depthFun={} topology={}",
-                    this.savedCullState, VRenderSystem.cull, VRenderSystem.depthTest,
-                    VRenderSystem.depthMask, VRenderSystem.depthFun, VRenderSystem.topology);
+                    "[DH-Vulkan] beginFrame: lightmap[2]={} depthMask={} depthFun={}",
+                    lightImg != null ? lightImg.width + "x" + lightImg.height : "NULL",
+                    VRenderSystem.depthMask, VRenderSystem.depthFun);
+        }
+
+        // Ensure MC's lightmap is at VTextureSelector slot 2.
+        // MC/VulkanMod sets this during world rendering, but verify it's non-null.
+        if (net.vulkanmod.vulkan.texture.VTextureSelector.getImage(2) == null) {
+            // Fallback: use the white texture so we don't crash
+            net.vulkanmod.vulkan.texture.VTextureSelector.setLightTexture(
+                    net.vulkanmod.vulkan.texture.VTextureSelector.getWhiteTexture());
         }
 
         this.renderContext.bindTerrainPipeline();
