@@ -105,7 +105,7 @@ public class VulkanRenderContext {
         try {
             this.terrainPipeline = createTerrainPipeline();
             this.initialized = true;
-            LOGGER.info("[DH-Vulkan] VulkanRenderContext initialized successfully.");
+            LOGGER.info("[DH-Vulkan] VulkanRenderContext initialized.");
         } catch (Exception e) {
             LOGGER.error("[DH-Vulkan] Failed to initialize VulkanRenderContext", e);
             throw new RuntimeException("DH Vulkan initialization failed", e);
@@ -146,7 +146,6 @@ public class VulkanRenderContext {
      * Sets up persistent MappedBuffer uniforms with custom suppliers.
      */
     private GraphicsPipeline createTerrainPipeline() {
-        LOGGER.info("[DH-Vulkan] Creating terrain pipeline...");
 
         String vertSource = readShaderResource("shaders/standard.vert");
         String fragSource = readShaderResource("shaders/flat_shaded.frag");
@@ -452,9 +451,6 @@ public class VulkanRenderContext {
         // Insert UBO block after version declaration
         int versionEnd = source.indexOf('\n') + 1;
         source = source.substring(0, versionEnd) + "\n" + fullUboBlock + source.substring(versionEnd);
-
-        // Debug: log the converted shader
-        LOGGER.info("[DH-Vulkan] Converted {} shader:\n{}", isVertex ? "VERTEX" : "FRAGMENT", source);
 
         return source;
     }

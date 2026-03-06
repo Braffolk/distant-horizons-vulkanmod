@@ -67,12 +67,11 @@ public class VulkanRenderDelegate implements IVulkanRenderDelegate {
             return;
         }
 
-        LOGGER.info("[DH-Vulkan] VulkanRenderDelegate initializing...");
         try {
             this.renderContext.init();
             this.ensureQuadIndexBuffer(65536);
             this.initialized = true;
-            LOGGER.info("[DH-Vulkan] VulkanRenderDelegate initialized successfully.");
+            LOGGER.info("[DH-Vulkan] VulkanRenderDelegate initialized.");
         } catch (Exception e) {
             LOGGER.error("[DH-Vulkan] VulkanRenderDelegate init failed — LODs will not render", e);
             this.initFailed = true;
@@ -107,7 +106,6 @@ public class VulkanRenderDelegate implements IVulkanRenderDelegate {
         this.quadIndexBuffer.copyBuffer(indexData, indexData.remaining());
         this.quadIndexBufferCapacity = quadCount;
 
-        LOGGER.info("[DH-Vulkan] Quad IBO created/resized: {} quads, {} indices", quadCount, indexCount);
     }
 
     @Override
