@@ -383,6 +383,12 @@ public class VulkanRenderContext {
             source = source.replace("vertexWorldPos = vPosition.xyz", "vertexWorldPos = vec3(vPosition.xyz)");
             source = source.replace("vertexYPos = vPosition.y", "vertexYPos = float(vPosition.y)");
             source = source.replace("uint meta = vPosition.a;", "uint meta = uVPosition.a;");
+
+            // Bypass lightmap lookup — VulkanMod binds wrong texture to sampler.
+            // Use full brightness until proper lightmap binding is implemented.
+            source = source.replaceAll(
+                    "vec4\\(texture\\(uLightMap,\\s*vec2\\(skyLight,\\s*blockLight\\)\\)\\.xyz,\\s*1\\.0\\)",
+                    "vec4(1.0, 1.0, 1.0, 1.0)  /* TODO: bind real lightmap */");
         } else {
             source = source.replaceFirst("in vec4 vPos;", "layout(location = 0) in vec4 vPos;");
             source = source.replaceFirst("in vec4 vertexColor;", "layout(location = 1) in vec4 vertexColor;");
@@ -394,10 +400,25 @@ public class VulkanRenderContext {
             source = source.replaceFirst("out vec4 fragColor;", "layout(location = 0) out vec4 fragColor;");
         }
 
-        // Build UBO block from individual uniforms
-        StringBuilder uboBlock = new StringBuilder();
-        uboBlock.append("layout(set = 0, binding = 0) uniform DhUniforms {\n");
+        // CRITICAL: Both vertex and fragment shaders MUST have the SAME UBO layout
+        // because they share the same descriptor set (binding=0). We hardcode the
+        // complete UBO with ALL uniforms in the same order.
+        String fullUboBlock = "layout(set = 0, binding = 0) uniform DhUniforms {\n"
+                + "    mat4 uCombinedMatrix;\n"
+                + "    vec3 uModelOffset;\n"
+                + "    float uWorldYOffset;\n"
+                + "    float uMircoOffset;\n"
+                + "    float uEarthRadius;\n"
+                + "    int uIsWhiteWorld;\n" // bool as int for std140
+                + "    float uClipDistance;\n"
+                + "    int uDitherDhRendering;\n" // bool as int
+                + "    int uNoiseEnabled;\n" // bool as int
+                + "    int uNoiseSteps;\n"
+                + "    float uNoiseIntensity;\n"
+                + "    int uNoiseDropoff;\n"
+                + "};\n\n";
 
+        // Remove all individual uniform declarations (they're now in the UBO)
         String[] uniformNames = {
                 "uCombinedMatrix", "uModelOffset", "uWorldYOffset",
                 "uMircoOffset", "uEarthRadius", "uIsWhiteWorld",
@@ -408,22 +429,23 @@ public class VulkanRenderContext {
         for (String name : uniformNames) {
             // Match "uniform TYPE name" optionally with "= defaultValue"
             String regex = "uniform\\s+(\\w+)\\s+" + name + "\\s*(=\\s*[^;]+)?;";
-            Matcher matcher = Pattern.compile(regex).matcher(source);
-            if (matcher.find()) {
-                String type = matcher.group(1);
-                uboBlock.append("    ").append(type).append(" ").append(name).append(";\n");
-                source = source.replaceFirst(regex, "// moved to UBO: " + name);
-            }
+            source = source.replaceFirst(regex, "// moved to UBO: " + name);
         }
-        uboBlock.append("};\n\n");
 
-        // Sampler binding
+        // Fix boolean expressions: bool→int means we can't use ! or implicit bool
+        // conversion
+        source = source.replace("!uIsWhiteWorld", "uIsWhiteWorld == 0");
+        source = source.replace("if (uDitherDhRendering)", "if (uDitherDhRendering != 0)");
+        source = source.replace("if (uNoiseEnabled)", "if (uNoiseEnabled != 0)");
+
+        // Sampler binding — DISABLED: lightmap bypassed with constant brightness
+        // TODO: Re-enable when proper lightmap binding is implemented
         source = source.replace("uniform sampler2D uLightMap;",
-                "layout(set = 0, binding = 1) uniform sampler2D uLightMap;");
+                "// uniform sampler2D uLightMap; // DISABLED — using full brightness");
 
         // Insert UBO block after version declaration
         int versionEnd = source.indexOf('\n') + 1;
-        source = source.substring(0, versionEnd) + "\n" + uboBlock + source.substring(versionEnd);
+        source = source.substring(0, versionEnd) + "\n" + fullUboBlock + source.substring(versionEnd);
 
         // Debug: log the converted shader
         LOGGER.info("[DH-Vulkan] Converted {} shader:\n{}", isVertex ? "VERTEX" : "FRAGMENT", source);

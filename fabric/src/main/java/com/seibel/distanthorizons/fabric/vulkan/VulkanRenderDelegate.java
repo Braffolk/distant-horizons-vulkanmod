@@ -19,6 +19,7 @@ import com.seibel.distanthorizons.core.util.math.Vec3f;
 import net.vulkanmod.vulkan.Renderer;
 import net.vulkanmod.vulkan.VRenderSystem;
 import net.vulkanmod.vulkan.memory.MemoryTypes;
+import net.vulkanmod.vulkan.shader.PipelineState;
 import net.vulkanmod.vulkan.memory.buffer.Buffer;
 import net.vulkanmod.vulkan.memory.buffer.IndexBuffer;
 import net.vulkanmod.vulkan.memory.buffer.VertexBuffer;
@@ -38,6 +39,7 @@ public class VulkanRenderDelegate implements IVulkanRenderDelegate {
     private final VulkanRenderContext renderContext;
     private boolean initialized = false;
     private boolean initFailed = false;
+    private int frameCount = 0;
 
     /** Shared index buffer for quad rendering (6 indices per quad) */
     private IndexBuffer quadIndexBuffer;
@@ -51,6 +53,8 @@ public class VulkanRenderDelegate implements IVulkanRenderDelegate {
 
     /** Saved VRenderSystem state — restored in endFrame() */
     private boolean savedCullState;
+    private boolean savedDepthMask;
+    private boolean savedBlendEnabled;
 
     public VulkanRenderDelegate() {
         this.renderContext = VulkanRenderContext.getInstance();
@@ -116,7 +120,22 @@ public class VulkanRenderDelegate implements IVulkanRenderDelegate {
 
         // Save and override VulkanMod render state for DH rendering
         this.savedCullState = VRenderSystem.cull;
+        this.savedDepthMask = VRenderSystem.depthMask;
+        this.savedBlendEnabled = PipelineState.blendInfo.enabled;
         VRenderSystem.cull = false; // DH handles its own face culling
+        VRenderSystem.depthMask = true; // LODs need to write depth
+        PipelineState.blendInfo.enabled = false; // Opaque LODs don't need blending
+
+        // Push LOD depth slightly behind MC terrain so MC always wins depth test
+        VRenderSystem.polygonOffset(2.0f, 4.0f);
+        VRenderSystem.enablePolygonOffset();
+
+        if (this.frameCount++ < 3) {
+            LOGGER.info(
+                    "[DH-Vulkan] beginFrame: savedCull={} cull={} depthTest={} depthMask={} depthFun={} topology={}",
+                    this.savedCullState, VRenderSystem.cull, VRenderSystem.depthTest,
+                    VRenderSystem.depthMask, VRenderSystem.depthFun, VRenderSystem.topology);
+        }
 
         this.renderContext.bindTerrainPipeline();
     }
@@ -253,6 +272,9 @@ public class VulkanRenderDelegate implements IVulkanRenderDelegate {
     public void endFrame() {
         // Restore VulkanMod render state
         VRenderSystem.cull = this.savedCullState;
+        VRenderSystem.depthMask = this.savedDepthMask;
+        PipelineState.blendInfo.enabled = this.savedBlendEnabled;
+        VRenderSystem.disablePolygonOffset();
     }
 
     @Override
