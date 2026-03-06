@@ -16,6 +16,7 @@ import com.seibel.distanthorizons.core.render.renderer.IVulkanRenderDelegate;
 import com.seibel.distanthorizons.core.util.RenderUtil;
 import com.seibel.distanthorizons.core.util.math.Mat4f;
 import com.seibel.distanthorizons.core.util.math.Vec3f;
+import net.minecraft.client.Minecraft;
 import net.vulkanmod.vulkan.Renderer;
 import net.vulkanmod.vulkan.VRenderSystem;
 import net.vulkanmod.vulkan.memory.MemoryTypes;
@@ -23,6 +24,7 @@ import net.vulkanmod.vulkan.shader.PipelineState;
 import net.vulkanmod.vulkan.memory.buffer.Buffer;
 import net.vulkanmod.vulkan.memory.buffer.IndexBuffer;
 import net.vulkanmod.vulkan.memory.buffer.VertexBuffer;
+import net.vulkanmod.vulkan.texture.VTextureSelector;
 
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
@@ -39,8 +41,7 @@ public class VulkanRenderDelegate implements IVulkanRenderDelegate {
     private final VulkanRenderContext renderContext;
     private boolean initialized = false;
     private boolean initFailed = false;
-    private int frameCount = 0;
-    private final LightmapManager lightmapManager = new LightmapManager();
+    private int debugFrameCount = 0;
 
     /** Shared index buffer for quad rendering (6 indices per quad) */
     private IndexBuffer quadIndexBuffer;
@@ -131,16 +132,41 @@ public class VulkanRenderDelegate implements IVulkanRenderDelegate {
         VRenderSystem.polygonOffset(8.0f, 256.0f);
         VRenderSystem.enablePolygonOffset();
 
-        // Compute and upload our own lightmap (MC's framebuffer-based lightmap
-        // doesn't work under VulkanMod — the MLightTexture mixin is disabled).
-        this.lightmapManager.update();
-        var lightmapImage = this.lightmapManager.getVulkanImage();
-        if (lightmapImage != null) {
-            net.vulkanmod.vulkan.texture.VTextureSelector.setLightTexture(lightmapImage);
-        } else {
-            net.vulkanmod.vulkan.texture.VTextureSelector.setLightTexture(
-                    net.vulkanmod.vulkan.texture.VTextureSelector.getWhiteTexture());
+        // Bind MC's lightmap texture to slot 2.
+        // Cast to GlTexture (vanilla MC class) to get the GL ID, then resolve
+        // through VkGlTexture → VulkanImage (same data VulkanMod's terrain uses).
+        try {
+            var lightmapView = Minecraft.getInstance().gameRenderer.lightTexture().getTextureView();
+            if (lightmapView != null) {
+                com.mojang.blaze3d.opengl.GlTexture glTex = (com.mojang.blaze3d.opengl.GlTexture) lightmapView
+                        .texture();
+                int glId = glTex.glId();
+                net.vulkanmod.gl.VkGlTexture vkGlTex = net.vulkanmod.gl.VkGlTexture.getTexture(glId);
+                if (vkGlTex != null && vkGlTex.getVulkanImage() != null) {
+                    var vkImage = vkGlTex.getVulkanImage();
+                    VTextureSelector.setLightTexture(vkImage);
+
+                    if (this.debugFrameCount % 300 == 0) {
+                        LOGGER.info(
+                                "[DH-Vulkan] Lightmap: glId={}, VulkanImage {}x{}, imgHandle=0x{}, viewHandle=0x{}, slot2={}",
+                                glId, vkImage.width, vkImage.height,
+                                Long.toHexString(vkImage.getId()),
+                                Long.toHexString(vkImage.getImageView()),
+                                VTextureSelector.getImage(2) == vkImage ? "MATCH" : "MISMATCH");
+                    }
+                } else {
+                    if (this.debugFrameCount % 300 == 0) {
+                        LOGGER.warn("[DH-Vulkan] Lightmap resolve FAILED: glId={}, vkGlTex null={}",
+                                glId, vkGlTex == null);
+                    }
+                }
+            } else if (this.debugFrameCount % 300 == 0) {
+                LOGGER.warn("[DH-Vulkan] lightmapView is null");
+            }
+        } catch (Exception e) {
+            LOGGER.error("[DH-Vulkan] Failed to bind MC lightmap", e);
         }
+        this.debugFrameCount++;
 
         this.renderContext.bindTerrainPipeline();
     }
@@ -183,10 +209,6 @@ public class VulkanRenderDelegate implements IVulkanRenderDelegate {
             dhNearClipDistance += 16f;
         }
         this.renderContext.setUniformFloat("uClipDistance", dhNearClipDistance);
-
-        if (this.frameCount < 5) {
-            LOGGER.info("[DH-Vulkan] uClipDistance={}", dhNearClipDistance);
-        }
 
         // Dither
         this.renderContext.setUniformBool("uDitherDhRendering",

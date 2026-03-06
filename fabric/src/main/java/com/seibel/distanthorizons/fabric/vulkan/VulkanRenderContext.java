@@ -395,7 +395,7 @@ public class VulkanRenderContext {
                     "int iBlockLight = int(lights) & 0xF;");
             source = source.replace(
                     "vec4(texture(uLightMap, vec2(skyLight, blockLight)).xyz, 1.0)",
-                    "vec4(texelFetch(uLightMap, ivec2(iBlockLight, iSkyLight), 0).bgr, 1.0)");
+                    "vec4(texelFetch(uLightMap, ivec2(iSkyLight, iBlockLight), 0).rgb, 1.0)");
         } else {
             source = source.replaceFirst("in vec4 vPos;", "layout(location = 0) in vec4 vPos;");
             source = source.replaceFirst("in vec4 vertexColor;", "layout(location = 1) in vec4 vertexColor;");
