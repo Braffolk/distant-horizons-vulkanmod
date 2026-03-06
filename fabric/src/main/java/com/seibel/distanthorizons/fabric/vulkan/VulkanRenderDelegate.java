@@ -127,7 +127,7 @@ public class VulkanRenderDelegate implements IVulkanRenderDelegate {
         PipelineState.blendInfo.enabled = false; // Opaque LODs don't need blending
 
         // Push LOD depth slightly behind MC terrain so MC always wins depth test
-        VRenderSystem.polygonOffset(2.0f, 4.0f);
+        VRenderSystem.polygonOffset(8.0f, 256.0f);
         VRenderSystem.enablePolygonOffset();
 
         if (this.frameCount++ < 3) {
@@ -147,7 +147,11 @@ public class VulkanRenderDelegate implements IVulkanRenderDelegate {
         }
 
         // Combined projection * model-view matrix
-        Mat4f combinedMatrix = new Mat4f(renderParameters.dhProjectionMatrix);
+        // IMPORTANT: Use MC's projection matrix (not DH's) so LOD depth values
+        // are compatible with MC's depth buffer. DH's projection has a much larger
+        // far plane which would make LOD depth values SMALLER (closer) than MC terrain,
+        // causing LODs to incorrectly render in front of MC chunks.
+        Mat4f combinedMatrix = new Mat4f(renderParameters.mcProjectionMatrix);
         combinedMatrix.multiply(renderParameters.dhModelViewMatrix);
         this.renderContext.setUniformMat4("uCombinedMatrix", combinedMatrix);
 
@@ -166,12 +170,18 @@ public class VulkanRenderDelegate implements IVulkanRenderDelegate {
         }
         this.renderContext.setUniformFloat("uEarthRadius", curveRatio);
 
-        // Clip distance
+        // Clip distance — use DH's overdraw-based calculation.
+        // Now that we use MC's projection matrix, LOD depth values are compatible
+        // with MC's depth buffer, so overdraw produces a smooth transition.
         float dhNearClipDistance = RenderUtil.getNearClipPlaneInBlocks();
         if (!Config.Client.Advanced.Debugging.lodOnlyMode.get()) {
             dhNearClipDistance += 16f;
         }
         this.renderContext.setUniformFloat("uClipDistance", dhNearClipDistance);
+
+        if (this.frameCount < 5) {
+            LOGGER.info("[DH-Vulkan] uClipDistance={}", dhNearClipDistance);
+        }
 
         // Dither
         this.renderContext.setUniformBool("uDitherDhRendering",
