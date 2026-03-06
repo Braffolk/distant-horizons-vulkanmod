@@ -7,23 +7,29 @@
 
 package com.seibel.distanthorizons.fabric.vulkan;
 
+import com.seibel.distanthorizons.api.methods.events.sharedParameterObjects.DhApiRenderParam;
+import com.seibel.distanthorizons.core.config.Config;
 import com.seibel.distanthorizons.core.logging.DhLogger;
 import com.seibel.distanthorizons.core.logging.DhLoggerBuilder;
 import com.seibel.distanthorizons.core.render.glObject.buffer.GLVertexBuffer;
 import com.seibel.distanthorizons.core.render.renderer.IVulkanRenderDelegate;
+import com.seibel.distanthorizons.core.util.RenderUtil;
+import com.seibel.distanthorizons.core.util.math.Mat4f;
+import com.seibel.distanthorizons.core.util.math.Vec3f;
 import net.vulkanmod.vulkan.Renderer;
+import net.vulkanmod.vulkan.memory.MemoryTypes;
 import net.vulkanmod.vulkan.memory.buffer.Buffer;
 import net.vulkanmod.vulkan.memory.buffer.IndexBuffer;
+import net.vulkanmod.vulkan.memory.buffer.VertexBuffer;
 
 import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * Concrete implementation of {@link IVulkanRenderDelegate} that uses
  * VulkanMod's rendering API to draw DH terrain.
- * <p>
- * This class bridges the gap between DH's core rendering loop (which can't
- * import VulkanMod) and the VulkanMod API (only available in the fabric
- * module).
  */
 public class VulkanRenderDelegate implements IVulkanRenderDelegate {
     private static final DhLogger LOGGER = new DhLoggerBuilder().build();
@@ -34,6 +40,13 @@ public class VulkanRenderDelegate implements IVulkanRenderDelegate {
 
     /** Shared index buffer for quad rendering (6 indices per quad) */
     private IndexBuffer quadIndexBuffer;
+    private int quadIndexBufferCapacity = 0;
+
+    /**
+     * Cache of uploaded Vulkan vertex buffers, keyed by the GLVertexBuffer's
+     * vulkanBufferHandle identity hash.
+     */
+    private final Map<Integer, VertexBuffer> vulkanBufferCache = new ConcurrentHashMap<>();
 
     public VulkanRenderDelegate() {
         this.renderContext = VulkanRenderContext.getInstance();
@@ -48,33 +61,44 @@ public class VulkanRenderDelegate implements IVulkanRenderDelegate {
         LOGGER.info("[DH-Vulkan] VulkanRenderDelegate initializing...");
         try {
             this.renderContext.init();
-
-            // Create a shared quad index buffer
-            // DH uses quads rendered as indexed triangles: 4 vertices -> 6 indices per quad
-            int initialQuadCount = 65536;
-            int indexCount = initialQuadCount * 6;
-            ByteBuffer indexData = ByteBuffer.allocateDirect(indexCount * 4); // UINT32
-            indexData.order(java.nio.ByteOrder.nativeOrder());
-            for (int i = 0; i < initialQuadCount; i++) {
-                int base = i * 4;
-                indexData.putInt(base + 0);
-                indexData.putInt(base + 1);
-                indexData.putInt(base + 2);
-                indexData.putInt(base + 2);
-                indexData.putInt(base + 3);
-                indexData.putInt(base + 0);
-            }
-            indexData.flip();
-
-            this.quadIndexBuffer = VulkanRenderContext.createIndexBuffer(indexData.remaining());
-            this.quadIndexBuffer.copyBuffer(indexData, indexData.remaining());
-
+            this.ensureQuadIndexBuffer(65536);
             this.initialized = true;
-            LOGGER.info("[DH-Vulkan] VulkanRenderDelegate initialized. Quad IBO: {} indices", indexCount);
+            LOGGER.info("[DH-Vulkan] VulkanRenderDelegate initialized successfully.");
         } catch (Exception e) {
             LOGGER.error("[DH-Vulkan] VulkanRenderDelegate init failed — LODs will not render", e);
             this.initFailed = true;
         }
+    }
+
+    private void ensureQuadIndexBuffer(int quadCount) {
+        if (quadCount <= this.quadIndexBufferCapacity) {
+            return;
+        }
+
+        if (this.quadIndexBuffer != null) {
+            this.quadIndexBuffer.scheduleFree();
+        }
+
+        int indexCount = quadCount * 6;
+        ByteBuffer indexData = ByteBuffer.allocateDirect(indexCount * 4);
+        indexData.order(ByteOrder.nativeOrder());
+        for (int i = 0; i < quadCount; i++) {
+            int base = i * 4;
+            indexData.putInt(base + 0);
+            indexData.putInt(base + 1);
+            indexData.putInt(base + 2);
+            indexData.putInt(base + 2);
+            indexData.putInt(base + 3);
+            indexData.putInt(base + 0);
+        }
+        indexData.flip();
+
+        this.quadIndexBuffer = new IndexBuffer(indexData.remaining(), MemoryTypes.HOST_MEM,
+                IndexBuffer.IndexType.UINT32);
+        this.quadIndexBuffer.copyBuffer(indexData, indexData.remaining());
+        this.quadIndexBufferCapacity = quadCount;
+
+        LOGGER.info("[DH-Vulkan] Quad IBO created/resized: {} quads, {} indices", quadCount, indexCount);
     }
 
     @Override
@@ -90,40 +114,145 @@ public class VulkanRenderDelegate implements IVulkanRenderDelegate {
     }
 
     @Override
+    public void fillUniformData(DhApiRenderParam renderParameters) {
+        if (this.initFailed) {
+            return;
+        }
+
+        // Combined projection * model-view matrix
+        Mat4f combinedMatrix = new Mat4f(renderParameters.dhProjectionMatrix);
+        combinedMatrix.multiply(renderParameters.dhModelViewMatrix);
+        this.renderContext.setUniformMat4("uCombinedMatrix", combinedMatrix);
+
+        // World Y offset
+        this.renderContext.setUniformFloat("uWorldYOffset", (float) renderParameters.worldYOffset);
+
+        // Micro offset (prevents z-fighting)
+        this.renderContext.setUniformFloat("uMircoOffset", 0.01f);
+
+        // Earth curvature
+        float curveRatio = Config.Client.Advanced.Graphics.Experimental.earthCurveRatio.get();
+        if (curveRatio < -1.0f || curveRatio > 1.0f) {
+            curveRatio = 6371000.0f / curveRatio;
+        } else {
+            curveRatio = 0.0f;
+        }
+        this.renderContext.setUniformFloat("uEarthRadius", curveRatio);
+
+        // Clip distance
+        float dhNearClipDistance = RenderUtil.getNearClipPlaneInBlocks();
+        if (!Config.Client.Advanced.Debugging.lodOnlyMode.get()) {
+            dhNearClipDistance += 16f;
+        }
+        this.renderContext.setUniformFloat("uClipDistance", dhNearClipDistance);
+
+        // Dither
+        this.renderContext.setUniformBool("uDitherDhRendering",
+                Config.Client.Advanced.Graphics.Quality.ditherDhFade.get());
+
+        // Noise
+        this.renderContext.setUniformBool("uNoiseEnabled",
+                Config.Client.Advanced.Graphics.NoiseTexture.enableNoiseTexture.get());
+        this.renderContext.setUniformInt("uNoiseSteps",
+                Config.Client.Advanced.Graphics.NoiseTexture.noiseSteps.get());
+        this.renderContext.setUniformFloat("uNoiseIntensity",
+                Config.Client.Advanced.Graphics.NoiseTexture.noiseIntensity.get());
+        this.renderContext.setUniformInt("uNoiseDropoff",
+                Config.Client.Advanced.Graphics.NoiseTexture.noiseDropoff.get());
+
+        // Debug
+        this.renderContext.setUniformBool("uIsWhiteWorld",
+                Config.Client.Advanced.Debugging.enableWhiteWorld.get());
+
+        // Model offset starts at origin — updated per-buffer via setModelOffset()
+        this.renderContext.setUniformVec3f("uModelOffset", new Vec3f(0, 0, 0));
+
+        // Bind UBOs + descriptors after setting all uniforms
+        this.renderContext.uploadAndBindUBOs();
+    }
+
+    @Override
+    public void setModelOffset(Vec3f modelOffset) {
+        if (this.initFailed) {
+            return;
+        }
+
+        // Update the model offset uniform and re-bind UBOs
+        this.renderContext.setUniformVec3f("uModelOffset", modelOffset);
+        this.renderContext.uploadAndBindUBOs();
+    }
+
+    @Override
     public long uploadVertexData(ByteBuffer vertexData, int vertexCount) {
-        // Create a vertex buffer and upload data
-        // In a future optimization, we could pool/reuse these buffers
         int dataSize = vertexData.remaining();
-        net.vulkanmod.vulkan.memory.buffer.VertexBuffer vkVertexBuffer = VulkanRenderContext
-                .createVertexBuffer(dataSize);
+        VertexBuffer vkVertexBuffer = new VertexBuffer(dataSize, MemoryTypes.HOST_MEM);
         vkVertexBuffer.copyBuffer(vertexData, dataSize);
-        // Return a handle (for now, the buffer's native handle)
         return vkVertexBuffer.getId();
     }
 
     @Override
     public void drawBuffer(GLVertexBuffer vbo, int indexCount) {
-        // The GLVertexBuffer holds the vertex data that was uploaded via GL.
-        // Under VulkanMod, we need the data to be in a Vulkan buffer instead.
-        // For now, we log that we'd draw here - the actual data path
-        // (VBO data → Vulkan buffer) needs the buffer building pipeline to be adapted.
+        if (this.initFailed || indexCount <= 0) {
+            return;
+        }
 
-        // TODO: In the full implementation, GLVertexBuffer will be replaced with a
-        // VulkanVertexBuffer that holds a reference to the Vulkan Buffer directly.
-        // For now, this is a no-op placeholder that proves the wiring works.
+        Object handle = vbo.vulkanBufferHandle;
+        if (handle == null) {
+            return;
+        }
 
-        // The draw call would be:
-        // this.renderContext.drawIndexed(vulkanVertexBuffer, this.quadIndexBuffer,
-        // indexCount);
+        try {
+            VertexBuffer vkBuffer;
+            int handleId = System.identityHashCode(handle);
+
+            vkBuffer = this.vulkanBufferCache.get(handleId);
+
+            if (vkBuffer == null && handle instanceof ByteBuffer) {
+                ByteBuffer vertexData = (ByteBuffer) handle;
+                int dataSize = vertexData.remaining();
+
+                if (dataSize <= 0) {
+                    return;
+                }
+
+                vkBuffer = new VertexBuffer(dataSize, MemoryTypes.HOST_MEM);
+                vertexData.position(0);
+                vkBuffer.copyBuffer(vertexData, dataSize);
+                vertexData.position(0);
+
+                this.vulkanBufferCache.put(handleId, vkBuffer);
+            }
+
+            if (vkBuffer == null) {
+                return;
+            }
+
+            // Ensure index buffer is large enough
+            int quadCount = indexCount / 6;
+            if (quadCount > this.quadIndexBufferCapacity) {
+                this.ensureQuadIndexBuffer(quadCount + 1024);
+            }
+
+            // THE draw call
+            this.renderContext.drawIndexed(vkBuffer, this.quadIndexBuffer, indexCount);
+
+        } catch (Exception e) {
+            LOGGER.error("[DH-Vulkan] Error during drawBuffer: {}", e.getMessage());
+        }
     }
 
     @Override
     public void endFrame() {
-        // Nothing to do — VulkanMod manages frame synchronization
+        // Nothing needed currently
     }
 
     @Override
     public void cleanup() {
+        for (VertexBuffer vb : this.vulkanBufferCache.values()) {
+            vb.scheduleFree();
+        }
+        this.vulkanBufferCache.clear();
+
         if (this.quadIndexBuffer != null) {
             this.quadIndexBuffer.scheduleFree();
             this.quadIndexBuffer = null;

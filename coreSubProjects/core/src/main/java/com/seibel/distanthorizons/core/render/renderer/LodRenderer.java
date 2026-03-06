@@ -206,6 +206,7 @@ public class LodRenderer {
 		} else {
 			// Vulkan path: delegate handles pipeline binding and state setup
 			this.vulkanDelegate.beginFrame();
+			this.vulkanDelegate.fillUniformData(renderParams);
 		}
 
 		if (!useVulkan) {
@@ -632,7 +633,8 @@ public class LodRenderer {
 			if (lodBufferContainer != null) {
 				for (int lodIndex = 0; lodIndex < lodBufferContainer.size(); lodIndex++) {
 					LodBufferContainer bufferContainer = lodBufferContainer.get(lodIndex);
-					this.setShaderProgramMvmOffset(bufferContainer.minCornerBlockPos, shaderProgram, renderEventParam);
+					this.setShaderProgramMvmOffset(bufferContainer.minCornerBlockPos, shaderProgram, renderEventParam,
+							useVulkan);
 
 					GLVertexBuffer[] vbos = opaquePass ? bufferContainer.vbos : bufferContainer.vbosTransparent;
 					for (int vboIndex = 0; vboIndex < vbos.length; vboIndex++) {
@@ -684,15 +686,20 @@ public class LodRenderer {
 	 * without running into floating point percision loss.
 	 */
 	private void setShaderProgramMvmOffset(DhBlockPos pos, IDhApiShaderProgram shaderProgram,
-			RenderParams renderEventParam) throws IllegalStateException {
+			RenderParams renderEventParam, boolean useVulkan) throws IllegalStateException {
 		Vec3d camPos = renderEventParam.exactCameraPosition;
 		Vec3f modelPos = new Vec3f(
 				(float) (pos.getX() - camPos.x),
 				(float) (pos.getY() - camPos.y),
 				(float) (pos.getZ() - camPos.z));
 
-		shaderProgram.bind();
-		shaderProgram.setModelOffsetPos(modelPos);
+		if (!useVulkan && shaderProgram != null) {
+			shaderProgram.bind();
+			shaderProgram.setModelOffsetPos(modelPos);
+		}
+		if (useVulkan && this.vulkanDelegate != null) {
+			this.vulkanDelegate.setModelOffset(modelPos);
+		}
 
 		ApiEventInjector.INSTANCE.fireAllEvents(DhApiBeforeBufferRenderEvent.class,
 				new DhApiBeforeBufferRenderEvent.EventParam(renderEventParam, modelPos));

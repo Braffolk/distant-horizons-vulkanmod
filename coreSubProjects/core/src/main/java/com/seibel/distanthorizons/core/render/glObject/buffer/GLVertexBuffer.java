@@ -32,57 +32,70 @@ import com.seibel.distanthorizons.api.enums.config.EDhApiGpuUploadMethod;
  * @author James Seibel
  * @version 11-20-2021
  */
-public class GLVertexBuffer extends GLBuffer
-{
+public class GLVertexBuffer extends GLBuffer {
 	/**
 	 * When uploading to a buffer that is too small, recreate it this many times
 	 * bigger than the upload payload
 	 */
 	protected int vertexCount = 0;
-	public int getVertexCount() { return this.vertexCount; }
-	// FIXME: This setter is needed for premapping buffer to manually set the vertexCount. Fix this.
-	public void setVertexCount(int vertexCount) { this.vertexCount = vertexCount; }
-	
-	
-	public GLVertexBuffer(boolean isBufferStorage)
-	{
+
+	public int getVertexCount() {
+		return this.vertexCount;
+	}
+
+	// FIXME: This setter is needed for premapping buffer to manually set the
+	// vertexCount. Fix this.
+	public void setVertexCount(int vertexCount) {
+		this.vertexCount = vertexCount;
+	}
+
+	/**
+	 * When VulkanMod is active, holds a reference to the Vulkan VertexBuffer
+	 * object.
+	 * Typed as Object since the core module cannot import VulkanMod classes.
+	 * Cast to {@code net.vulkanmod.vulkan.memory.buffer.VertexBuffer} in the fabric
+	 * module.
+	 */
+	public volatile Object vulkanBufferHandle = null;
+	/** Size in bytes of the data uploaded to the Vulkan buffer */
+	public int vulkanBufferByteSize = 0;
+
+	public GLVertexBuffer(boolean isBufferStorage) {
 		super(isBufferStorage);
 	}
-	
-	
-	
+
 	@Override
-	public void destroyAsync()
-	{
+	public void destroyAsync() {
 		super.destroyAsync();
 		this.vertexCount = 0;
 	}
-	
+
 	@Override
-	public int getBufferBindingTarget() { return GL32.GL_ARRAY_BUFFER; }
-	
+	public int getBufferBindingTarget() {
+		return GL32.GL_ARRAY_BUFFER;
+	}
+
 	/**
 	 * bufferSize is the number of shared verticies. <br>
-	 * This number will be higher when actually rendered since each box's face needs 2 triangles 
-	 * with 2 shared verticies. 
+	 * This number will be higher when actually rendered since each box's face needs
+	 * 2 triangles
+	 * with 2 shared verticies.
 	 */
-	public void uploadBuffer(ByteBuffer byteBuffer, int bufferSize, EDhApiGpuUploadMethod uploadMethod, int maxExpensionSize)
-	{
-		if (bufferSize < 0)
-		{
+	public void uploadBuffer(ByteBuffer byteBuffer, int bufferSize, EDhApiGpuUploadMethod uploadMethod,
+			int maxExpensionSize) {
+		if (bufferSize < 0) {
 			throw new IllegalArgumentException("VertCount is negative!");
 		}
-		
+
 		// If size is zero, just ignore it.
-		if (byteBuffer.limit() - byteBuffer.position() != 0)
-		{
+		if (byteBuffer.limit() - byteBuffer.position() != 0) {
 			boolean useBuffStorage = uploadMethod.useBufferStorage;
 			super.uploadBuffer(byteBuffer, uploadMethod, maxExpensionSize, useBuffStorage ? 0 : GL32.GL_STATIC_DRAW);
 		}
-		
+
 		// /4 to get the number of cubes
-		// *6 to get the number of verticies (2 triangles, 3 verticies each) 
+		// *6 to get the number of verticies (2 triangles, 3 verticies each)
 		this.vertexCount = (bufferSize / 4) * 6;
 	}
-	
+
 }

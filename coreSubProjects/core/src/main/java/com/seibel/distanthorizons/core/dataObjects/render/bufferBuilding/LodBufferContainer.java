@@ -40,290 +40,281 @@ import java.util.concurrent.atomic.AtomicReference;
  *
  * @see ColumnRenderBufferBuilder
  */
-public class LodBufferContainer implements AutoCloseable
-{
+public class LodBufferContainer implements AutoCloseable {
 	private static final DhLogger LOGGER = new DhLoggerBuilder().build();
-	
+
 	/** number of bytes a single quad takes */
 	public static final int QUADS_BYTE_SIZE = LodUtil.DH_VERTEX_FORMAT.getByteSize() * 4;
 	/** how big a single VBO can be in bytes */
 	public static final int MAX_VBO_BYTE_SIZE = 10 * 1024 * 1024; // 10 MB
 	public static final int MAX_QUADS_PER_BUFFER = MAX_VBO_BYTE_SIZE / QUADS_BYTE_SIZE;
 	public static final int FULL_SIZED_BUFFER = MAX_QUADS_PER_BUFFER * QUADS_BYTE_SIZE;
-	
-	
+
 	/** the position closest to minimum X/Z infinity and the level's lowest Y */
 	public final DhBlockPos minCornerBlockPos;
 	public final long pos;
-	
+
 	public boolean buffersUploaded = false;
-	
+
 	public GLVertexBuffer[] vbos;
 	public GLVertexBuffer[] vbosTransparent;
-	
+
 	private final AtomicReference<CompletableFuture<LodBufferContainer>> uploadFutureRef = new AtomicReference<>(null);
-	
-	
-	
-	//==============//
+
+	// ==============//
 	// constructors //
-	//==============//
-	
-	public LodBufferContainer(long pos, DhBlockPos minCornerBlockPos)
-	{
+	// ==============//
+
+	public LodBufferContainer(long pos, DhBlockPos minCornerBlockPos) {
 		this.pos = pos;
 		this.minCornerBlockPos = minCornerBlockPos;
 		this.vbos = new GLVertexBuffer[0];
 		this.vbosTransparent = new GLVertexBuffer[0];
 	}
-	
-	
-	
-	//==================//
+
+	// ==================//
 	// buffer uploading //
-	//==================//
-	
+	// ==================//
+
 	/** Should be run on a DH thread. */
-	public synchronized CompletableFuture<LodBufferContainer> makeAndUploadBuffersAsync(LodQuadBuilder builder)
-	{
+	public synchronized CompletableFuture<LodBufferContainer> makeAndUploadBuffersAsync(LodQuadBuilder builder) {
 		// separate variable to prevent race condition when checking null
 		CompletableFuture<LodBufferContainer> oldFuture = this.uploadFutureRef.get();
-		if (oldFuture != null)
-		{
+		if (oldFuture != null) {
 			// upload already in process
 			return oldFuture;
 		}
-		
+
 		// new upload needed
 		CompletableFuture<LodBufferContainer> future = new CompletableFuture<>();
-		future.handle((lodBufferContainer, throwable) -> 
-		{
-			if (!this.uploadFutureRef.compareAndSet(future, null))
-			{
-				LOGGER.warn("upload future ref changed for pos ["+DhSectionPos.toString(this.pos)+"].");
+		future.handle((lodBufferContainer, throwable) -> {
+			if (!this.uploadFutureRef.compareAndSet(future, null)) {
+				LOGGER.warn("upload future ref changed for pos [" + DhSectionPos.toString(this.pos) + "].");
 			}
-			
+
 			return null;
 		});
-		
-		if (!this.uploadFutureRef.compareAndSet(null, future))
-		{
+
+		if (!this.uploadFutureRef.compareAndSet(null, future)) {
 			oldFuture = this.uploadFutureRef.get();
 			LodUtil.assertTrue(oldFuture != null, "Concurrency error");
 			return oldFuture;
 		}
-		
-		
-		
+
 		// make the buffers
 		ArrayList<ByteBuffer> opaqueBuffers = builder.makeOpaqueVertexBuffers();
 		ArrayList<ByteBuffer> transparentBuffers = builder.makeTransparentVertexBuffers();
-		
+
 		this.vbos = resizeBuffer(this.vbos, opaqueBuffers.size());
 		this.vbosTransparent = resizeBuffer(this.vbosTransparent, transparentBuffers.size());
-		
-		
+
 		// upload on MC's render thread
-		GLProxy.queueRunningOnRenderThread(() ->
-		{
-			try
-			{
+		GLProxy.queueRunningOnRenderThread(() -> {
+			try {
 				// skip this event if requested
-				if (Thread.interrupted() 
-					|| future.isCancelled())
-				{
+				if (Thread.interrupted()
+						|| future.isCancelled()) {
 					throw new InterruptedException();
 				}
-				
+
 				EDhApiGpuUploadMethod gpuUploadMethod = GLProxy.getInstance().getGpuUploadMethod();
-				
+
 				// upload on the render thread
 				uploadBuffersDirect(this.vbos, opaqueBuffers, gpuUploadMethod);
 				uploadBuffersDirect(this.vbosTransparent, transparentBuffers, gpuUploadMethod);
 				this.buffersUploaded = true;
-				
+
 				// success
 				future.complete(this);
-			}
-			catch (InterruptedException ignore) 
-			{
+			} catch (InterruptedException ignore) {
 				future.complete(this);
-			}
-			catch (Exception e)
-			{
-				LOGGER.error("Unexpected issue uploading buffer ["+this.minCornerBlockPos +"], error: ["+e.getMessage()+"].", e);
-				
+			} catch (Exception e) {
+				LOGGER.error("Unexpected issue uploading buffer [" + this.minCornerBlockPos + "], error: ["
+						+ e.getMessage() + "].", e);
+
 				future.completeExceptionally(e);
-			}
-			finally
-			{
+			} finally {
 				// all the buffers must be manually freed to prevent memory leaks
-				
-				for (ByteBuffer buffer : opaqueBuffers)
-				{
+
+				for (ByteBuffer buffer : opaqueBuffers) {
 					MemoryUtil.memFree(buffer);
 				}
-				
-				for (ByteBuffer buffer : transparentBuffers)
-				{
+
+				for (ByteBuffer buffer : transparentBuffers) {
 					MemoryUtil.memFree(buffer);
 				}
 			}
 		});
-		
+
 		return future;
 	}
-	private static GLVertexBuffer[] resizeBuffer(GLVertexBuffer[] vbos, int newSize)
-	{
-		if (vbos.length == newSize)
-		{
+
+	private static GLVertexBuffer[] resizeBuffer(GLVertexBuffer[] vbos, int newSize) {
+		if (vbos.length == newSize) {
 			return vbos;
 		}
-		
+
 		GLVertexBuffer[] newVbos = new GLVertexBuffer[newSize];
 		System.arraycopy(vbos, 0, newVbos, 0, Math.min(vbos.length, newSize));
-		if (newSize < vbos.length)
-		{
-			for (int i = newSize; i < vbos.length; i++)
-			{
-				if (vbos[i] != null)
-				{
+		if (newSize < vbos.length) {
+			for (int i = newSize; i < vbos.length; i++) {
+				if (vbos[i] != null) {
 					vbos[i].close();
 				}
 			}
 		}
 		return newVbos;
 	}
+
 	private static void uploadBuffersDirect(
-			GLVertexBuffer[] vbos, ArrayList<ByteBuffer> byteBuffers, 
-			EDhApiGpuUploadMethod uploadMethod) throws InterruptedException
-	{
+			GLVertexBuffer[] vbos, ArrayList<ByteBuffer> byteBuffers,
+			EDhApiGpuUploadMethod uploadMethod) throws InterruptedException {
+		boolean useVulkan = GLProxy.isVulkanModActive();
+
 		int vboIndex = 0;
-		for (int i = 0; i < byteBuffers.size(); i++)
-		{
-			if (vboIndex >= vbos.length)
-			{
+		for (int i = 0; i < byteBuffers.size(); i++) {
+			if (vboIndex >= vbos.length) {
 				throw new RuntimeException("Too many vertex buffers!!");
 			}
-			
-			
-			// get or create the VBO
-			if (vbos[vboIndex] == null)
-			{
-				vbos[vboIndex] = new GLVertexBuffer(uploadMethod.useBufferStorage);
+
+			// get or create the VBO wrapper
+			if (vbos[vboIndex] == null) {
+				vbos[vboIndex] = new GLVertexBuffer(useVulkan ? false : uploadMethod.useBufferStorage);
 			}
 			GLVertexBuffer vbo = vbos[vboIndex];
-			
-			
+
 			ByteBuffer buffer = byteBuffers.get(i);
 			int size = buffer.limit() - buffer.position();
-			
-			try
-			{
-				vbo.bind();
-				vbo.uploadBuffer(buffer, size / LodUtil.DH_VERTEX_FORMAT.getByteSize(), uploadMethod, FULL_SIZED_BUFFER);
-			}
-			catch (Exception e)
-			{
+
+			try {
+				if (useVulkan) {
+					// VulkanMod path: copy the raw vertex data into a direct ByteBuffer
+					// stored on the GLVertexBuffer. The actual Vulkan buffer is created
+					// at draw time in VulkanRenderDelegate.
+					ByteBuffer copy = org.lwjgl.system.MemoryUtil.memAlloc(size);
+					copy.put(buffer.duplicate());
+					copy.flip();
+
+					// Free old buffer if present
+					Object oldHandle = vbo.vulkanBufferHandle;
+					if (oldHandle instanceof ByteBuffer) {
+						org.lwjgl.system.MemoryUtil.memFree((ByteBuffer) oldHandle);
+					}
+
+					vbo.vulkanBufferHandle = copy;
+					vbo.vulkanBufferByteSize = size;
+					// Set vertex count the same way GL path does
+					int vertexCount = size / LodUtil.DH_VERTEX_FORMAT.getByteSize();
+					vbo.setVertexCount((vertexCount / 4) * 6);
+				} else {
+					// Standard GL path
+					vbo.bind();
+					vbo.uploadBuffer(buffer, size / LodUtil.DH_VERTEX_FORMAT.getByteSize(), uploadMethod,
+							FULL_SIZED_BUFFER);
+				}
+			} catch (Exception e) {
 				vbos[vboIndex] = null;
-				vbo.close();
-				LOGGER.error("Failed to upload buffer. Error: ["+e.getMessage()+"].", e);
+				if (!useVulkan)
+					vbo.close();
+				LOGGER.error("Failed to upload buffer. Error: [" + e.getMessage() + "].", e);
 			}
-			
+
 			vboIndex++;
 		}
-		
-		if (vboIndex < vbos.length)
-		{
+
+		if (vboIndex < vbos.length) {
 			throw new RuntimeException("Too few vertex buffers!!");
 		}
 	}
-	
-	
-	
-	//================//
+
+	// ================//
 	// helper methods //
-	//================//
-	
+	// ================//
+
 	/** can be used when debugging */
-	public boolean hasNonNullVbos() { return this.vbos != null || this.vbosTransparent != null; }
-	
+	public boolean hasNonNullVbos() {
+		return this.vbos != null || this.vbosTransparent != null;
+	}
+
 	/** can be used when debugging */
-	public int vboBufferCount() 
-	{
+	public int vboBufferCount() {
 		int count = 0;
-		
-		if (this.vbos != null)
-		{
+
+		if (this.vbos != null) {
 			count += this.vbos.length;
 		}
-		
-		if (this.vbosTransparent != null)
-		{
+
+		if (this.vbosTransparent != null) {
 			count += this.vbosTransparent.length;
 		}
-		
+
 		return count;
 	}
-	
-	public boolean uploadInProgress() { return this.uploadFutureRef.get() != null; }
-	
-	public void debugDumpStats(StatsMap statsMap)
-	{
+
+	public boolean uploadInProgress() {
+		return this.uploadFutureRef.get() != null;
+	}
+
+	public void debugDumpStats(StatsMap statsMap) {
 		statsMap.incStat("RenderBuffers");
 		statsMap.incStat("SimpleRenderBuffers");
-		for (GLVertexBuffer vertexBuffer : this.vbos)
-		{
-			if (vertexBuffer != null)
-			{
+		for (GLVertexBuffer vertexBuffer : this.vbos) {
+			if (vertexBuffer != null) {
 				statsMap.incStat("VBOs");
-				if (vertexBuffer.getSize() == FULL_SIZED_BUFFER)
-				{
+				if (vertexBuffer.getSize() == FULL_SIZED_BUFFER) {
 					statsMap.incStat("FullsizedVBOs");
 				}
-				
-				if (vertexBuffer.getSize() == 0)
-				{
+
+				if (vertexBuffer.getSize() == 0) {
 					GLProxy.LOGGER.warn("VBO with size 0");
 				}
 				statsMap.incBytesStat("TotalUsage", vertexBuffer.getSize());
 			}
 		}
 	}
-	
-	
-	
-	
-	//================//
+
+	// ================//
 	// base overrides //
-	//================//
-	
+	// ================//
+
 	/**
 	 * This method is called when object is no longer in use.
 	 * Called either after uploadBuffers() returned false (On buffer Upload
 	 * thread), or by others when the object is not being used. (not in build,
-	 * upload, or render state). 
+	 * upload, or render state).
 	 */
 	@Override
-	public void close()
-	{
+	public void close() {
 		this.buffersUploaded = false;
-		
-		for (GLVertexBuffer buffer : this.vbos)
-		{
-			if (buffer != null)
-			{
-				buffer.destroyAsync();
+		boolean useVulkan = GLProxy.isVulkanModActive();
+
+		for (GLVertexBuffer buffer : this.vbos) {
+			if (buffer != null) {
+				if (useVulkan) {
+					Object handle = buffer.vulkanBufferHandle;
+					if (handle instanceof java.nio.ByteBuffer) {
+						MemoryUtil.memFree((java.nio.ByteBuffer) handle);
+					}
+					buffer.vulkanBufferHandle = null;
+				} else {
+					buffer.destroyAsync();
+				}
 			}
 		}
-		
-		for (GLVertexBuffer buffer : this.vbosTransparent)
-		{
-			if (buffer != null)
-			{
-				buffer.destroyAsync();
+
+		for (GLVertexBuffer buffer : this.vbosTransparent) {
+			if (buffer != null) {
+				if (useVulkan) {
+					Object handle = buffer.vulkanBufferHandle;
+					if (handle instanceof java.nio.ByteBuffer) {
+						MemoryUtil.memFree((java.nio.ByteBuffer) handle);
+					}
+					buffer.vulkanBufferHandle = null;
+				} else {
+					buffer.destroyAsync();
+				}
 			}
 		}
 	}
-	
+
 }

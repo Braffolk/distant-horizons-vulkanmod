@@ -5,7 +5,9 @@
 
 package com.seibel.distanthorizons.core.render.renderer;
 
+import com.seibel.distanthorizons.api.methods.events.sharedParameterObjects.DhApiRenderParam;
 import com.seibel.distanthorizons.core.render.glObject.buffer.GLVertexBuffer;
+import com.seibel.distanthorizons.core.util.math.Vec3f;
 
 import java.nio.ByteBuffer;
 
@@ -22,6 +24,18 @@ public interface IVulkanRenderDelegate {
 
     /** Bind the terrain pipeline and set up render state for a new frame */
     void beginFrame();
+
+    /**
+     * Upload per-frame uniform data (camera matrix, fog, noise, etc.)
+     * Must be called after beginFrame() and before any drawBuffer() calls.
+     */
+    void fillUniformData(DhApiRenderParam renderParameters);
+
+    /**
+     * Set the per-buffer model offset uniform.
+     * Called once per LodBufferContainer, before drawing its VBOs.
+     */
+    void setModelOffset(Vec3f modelOffset);
 
     /** Upload vertex data to a Vulkan buffer and return a handle for drawing */
     long uploadVertexData(ByteBuffer vertexData, int vertexCount);

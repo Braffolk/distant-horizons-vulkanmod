@@ -10,6 +10,8 @@ package com.seibel.distanthorizons.fabric.vulkan;
 import com.seibel.distanthorizons.core.logging.DhLogger;
 import com.seibel.distanthorizons.core.logging.DhLoggerBuilder;
 import com.seibel.distanthorizons.core.render.glObject.GLProxy;
+import com.seibel.distanthorizons.core.util.math.Mat4f;
+import com.seibel.distanthorizons.core.util.math.Vec3f;
 import net.vulkanmod.vulkan.Drawer;
 import net.vulkanmod.vulkan.Renderer;
 import net.vulkanmod.vulkan.memory.MemoryTypes;
@@ -25,14 +27,18 @@ import net.vulkanmod.vulkan.shader.layout.AlignedStruct;
 import net.vulkanmod.vulkan.shader.layout.Uniform;
 import net.vulkanmod.vulkan.texture.VTextureSelector;
 import net.vulkanmod.vulkan.util.MappedBuffer;
+import org.lwjgl.system.MemoryUtil;
 
 import java.io.BufferedReader;
 import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
@@ -41,19 +47,13 @@ import java.util.stream.Collectors;
  * Central bridge between Distant Horizons rendering and VulkanMod's native
  * Vulkan API.
  * <p>
- * Manages Vulkan pipeline creation (GLSL to SPIR-V compilation), vertex/index
- * buffer
- * allocation, and draw call submission via VulkanMod's {@link Renderer} and
+ * Manages Vulkan pipeline creation (GLSL to SPIR-V compilation), uniform
+ * data buffers, and draw call submission via VulkanMod's {@link Renderer} and
  * {@link Drawer}.
- * <p>
- * This class lives in the {@code fabric} module because VulkanMod classes are
- * only
- * available on Fabric's compile classpath.
  */
 public class VulkanRenderContext {
     private static final DhLogger LOGGER = new DhLoggerBuilder().build();
 
-    // Vulkan shader stage constants (avoids importing org.lwjgl.vulkan.VK10)
     private static final int VK_SHADER_STAGE_VERTEX_BIT = 0x00000001;
     private static final int VK_SHADER_STAGE_FRAGMENT_BIT = 0x00000010;
 
@@ -64,6 +64,13 @@ public class VulkanRenderContext {
 
     /** Whether the context has been initialized */
     private boolean initialized = false;
+
+    /**
+     * Persistent MappedBuffer objects for each DH uniform.
+     * These are allocated once and reused every frame — the supplier returns
+     * the same buffer, and we update its contents before each UBO upload.
+     */
+    private final Map<String, MappedBuffer> uniformBuffers = new HashMap<>();
 
     // =============//
     // constructor //
@@ -79,7 +86,6 @@ public class VulkanRenderContext {
         return instance;
     }
 
-    /** @return true if VulkanMod is active and we should use Vulkan rendering */
     public static boolean isActive() {
         return GLProxy.isVulkanModActive();
     }
@@ -104,6 +110,30 @@ public class VulkanRenderContext {
         }
     }
 
+    /**
+     * DH's 16-byte vertex format:
+     * Attr 0 (Position): SHORT×4 = 8 bytes (shader: uvec4 vPosition)
+     * Attr 1 (Color): UBYTE×4 = 4 bytes (shader: vec4 color)
+     * Attr 2 (Generic): INT×1 = 4 bytes (material/normal/padding)
+     * Total stride: 16 bytes
+     */
+    private static final VertexFormat DH_TERRAIN_FORMAT;
+    static {
+        // VertexFormatElement(id, index, type, usage, count)
+        VertexFormatElement position = new VertexFormatElement(0, 0,
+                VertexFormatElement.Type.SHORT, VertexFormatElement.Usage.POSITION, 4);
+        VertexFormatElement color = new VertexFormatElement(1, 0,
+                VertexFormatElement.Type.UBYTE, VertexFormatElement.Usage.COLOR, 4);
+        VertexFormatElement material = new VertexFormatElement(2, 0,
+                VertexFormatElement.Type.INT, VertexFormatElement.Usage.GENERIC, 1);
+
+        DH_TERRAIN_FORMAT = VertexFormat.builder()
+                .add("Position", position)
+                .add("Color", color)
+                .add("Material", material)
+                .build();
+    }
+
     // ======================//
     // pipeline management //
     // ======================//
@@ -111,13 +141,7 @@ public class VulkanRenderContext {
     /**
      * Creates the terrain rendering pipeline from DH's GLSL shaders.
      * Compiles standard.vert and flat_shaded.frag to SPIR-V.
-     * <p>
-     * DH vertex format (16 bytes per vertex):
-     * <ul>
-     * <li>Attr 0: uvec4 vPosition (unsigned short x4, 8 bytes)</li>
-     * <li>Attr 1: vec4 color (unsigned byte x4 normalized, 4 bytes)</li>
-     * <li>Attr 2: vec4 material (unsigned byte x4, 4 bytes)</li>
-     * </ul>
+     * Sets up persistent MappedBuffer uniforms with custom suppliers.
      */
     private GraphicsPipeline createTerrainPipeline() {
         LOGGER.info("[DH-Vulkan] Creating terrain pipeline...");
@@ -125,11 +149,10 @@ public class VulkanRenderContext {
         String vertSource = readShaderResource("shaders/standard.vert");
         String fragSource = readShaderResource("shaders/flat_shaded.frag");
 
-        // Convert GLSL 1.50 → 4.50 for Vulkan/SPIR-V
         vertSource = convertGlslForVulkan(vertSource, true);
         fragSource = convertGlslForVulkan(fragSource, false);
 
-        Pipeline.Builder builder = new Pipeline.Builder();
+        Pipeline.Builder builder = new Pipeline.Builder(DH_TERRAIN_FORMAT);
         builder.compileShaders("dh_terrain", vertSource, fragSource);
 
         // UBOs and samplers
@@ -138,44 +161,116 @@ public class VulkanRenderContext {
 
         // Binding 0: Main uniforms UBO
         AlignedStruct.Builder uboBuilder = new AlignedStruct.Builder();
-        // VulkanMod type names: "matrix4x4", "float" (count=1-4 for
-        // float/vec2/vec3/vec4), "int" (count=1-4)
-        addUniform(uboBuilder, "matrix4x4", "uCombinedMatrix", 1);
-        addUniform(uboBuilder, "float", "uModelOffset", 3); // vec3
-        addUniform(uboBuilder, "float", "uWorldYOffset", 1); // float
-        addUniform(uboBuilder, "float", "uMircoOffset", 1); // float
-        addUniform(uboBuilder, "float", "uEarthRadius", 1); // float
-        addUniform(uboBuilder, "int", "uIsWhiteWorld", 1); // int
-        addUniform(uboBuilder, "float", "uClipDistance", 1); // float
-        addUniform(uboBuilder, "int", "uDitherDhRendering", 1); // int
-        addUniform(uboBuilder, "int", "uNoiseEnabled", 1); // int
-        addUniform(uboBuilder, "int", "uNoiseSteps", 1); // int
-        addUniform(uboBuilder, "float", "uNoiseIntensity", 1); // float
-        addUniform(uboBuilder, "int", "uNoiseDropoff", 1); // int
+
+        // Create persistent MappedBuffer for each uniform and set as supplier
+        addDhUniform(uboBuilder, "matrix4x4", "uCombinedMatrix", 1, 64); // mat4 = 16 floats = 64 bytes
+        addDhUniform(uboBuilder, "float", "uModelOffset", 3, 12); // vec3 = 3 floats = 12 bytes
+        addDhUniform(uboBuilder, "float", "uWorldYOffset", 1, 4);
+        addDhUniform(uboBuilder, "float", "uMircoOffset", 1, 4);
+        addDhUniform(uboBuilder, "float", "uEarthRadius", 1, 4);
+        addDhUniform(uboBuilder, "int", "uIsWhiteWorld", 1, 4);
+        addDhUniform(uboBuilder, "float", "uClipDistance", 1, 4);
+        addDhUniform(uboBuilder, "int", "uDitherDhRendering", 1, 4);
+        addDhUniform(uboBuilder, "int", "uNoiseEnabled", 1, 4);
+        addDhUniform(uboBuilder, "int", "uNoiseSteps", 1, 4);
+        addDhUniform(uboBuilder, "float", "uNoiseIntensity", 1, 4);
+        addDhUniform(uboBuilder, "int", "uNoiseDropoff", 1, 4);
 
         UBO mainUbo = uboBuilder.buildUBO(0, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT);
         ubos.add(mainUbo);
 
         // Binding 1: LightMap sampler
-        imageDescriptors.add(new ImageDescriptor(1, "sampler2D", "uLightMap",
-                VTextureSelector.getTextureIdx("uLightMap")));
+        // VulkanMod hardcodes lightmap at texture slot 2 (see
+        // VTextureSelector.setLightTexture())
+        imageDescriptors.add(new ImageDescriptor(1, "sampler2D", "uLightMap", 2));
 
         builder.setUniforms(ubos, imageDescriptors);
 
         return builder.createGraphicsPipeline();
     }
 
-    private void addUniform(AlignedStruct.Builder builder, String type, String name, int count) {
+    /**
+     * Creates a persistent MappedBuffer for a DH uniform and registers it as a
+     * supplier on the Uniform.Info. This avoids allocating a new buffer every
+     * frame.
+     */
+    private void addDhUniform(AlignedStruct.Builder builder, String type, String name, int count, int byteSize) {
         Uniform.Info info = Uniform.createUniformInfo(type, name, count);
-        try {
-            info.setupSupplier();
-        } catch (Exception ignored) {
-        }
-        if (!info.hasSupplier()) {
-            // Provide a small dummy buffer supplier
-            info.setBufferSupplier(() -> new MappedBuffer(4));
-        }
+
+        // Create a persistent MappedBuffer for this uniform
+        MappedBuffer mb = new MappedBuffer(byteSize);
+        this.uniformBuffers.put(name, mb);
+
+        // Set the supplier — the Uniform will read from this buffer on UBO.update()
+        info.setBufferSupplier(() -> mb);
+
         builder.addUniformInfo(info);
+    }
+
+    // ===================//
+    // uniform updates //
+    // ===================//
+
+    /** Write a mat4 uniform value (column-major for std140 layout) */
+    public void setUniformMat4(String name, Mat4f matrix) {
+        MappedBuffer mb = this.uniformBuffers.get(name);
+        if (mb == null)
+            return;
+
+        // Column 0
+        mb.putFloat(0, matrix.m00);
+        mb.putFloat(4, matrix.m10);
+        mb.putFloat(8, matrix.m20);
+        mb.putFloat(12, matrix.m30);
+        // Column 1
+        mb.putFloat(16, matrix.m01);
+        mb.putFloat(20, matrix.m11);
+        mb.putFloat(24, matrix.m21);
+        mb.putFloat(28, matrix.m31);
+        // Column 2
+        mb.putFloat(32, matrix.m02);
+        mb.putFloat(36, matrix.m12);
+        mb.putFloat(40, matrix.m22);
+        mb.putFloat(44, matrix.m32);
+        // Column 3
+        mb.putFloat(48, matrix.m03);
+        mb.putFloat(52, matrix.m13);
+        mb.putFloat(56, matrix.m23);
+        mb.putFloat(60, matrix.m33);
+    }
+
+    /** Write a vec3 uniform value */
+    public void setUniformVec3f(String name, Vec3f value) {
+        MappedBuffer mb = this.uniformBuffers.get(name);
+        if (mb == null)
+            return;
+
+        mb.putFloat(0, value.x);
+        mb.putFloat(4, value.y);
+        mb.putFloat(8, value.z);
+    }
+
+    /** Write a float uniform value */
+    public void setUniformFloat(String name, float value) {
+        MappedBuffer mb = this.uniformBuffers.get(name);
+        if (mb == null)
+            return;
+
+        mb.putFloat(0, value);
+    }
+
+    /** Write an int uniform value */
+    public void setUniformInt(String name, int value) {
+        MappedBuffer mb = this.uniformBuffers.get(name);
+        if (mb == null)
+            return;
+
+        mb.putInt(0, value);
+    }
+
+    /** Write a boolean uniform value (stored as int) */
+    public void setUniformBool(String name, boolean value) {
+        setUniformInt(name, value ? 1 : 0);
     }
 
     // ===========//
@@ -187,6 +282,15 @@ public class VulkanRenderContext {
             this.init();
         }
         Renderer.getInstance().bindGraphicsPipeline(this.terrainPipeline);
+    }
+
+    /**
+     * Upload UBO data and bind descriptor sets.
+     * Must be called after bindTerrainPipeline() and after updating uniforms,
+     * before any draw calls.
+     */
+    public void uploadAndBindUBOs() {
+        Renderer.getInstance().uploadAndBindUBOs(this.terrainPipeline);
     }
 
     public void drawIndexed(Buffer vertexBuffer, IndexBuffer indexBuffer, int indexCount) {
@@ -218,6 +322,11 @@ public class VulkanRenderContext {
             this.terrainPipeline.cleanUp();
             this.terrainPipeline = null;
         }
+        // Free MappedBuffers
+        for (MappedBuffer mb : this.uniformBuffers.values()) {
+            MemoryUtil.memFree(mb.buffer);
+        }
+        this.uniformBuffers.clear();
         this.initialized = false;
         LOGGER.info("[DH-Vulkan] VulkanRenderContext cleaned up.");
     }
@@ -241,34 +350,26 @@ public class VulkanRenderContext {
 
     /**
      * Convert DH's GLSL 1.50 shaders to GLSL 4.50 for Vulkan/SPIR-V compilation.
-     * Transforms: version upgrade, layout location decorations,
-     * individual uniforms to UBO block, sampler binding decorations.
      */
     static String convertGlslForVulkan(String source, boolean isVertex) {
-        // Version upgrade
         source = source.replace("#version 150 core", "#version 450");
         source = source.replace("#version 150", "#version 450");
 
         if (isVertex) {
-            // Vertex inputs with layout locations
             source = source.replaceFirst("in uvec4 vPosition;", "layout(location = 0) in uvec4 vPosition;");
             source = source.replaceFirst("in vec4 color;", "layout(location = 1) in vec4 color;");
 
-            // Vertex outputs
             source = source.replaceFirst("out vec4 vPos;", "layout(location = 0) out vec4 vPos;");
             source = source.replaceFirst("out vec4 vertexColor;", "layout(location = 1) out vec4 vertexColor;");
             source = source.replaceFirst("out vec3 vertexWorldPos;", "layout(location = 2) out vec3 vertexWorldPos;");
             source = source.replaceFirst("out float vertexYPos;", "layout(location = 3) out float vertexYPos;");
         } else {
-            // Fragment inputs
             source = source.replaceFirst("in vec4 vPos;", "layout(location = 0) in vec4 vPos;");
             source = source.replaceFirst("in vec4 vertexColor;", "layout(location = 1) in vec4 vertexColor;");
             source = source.replaceFirst("in vec3 vertexWorldPos;", "layout(location = 2) in vec3 vertexWorldPos;");
 
-            // Remove gl_FragCoord redeclaration (built-in)
             source = source.replace("in vec4 gl_FragCoord;", "// gl_FragCoord is a built-in");
 
-            // Fragment output
             source = source.replaceFirst("out vec4 fragColor;", "layout(location = 0) out vec4 fragColor;");
         }
 
