@@ -60,7 +60,6 @@ import java.util.stream.Collectors;
  * Follows the same patterns as {@link DhCompositePipeline}.
  */
 public class DhSsaoPipeline {
-    private static final DhLogger LOGGER = new DhLoggerBuilder().build();
 
     // Vulkan constants (inlined to avoid compile-time LWJGL dependency)
     private static final int VK_SHADER_STAGE_VERTEX_BIT = 0x00000001;
@@ -75,9 +74,6 @@ public class DhSsaoPipeline {
     private static final int SSAO_DEPTH_TEXTURE_SLOT = 5;
     private static final int SSAO_RAW_TEXTURE_SLOT = 6;
     private static final int SSAO_APPLY_DEPTH_TEXTURE_SLOT = 7;
-
-    // *** Set to true to see red-green SSAO heat map overlay ***
-    private static final boolean DEBUG_SSAO = false;
 
     /** Fullscreen quad vertex format: vec2 position */
     private static final VertexFormat QUAD_FORMAT;
@@ -135,7 +131,6 @@ public class DhSsaoPipeline {
         Renderer.getInstance().addOnResizeCallback(this::onResize);
 
         this.initialized = true;
-        LOGGER.info("[DH-Vulkan] DhSsaoPipeline initialized ({}x{}).", width, height);
     }
 
     // ==================== //
@@ -339,31 +334,20 @@ public class DhSsaoPipeline {
         setUniformInt(this.pass2Uniforms, "gBlurRadius", 0); // skip blur — bilinear filtering suffices
         setUniformFloat(this.pass2Uniforms, "gNear", RenderUtil.getNearClipPlaneInBlocks());
         setUniformFloat(this.pass2Uniforms, "gFar", RenderUtil.getFarClipPlaneDistanceInBlocks());
-        setUniformInt(this.pass2Uniforms, "uDebugMode", DEBUG_SSAO ? 1 : 0);
+        setUniformInt(this.pass2Uniforms, "uDebugMode", 0);
 
         // Bind raw SSAO texture + DH depth for the apply pass
         VTextureSelector.bindTexture(SSAO_RAW_TEXTURE_SLOT, this.ssaoFramebuffer.getColorAttachment());
         VTextureSelector.bindTexture(SSAO_APPLY_DEPTH_TEXTURE_SLOT, dhDepthTexture);
 
-        // Set blend state for the apply pass
-        if (DEBUG_SSAO) {
-            // Debug mode: alpha-blend to show the heat map colors
-            PipelineState.blendInfo.enabled = true;
-            PipelineState.blendInfo.srcRgbFactor = 6; // VK_BLEND_FACTOR_SRC_ALPHA
-            PipelineState.blendInfo.dstRgbFactor = 7; // VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA
-            PipelineState.blendInfo.srcAlphaFactor = 1; // VK_BLEND_FACTOR_ONE
-            PipelineState.blendInfo.dstAlphaFactor = 0; // VK_BLEND_FACTOR_ZERO
-            PipelineState.blendInfo.blendOp = 0; // VK_BLEND_OP_ADD
-        } else {
-            // Normal: multiplicative blend — GL equivalent: glBlendFuncSeparate(GL_ZERO,
-            // GL_SRC_ALPHA, GL_ZERO, GL_ONE)
-            PipelineState.blendInfo.enabled = true;
-            PipelineState.blendInfo.srcRgbFactor = 0; // VK_BLEND_FACTOR_ZERO
-            PipelineState.blendInfo.dstRgbFactor = 6; // VK_BLEND_FACTOR_SRC_ALPHA
-            PipelineState.blendInfo.srcAlphaFactor = 0; // VK_BLEND_FACTOR_ZERO
-            PipelineState.blendInfo.dstAlphaFactor = 1; // VK_BLEND_FACTOR_ONE
-            PipelineState.blendInfo.blendOp = 0; // VK_BLEND_OP_ADD
-        }
+        // Multiplicative blend — GL equivalent: glBlendFuncSeparate(GL_ZERO,
+        // GL_SRC_ALPHA, GL_ZERO, GL_ONE)
+        PipelineState.blendInfo.enabled = true;
+        PipelineState.blendInfo.srcRgbFactor = 0; // VK_BLEND_FACTOR_ZERO
+        PipelineState.blendInfo.dstRgbFactor = 6; // VK_BLEND_FACTOR_SRC_ALPHA
+        PipelineState.blendInfo.srcAlphaFactor = 0; // VK_BLEND_FACTOR_ZERO
+        PipelineState.blendInfo.dstAlphaFactor = 1; // VK_BLEND_FACTOR_ONE
+        PipelineState.blendInfo.blendOp = 0; // VK_BLEND_OP_ADD
 
         // Use cached apply render pass (created once, reused every frame)
         if (this.applyRenderPass == null) {
@@ -407,9 +391,6 @@ public class DhSsaoPipeline {
         if (newWidth == this.width && newHeight == this.height) {
             return; // No change
         }
-
-        LOGGER.info("[DH-Vulkan] Resizing DhSsaoPipeline: {}x{} -> {}x{}",
-                this.width, this.height, newWidth, newHeight);
 
         // Clean up old SSAO framebuffer and cached apply render pass
         if (this.ssaoRenderPass != null) {
@@ -474,7 +455,6 @@ public class DhSsaoPipeline {
         this.pass2Uniforms.clear();
 
         this.initialized = false;
-        LOGGER.info("[DH-Vulkan] DhSsaoPipeline cleaned up.");
     }
 
     // ================ //
