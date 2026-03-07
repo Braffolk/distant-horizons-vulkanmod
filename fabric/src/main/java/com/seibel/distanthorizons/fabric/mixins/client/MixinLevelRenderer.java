@@ -19,20 +19,19 @@
 
 package com.seibel.distanthorizons.fabric.mixins.client;
 
-#if MC_VER < MC_1_19_4
+#if MC_VER<MC_1_19_4
+
 import com.seibel.distanthorizons.core.util.math.Mat4f;
 import net.minecraft.client.renderer.RenderType;
 import com.mojang.blaze3d.vertex.PoseStack;
 import com.mojang.math.Matrix4f;
 import org.lwjgl.opengl.GL32;
-import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
-#elif MC_VER < MC_1_21_6
+import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;#elif MC_VER<MC_1_21_6
 import com.seibel.distanthorizons.core.util.math.Mat4f;
 import net.minecraft.client.renderer.RenderType;
 import com.mojang.blaze3d.vertex.PoseStack;
 import org.joml.Matrix4f;
-import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
-#elif MC_VER < MC_1_21_9
+import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;#elif MC_VER<MC_1_21_9
 import com.mojang.blaze3d.buffers.GpuBufferSlice;
 import com.mojang.blaze3d.framegraph.FrameGraphBuilder;
 import com.mojang.blaze3d.resource.GraphicsResourceAllocator;
@@ -46,8 +45,7 @@ import org.joml.Matrix4f;
 import org.joml.Matrix4fc;
 import org.joml.Vector4f;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
-import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
-#else
+import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;#else
 import com.mojang.blaze3d.buffers.GpuBufferSlice;
 import com.mojang.blaze3d.resource.GraphicsResourceAllocator;
 import com.seibel.distanthorizons.common.wrappers.minecraft.MinecraftRenderWrapper;
@@ -58,9 +56,7 @@ import org.joml.Matrix4f;
 import org.joml.Matrix4fc;
 import org.joml.Vector4f;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
-import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
-#endif
-
+import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;#endif
 
 import com.seibel.distanthorizons.common.wrappers.McObjectConverter;
 import com.seibel.distanthorizons.common.wrappers.world.ClientLevelWrapper;
@@ -79,20 +75,17 @@ import org.spongepowered.asm.mixin.injection.Inject;
 
 import com.seibel.distanthorizons.core.logging.DhLogger;
 
-
-
 @Mixin(LevelRenderer.class)
-public class MixinLevelRenderer
-{
-    @Shadow
-    private ClientLevel level;
-	
+public class MixinLevelRenderer {
+	@Shadow
+	private ClientLevel level;
+
 	@Unique
 	private static final DhLogger LOGGER = new DhLoggerBuilder().build();
-	
-	
-	#if MC_VER < MC_1_17_1
-    @Inject(at = @At("HEAD"),
+
+	#if MC_VER<MC_1_17_1 @Inject(at=
+
+	@At("HEAD"),
 			method = "renderChunkLayer(Lnet/minecraft/client/renderer/RenderType;Lcom/mojang/blaze3d/vertex/PoseStack;DDD)V",
 			cancellable = true)
 	private void renderChunkLayer(RenderType renderType, PoseStack matrixStackIn, double xIn, double yIn, double zIn, CallbackInfo callback)
@@ -100,26 +93,32 @@ public class MixinLevelRenderer
     @Inject(at = @At("HEAD"),
             method = "renderChunkLayer(Lnet/minecraft/client/renderer/RenderType;Lcom/mojang/blaze3d/vertex/PoseStack;DDDLcom/mojang/math/Matrix4f;)V",
             cancellable = true)
-    private void renderChunkLayer(RenderType renderType, PoseStack modelViewMatrixStack, double cameraXBlockPos, double cameraYBlockPos, double cameraZBlockPos, Matrix4f projectionMatrix, CallbackInfo callback)
+
+	private void renderChunkLayer(RenderType renderType, PoseStack modelViewMatrixStack, double cameraXBlockPos, double cameraYBlockPos, double cameraZBlockPos, Matrix4f projectionMatrix, CallbackInfo callback)
 	#elif MC_VER < MC_1_20_2
     @Inject(at = @At("HEAD"),
             method = "renderChunkLayer(Lnet/minecraft/client/renderer/RenderType;Lcom/mojang/blaze3d/vertex/PoseStack;DDDLorg/joml/Matrix4f;)V",
             cancellable = true)
-    private void renderChunkLayer(RenderType renderType, PoseStack modelViewMatrixStack, double cameraXBlockPos, double cameraYBlockPos, double cameraZBlockPos, Matrix4f projectionMatrix, CallbackInfo callback)
+
+	private void renderChunkLayer(RenderType renderType, PoseStack modelViewMatrixStack, double cameraXBlockPos, double cameraYBlockPos, double cameraZBlockPos, Matrix4f projectionMatrix, CallbackInfo callback)
     #elif MC_VER < MC_1_20_6
 	@Inject(at = @At("HEAD"),
 			method = "Lnet/minecraft/client/renderer/LevelRenderer;renderSectionLayer(Lnet/minecraft/client/renderer/RenderType;Lcom/mojang/blaze3d/vertex/PoseStack;DDDLorg/joml/Matrix4f;)V",
 			cancellable = true)
+
 	private void renderChunkLayer(RenderType renderType, PoseStack modelViewMatrixStack, double camX, double camY, double camZ, Matrix4f projectionMatrix, CallbackInfo callback)
 	#elif MC_VER < MC_1_21_6
 	@Inject(at = @At("HEAD"),
 			method = "Lnet/minecraft/client/renderer/LevelRenderer;renderSectionLayer(Lnet/minecraft/client/renderer/RenderType;DDDLorg/joml/Matrix4f;Lorg/joml/Matrix4f;)V",
 			cancellable = true)
+
 	private void renderChunkLayer(RenderType renderType, double x, double y, double z, Matrix4f projectionMatrix, Matrix4f frustumMatrix, CallbackInfo callback)
 	#elif MC_VER < MC_1_21_9
 	@Inject(at = @At("HEAD"), method = "prepareChunkRenders", cancellable = true)
+
 	private void prepareChunkRenders(Matrix4fc projectionMatrix, double d, double e, double f, CallbackInfoReturnable<ChunkSectionsToRender> callback)
 	#else
+
 	@Inject(at = @At("HEAD"), method = "renderLevel")
 	private void renderLevel(
 			GraphicsResourceAllocator resourceAllocator, DeltaTracker deltaTracker,
@@ -173,24 +172,35 @@ public class MixinLevelRenderer
 	#if MC_VER < MC_1_21_9
 	// rendering handled via Fabric Api render event
 	#else
+
 	@Inject(at = @At("HEAD"), method = "prepareChunkRenders")
-	private void prepareChunkRenders(Matrix4fc modelViewMatrix, double d, double e, double f, CallbackInfoReturnable<ChunkSectionsToRender> callback)
-	{
+	private void prepareChunkRenders(Matrix4fc modelViewMatrix, double d, double e, double f,
+			CallbackInfoReturnable<ChunkSectionsToRender> callback) {
 		ClientApi.RENDER_STATE.mcModelViewMatrix = McObjectConverter.Convert(modelViewMatrix);
-		ClientApi.RENDER_STATE.clientLevelWrapper = ClientLevelWrapper.getWrapperIfDifferent(ClientApi.RENDER_STATE.clientLevelWrapper, this.level);
-		
+		ClientApi.RENDER_STATE.clientLevelWrapper = ClientLevelWrapper
+				.getWrapperIfDifferent(ClientApi.RENDER_STATE.clientLevelWrapper, this.level);
+
 		// only crash during development
-		if (ModInfo.IS_DEV_BUILD)
-		{
+		if (ModInfo.IS_DEV_BUILD) {
 			ClientApi.RENDER_STATE.canRenderOrThrow();
 		}
-		
+
 		ClientApi.INSTANCE.renderLods();
-		
+
 	}
-	
+
+	@Inject(at = @At("RETURN"), method = "renderLevel")
+	private void renderLevelReturn(
+			GraphicsResourceAllocator resourceAllocator, DeltaTracker deltaTracker,
+			boolean renderBlockOutline, Camera camera,
+			Matrix4f positionMatrix, Matrix4f projectionMatrix, Matrix4f idkMatrix, GpuBufferSlice gpuBufferSlice,
+			Vector4f skyColor, boolean thinFog, CallbackInfo callback)
+	{
+		// Composite DH's framebuffer onto MC's render target AFTER all MC terrain
+		// has been rendered, so depth test works correctly against populated depth buffer.
+		com.seibel.distanthorizons.core.render.renderer.LodRenderer.INSTANCE.compositeVulkanFrame();
+	}
+
 	#endif
-	
-	
-	
+
 }

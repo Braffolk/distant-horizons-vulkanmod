@@ -19,15 +19,15 @@
 
 package com.seibel.distanthorizons.fabric.mixins.client;
 
-#if MC_VER < MC_1_21_9
+#if MC_VER<MC_1_21_9
+
 import net.minecraft.world.entity.Entity;
 import org.spongepowered.asm.mixin.Mixin;
 
 @Mixin(Entity.class)
 public class MixinChunkSectionsToRender
-{ /* rendering before was handled via Fabric API events */ }
-#else
-	
+{ /* rendering before was handled via Fabric API events */ }#else
+
 import com.seibel.distanthorizons.common.wrappers.world.ClientLevelWrapper;
 import com.seibel.distanthorizons.core.api.internal.ClientApi;
 import net.minecraft.client.Minecraft;
@@ -38,20 +38,18 @@ import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 
-#if MC_VER <= MC_1_21_10
-#else
-import com.mojang.blaze3d.textures.GpuSampler;
-#endif
+#if MC_VER<=MC_1_21_10#else
+import com.mojang.blaze3d.textures.GpuSampler;#endif
 
 @Mixin(ChunkSectionsToRender.class)
-public class MixinChunkSectionsToRender
-{
-	
-	
-	#if MC_VER <= MC_1_21_10
+
+public class MixinChunkSectionsToRender {
+
+	#if MC_VER<=MC_1_21_10
 	// needs to fire at HEAD with a lower than normal order (less than 1000)
 	// otherwise it will be canceled by Sodium
-	@Inject(at = @At("HEAD"), method = "renderGroup", order = 800)
+	@Inject(at=
+	@At("HEAD"), method = "renderGroup", order = 800)
 	private void renderDeferredLayer(ChunkSectionLayerGroup chunkSectionLayerGroup, CallbackInfo ci)
 	#else
 	// needs to fire at HEAD with a lower than normal order (less than 1000)
@@ -79,4 +77,3 @@ public class MixinChunkSectionsToRender
 }
 
 #endif
-

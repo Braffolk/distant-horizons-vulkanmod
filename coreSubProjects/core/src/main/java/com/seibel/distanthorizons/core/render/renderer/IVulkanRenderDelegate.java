@@ -61,6 +61,14 @@ public interface IVulkanRenderDelegate {
     void endFrame(DhApiRenderParam renderParam);
 
     /**
+     * Composite DH's framebuffer onto MC's render target.
+     * Must be called AFTER MC finishes all terrain rendering (opaque + translucent)
+     * so that the depth test can correctly reject LOD fragments where MC terrain
+     * exists.
+     */
+    void deferredComposite(DhApiRenderParam renderParam);
+
+    /**
      * Free the cached Vulkan buffer associated with a GLVertexBuffer.
      * Called from LodBufferContainer.close() when DH destroys a VBO.
      * This ensures GPU memory is freed deterministically, not relying on GC.

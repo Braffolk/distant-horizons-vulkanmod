@@ -77,6 +77,9 @@ void main() {
         fragColor = texture(gDhColorTexture, TexCoord);
     }
 
-    // Bias DH depth slightly behind so MC terrain always wins the depth test.
-    gl_FragDepth = min(dhDepth + 0.0001, 1.0);
+    // Bias DH depth behind MC terrain so MC always wins the depth test.
+    // 0.001 is large enough to prevent LOD fragments from leaking through at
+    // block edges and leaf boundaries, yet small enough to avoid visible
+    // "popping" at distant LOD transitions.
+    gl_FragDepth = min(dhDepth + 0.001, 1.0);
 }

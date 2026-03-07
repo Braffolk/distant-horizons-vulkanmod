@@ -203,16 +203,33 @@ public class DhCompositePipeline {
             VTextureSelector.bindTexture(DEBUG_FOG_TEXTURE_SLOT, fogTexture);
         }
 
-        // Set pipeline state for composite: no blend, no cull, depth write
+        // Set pipeline state for composite: premultiplied alpha blend, no cull, depth
+        // write
         boolean prevCull = VRenderSystem.cull;
         boolean prevDepthMask = VRenderSystem.depthMask;
         int prevDepthFun = VRenderSystem.depthFun;
         boolean prevBlend = PipelineState.blendInfo.enabled;
+        int prevSrcRgb = PipelineState.blendInfo.srcRgbFactor;
+        int prevDstRgb = PipelineState.blendInfo.dstRgbFactor;
+        int prevSrcAlpha = PipelineState.blendInfo.srcAlphaFactor;
+        int prevDstAlpha = PipelineState.blendInfo.dstAlphaFactor;
+        int prevBlendOp = PipelineState.blendInfo.blendOp;
 
         VRenderSystem.cull = false;
         VRenderSystem.depthMask = true;
         VRenderSystem.depthFun = 515; // GL_LEQUAL — only write where DH depth ≤ MC depth
-        PipelineState.blendInfo.enabled = false;
+        // Premultiplied alpha blending: DH's color buffer is already
+        // alpha-premultiplied
+        // from DH's own transparent pass blending, so use ONE (not SRC_ALPHA) to avoid
+        // double-multiplication. This correctly composites transparent LODs (water)
+        // onto
+        // MC's sky, while opaque LODs (alpha=1) fully overwrite.
+        PipelineState.blendInfo.enabled = true;
+        PipelineState.blendInfo.srcRgbFactor = 1; // VK_BLEND_FACTOR_ONE
+        PipelineState.blendInfo.dstRgbFactor = 7; // VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA
+        PipelineState.blendInfo.srcAlphaFactor = 1; // VK_BLEND_FACTOR_ONE
+        PipelineState.blendInfo.dstAlphaFactor = 7; // VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA
+        PipelineState.blendInfo.blendOp = 0; // VK_BLEND_OP_ADD
 
         // Bind pipeline and draw
         Renderer.getInstance().bindGraphicsPipeline(this.compositePipeline);
@@ -224,6 +241,11 @@ public class DhCompositePipeline {
         VRenderSystem.depthMask = prevDepthMask;
         VRenderSystem.depthFun = prevDepthFun;
         PipelineState.blendInfo.enabled = prevBlend;
+        PipelineState.blendInfo.srcRgbFactor = prevSrcRgb;
+        PipelineState.blendInfo.dstRgbFactor = prevDstRgb;
+        PipelineState.blendInfo.srcAlphaFactor = prevSrcAlpha;
+        PipelineState.blendInfo.dstAlphaFactor = prevDstAlpha;
+        PipelineState.blendInfo.blendOp = prevBlendOp;
     }
 
     public void cleanup() {

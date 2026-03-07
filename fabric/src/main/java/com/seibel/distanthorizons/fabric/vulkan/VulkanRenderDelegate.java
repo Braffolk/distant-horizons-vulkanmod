@@ -268,8 +268,9 @@ public class VulkanRenderDelegate implements IVulkanRenderDelegate {
 
         // Clip distance — prevents LODs from rendering where MC terrain
         // exists. This avoids double-rendering of transparent blocks (water,
-        // leaves, glass) in the near zone. The composite depth bias handles
-        // opaque blocks beyond this distance.
+        // leaves, glass) in the near zone where both MC and DH render the
+        // same block. Beyond clip distance, the composite depth test handles
+        // occlusion against MC's opaque terrain.
         float dhNearClipDistance = RenderUtil.getNearClipPlaneInBlocks();
         this.renderContext.setUniformFloat("uClipDistance", dhNearClipDistance);
 
@@ -421,7 +422,6 @@ public class VulkanRenderDelegate implements IVulkanRenderDelegate {
         // Phase 7: SSAO post-process (between LOD render and composite)
         if (this.ssaoPipeline != null && Config.Client.Advanced.Graphics.Ssao.enableSsao.get()) {
             try {
-                // Use MC's projection matrix for consistent depth values
                 this.ssaoPipeline.render(this.dhFramebuffer,
                         new com.seibel.distanthorizons.core.util.math.Mat4f(renderParam.mcProjectionMatrix));
             } catch (Exception e) {
@@ -442,35 +442,38 @@ public class VulkanRenderDelegate implements IVulkanRenderDelegate {
             }
         }
 
-        // Rebind MC's main render pass so we can composite onto it.
-        // DefaultMainPass.rebindMainTarget() handles starting an auxiliary
-        // render pass with LOAD_OP_LOAD (preserving MC's existing content).
+        // Composite DH's framebuffer onto MC's render target BEFORE MC renders
+        // terrain. This is the correct ordering because:
+        // 1. MC's depth buffer is still ~1.0 here → all LODs pass depth test
+        // 2. LOD depth is written into MC's depth buffer
+        // 3. MC opaque terrain then renders ON TOP (MC depth < LOD depth → overwrites)
+        // 4. MC transparent terrain (water) renders ON TOP with alpha blending,
+        // so LODs are visible through water — exactly like vanilla MC rendering
+        Renderer.getInstance().endRenderPass();
         ((DefaultMainPass) Renderer.getInstance().getMainPass()).rebindMainTarget();
 
-        // Composite DH's framebuffer onto MC's render target
-        int debugMode = Config.Client.Advanced.Debugging.vulkanDebugMode.get();
-        VulkanImage ssaoTex = this.ssaoPipeline != null ? this.ssaoPipeline.getIntermediateTexture() : null;
-        VulkanImage fogTex = this.fogPipeline != null ? this.fogPipeline.getIntermediateTexture() : null;
+        if (this.compositePipeline != null && this.dhFramebuffer != null) {
+            int debugMode = Config.Client.Advanced.Debugging.vulkanDebugMode.get();
+            VulkanImage ssaoTex = this.ssaoPipeline != null ? this.ssaoPipeline.getIntermediateTexture() : null;
+            VulkanImage fogTex = this.fogPipeline != null ? this.fogPipeline.getIntermediateTexture() : null;
 
-        // Compute inverse projection matrix for debug depth/normal reconstruction
-        // (same approach as SSAO pipeline — proven to work)
-        Mat4f invProj = new Mat4f(renderParam.mcProjectionMatrix);
-        invProj.invert();
-        // Write in column-major order for std140
-        float[] invProjArray = new float[] {
-                invProj.m00, invProj.m10, invProj.m20, invProj.m30,
-                invProj.m01, invProj.m11, invProj.m21, invProj.m31,
-                invProj.m02, invProj.m12, invProj.m22, invProj.m32,
-                invProj.m03, invProj.m13, invProj.m23, invProj.m33
-        };
+            Mat4f invProj = new Mat4f(renderParam.mcProjectionMatrix);
+            invProj.invert();
+            float[] invProjArray = new float[] {
+                    invProj.m00, invProj.m10, invProj.m20, invProj.m30,
+                    invProj.m01, invProj.m11, invProj.m21, invProj.m31,
+                    invProj.m02, invProj.m12, invProj.m22, invProj.m32,
+                    invProj.m03, invProj.m13, invProj.m23, invProj.m33
+            };
 
-        this.compositePipeline.render(
-                this.dhFramebuffer.getFramebuffer().getColorAttachment(),
-                this.dhFramebuffer.getFramebuffer().getDepthAttachment(),
-                ssaoTex, fogTex,
-                debugMode, invProjArray);
+            this.compositePipeline.render(
+                    this.dhFramebuffer.getFramebuffer().getColorAttachment(),
+                    this.dhFramebuffer.getFramebuffer().getDepthAttachment(),
+                    ssaoTex, fogTex,
+                    debugMode, invProjArray);
+        }
 
-        // Restore VulkanMod render state
+        // Restore VulkanMod render state (so MC can render normally after this)
         VRenderSystem.cull = this.savedCullState;
         VRenderSystem.depthMask = this.savedDepthMask;
         VRenderSystem.depthFun = this.savedDepthFun;
@@ -482,6 +485,13 @@ public class VulkanRenderDelegate implements IVulkanRenderDelegate {
         PipelineState.blendInfo.srcAlphaFactor = this.savedBlendSrcAlpha;
         PipelineState.blendInfo.dstAlphaFactor = this.savedBlendDstAlpha;
         PipelineState.blendInfo.blendOp = this.savedBlendOp;
+    }
+
+    @Override
+    public void deferredComposite(DhApiRenderParam renderParam) {
+        // No-op: composite now happens in endFrame() BEFORE MC terrain rendering.
+        // This ensures MC opaque terrain overwrites LODs via depth test, and MC
+        // transparent terrain (water, leaves) blends on top of LODs correctly.
     }
 
     @Override
