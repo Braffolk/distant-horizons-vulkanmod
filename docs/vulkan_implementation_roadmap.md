@@ -88,12 +88,43 @@ DH's `LodRenderer` detects VulkanMod via `GLProxy.isVulkanModActive()` and deleg
 ---
 
 ## Phase 7: Shader Features
-- [x] **SSAO** — Vulkan-native 2-pass implementation: spiral occlusion sampling + bilateral blur via `DhSsaoPipeline.java`, intermediate R16F framebuffer, gated on `Config.Client.Advanced.Graphics.Ssao.enableSsao`
+- [x] **SSAO** — Vulkan-native 2-pass post-process, see details below
 - [ ] **Noise texture** — fragment shader applies procedural noise (`uNoiseEnabled`, `uNoiseSteps`, etc.) — noise texture not yet bound
 - [ ] **Fog** — currently GL-only, can now be implemented using DH's depth texture from Phase 6
 - [ ] **Earth curvature** — vertex shader curves terrain based on `uEarthRadius` — verify float precision with large world coordinates
 - [ ] **Wireframe debug** — needs `VK_POLYGON_MODE_LINE` pipeline variant
 - [ ] **Cloud rendering** — DH renders vanilla-style clouds to LOD distance (GL-only, needs investigation)
+
+### SSAO Implementation Details
+
+**Files:**
+- `DhSsaoPipeline.java` — orchestrates both passes, manages resources
+- `dh_ssao.vert` — shared fullscreen quad vertex shader (Vulkan Y-flip)
+- `dh_ssao.frag` — pass 1: spiral depth-sampling occlusion computation
+- `dh_ssao_apply.frag` — pass 2: optional bilateral blur + multiplicative apply
+
+**Architecture:**
+- **Pass 1** renders into an intermediate R16F `Framebuffer` (raw occlusion values 0.0–1.0)
+- **Pass 2** reads the R16F texture + DH depth, applies blur (currently disabled for perf), and multiplicatively blends onto DH's color buffer using `LOAD_OP_LOAD`
+- Inserted in `VulkanRenderDelegate.endFrame()` between ending DH's render pass and the composite pass
+- Gated on `Config.Client.Advanced.Graphics.Ssao.enableSsao`
+
+**Current Parameters (tuned for Vulkan path):**
+- `uSampleCount=4` (GL uses 6, reduced for perf)
+- `uRadius=4.0`, `uStrength=0.18`, `uMinLight=0.30`, `uBias=0.025`
+- `gBlurRadius=0` (blur disabled for performance, bilinear filtering on R16F suffices)
+- Pass 2 render pass is cached (created once, reused every frame)
+
+> [!IMPORTANT]
+> **Critical: Do NOT apply Y-flip to depth reconstruction in `dh_ssao.frag`.**
+> The Vulkan vertex shader flips TexCoord.y for framebuffer sampling, and the natural instinct is to negate Y when converting TexCoord→NDC for the inverse projection matrix (since MC's projection uses GL convention with Y=+1 at top). However, testing showed this produces overly aggressive, unnatural occlusion with harsh dark halos. The non-flipped version produces visually correct, MC-like ambient occlusion. This is likely because VulkanMod's viewport flip already handles the Y convention, making the depth values in DH's framebuffer consistent with the TexCoord mapping.
+
+> [!WARNING]
+> **Performance: SSAO at retina resolution is expensive.**
+> On M1 Max at retina fullscreen (~5M pixels), SSAO costs ~35% FPS (155→99). Half-resolution rendering was attempted but caused horizontal banding artifacts — likely needs better bilinear upscale handling or a dedicated upscale pass. Current mitigations: sample count reduced to 4, blur disabled. Future options: compute shader single-pass, temporal accumulation, or quarter-res with smart upscale.
+
+> [!NOTE]
+> **Projection matrix:** The Vulkan SSAO uses `mcProjectionMatrix` (not `dhProjectionMatrix`) because DH's LODs are rendered with MC's projection in the Vulkan path (for depth compatibility with MC terrain compositing). This differs from the GL path which uses `dhProjectionMatrix`. The parameters were tuned accordingly.
 
 ---
 
