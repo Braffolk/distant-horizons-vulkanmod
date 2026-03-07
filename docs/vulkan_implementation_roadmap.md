@@ -1,6 +1,6 @@
 # Distant Horizons → VulkanMod: Implementation Roadmap
 
-Status as of 2026-03-07: **Phases 1-6 complete.** LODs render with correct colors, depth, lightmap, transparency, and compositing. Next: shader features (SSAO, fog, noise, clouds).
+Status as of 2026-03-07: **Phases 1-6 complete, SSAO ported.** LODs render with correct colors, depth, lightmap, transparency, compositing, and SSAO. Next: fog, noise, clouds.
 
 ## Architecture Overview
 
@@ -88,8 +88,8 @@ DH's `LodRenderer` detects VulkanMod via `GLProxy.isVulkanModActive()` and deleg
 ---
 
 ## Phase 7: Shader Features
+- [x] **SSAO** — Vulkan-native 2-pass implementation: spiral occlusion sampling + bilateral blur via `DhSsaoPipeline.java`, intermediate R16F framebuffer, gated on `Config.Client.Advanced.Graphics.Ssao.enableSsao`
 - [ ] **Noise texture** — fragment shader applies procedural noise (`uNoiseEnabled`, `uNoiseSteps`, etc.) — noise texture not yet bound
-- [ ] **SSAO** — currently GL-only, needs a separate Vulkan render pass reading DH's depth texture (now available from Phase 6)
 - [ ] **Fog** — currently GL-only, can now be implemented using DH's depth texture from Phase 6
 - [ ] **Earth curvature** — vertex shader curves terrain based on `uEarthRadius` — verify float precision with large world coordinates
 - [ ] **Wireframe debug** — needs `VK_POLYGON_MODE_LINE` pipeline variant

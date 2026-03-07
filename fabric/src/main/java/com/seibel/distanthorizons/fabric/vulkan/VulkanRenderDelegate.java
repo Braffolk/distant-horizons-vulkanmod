@@ -50,6 +50,9 @@ public class VulkanRenderDelegate implements IVulkanRenderDelegate {
     /** Composite pipeline — blends DH's framebuffer onto MC's */
     private DhCompositePipeline compositePipeline;
 
+    /** SSAO pipeline — computes and applies ambient occlusion (Phase 7) */
+    private DhSsaoPipeline ssaoPipeline;
+
     /** Shared index buffer for quad rendering (6 indices per quad) */
     private IndexBuffer quadIndexBuffer;
     private int quadIndexBufferCapacity = 0;
@@ -122,6 +125,10 @@ public class VulkanRenderDelegate implements IVulkanRenderDelegate {
             // Initialize composite pipeline
             this.compositePipeline = new DhCompositePipeline();
             this.compositePipeline.init();
+
+            // Initialize SSAO pipeline (Phase 7)
+            this.ssaoPipeline = new DhSsaoPipeline();
+            this.ssaoPipeline.init(width, height);
 
             this.initialized = true;
             LOGGER.info("[DH-Vulkan] VulkanRenderDelegate initialized.");
@@ -395,10 +402,21 @@ public class VulkanRenderDelegate implements IVulkanRenderDelegate {
     }
 
     @Override
-    public void endFrame() {
+    public void endFrame(DhApiRenderParam renderParam) {
         // End DH's render pass — this transitions the color+depth attachments
-        // to SHADER_READ_ONLY_OPTIMAL for sampling in the composite step.
+        // to SHADER_READ_ONLY_OPTIMAL for sampling in post-process + composite.
         Renderer.getInstance().endRenderPass();
+
+        // Phase 7: SSAO post-process (between LOD render and composite)
+        if (this.ssaoPipeline != null && Config.Client.Advanced.Graphics.Ssao.enableSsao.get()) {
+            try {
+                // Use MC's projection matrix for consistent depth values
+                this.ssaoPipeline.render(this.dhFramebuffer,
+                        new com.seibel.distanthorizons.core.util.math.Mat4f(renderParam.mcProjectionMatrix));
+            } catch (Exception e) {
+                LOGGER.error("[DH-Vulkan] SSAO render failed", e);
+            }
+        }
 
         // Rebind MC's main render pass so we can composite onto it.
         // DefaultMainPass.rebindMainTarget() handles starting an auxiliary
@@ -435,6 +453,10 @@ public class VulkanRenderDelegate implements IVulkanRenderDelegate {
         if (this.quadIndexBuffer != null) {
             this.quadIndexBuffer.scheduleFree();
             this.quadIndexBuffer = null;
+        }
+        if (this.ssaoPipeline != null) {
+            this.ssaoPipeline.cleanup();
+            this.ssaoPipeline = null;
         }
         if (this.compositePipeline != null) {
             this.compositePipeline.cleanup();

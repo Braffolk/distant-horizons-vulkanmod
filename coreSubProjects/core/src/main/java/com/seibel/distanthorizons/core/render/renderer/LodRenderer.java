@@ -360,7 +360,7 @@ public class LodRenderer {
 			this.quadIBO.unbind();
 			lodShaderProgram.unbind();
 		} else {
-			this.vulkanDelegate.endFrame();
+			this.vulkanDelegate.endFrame(renderParams);
 		}
 
 		// end of internal LOD profiling

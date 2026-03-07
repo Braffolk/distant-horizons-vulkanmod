@@ -54,8 +54,11 @@ public interface IVulkanRenderDelegate {
      */
     void setBlendState(boolean enabled);
 
-    /** End the current frame's rendering */
-    void endFrame();
+    /**
+     * End the current frame's rendering.
+     * Post-process effects (SSAO, fog) use renderParam for projection matrices.
+     */
+    void endFrame(DhApiRenderParam renderParam);
 
     /**
      * Free the cached Vulkan buffer associated with a GLVertexBuffer.
