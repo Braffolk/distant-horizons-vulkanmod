@@ -412,6 +412,13 @@ public class DhSsaoPipeline {
     // Cleanup //
     // ========== //
 
+    /**
+     * Returns the intermediate SSAO texture for debug visualization. May be null.
+     */
+    public VulkanImage getIntermediateTexture() {
+        return this.ssaoFramebuffer != null ? this.ssaoFramebuffer.getColorAttachment() : null;
+    }
+
     public void cleanup() {
         if (this.quadVertexBuffer != null) {
             this.quadVertexBuffer.scheduleFree();

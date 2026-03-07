@@ -56,11 +56,19 @@ public class DhCompositePipeline {
     static final int DH_COLOR_TEXTURE_SLOT = 3;
     /** VTextureSelector slot for DH depth texture */
     static final int DH_DEPTH_TEXTURE_SLOT = 4;
+    /** VTextureSelector slot for SSAO intermediate texture (debug) */
+    static final int DEBUG_SSAO_TEXTURE_SLOT = 5;
+    /** VTextureSelector slot for fog intermediate texture (debug) */
+    static final int DEBUG_FOG_TEXTURE_SLOT = 6;
 
     private GraphicsPipeline compositePipeline;
     private VertexBuffer quadVertexBuffer;
     private IndexBuffer quadIndexBuffer;
     private boolean initialized = false;
+
+    // Persistent uniform buffers
+    private MappedBuffer invProjBuf;
+    private MappedBuffer debugModeBuf;
 
     /**
      * Simple vertex format for the fullscreen quad: just vec2 position.
@@ -134,22 +142,30 @@ public class DhCompositePipeline {
         Pipeline.Builder builder = new Pipeline.Builder(QUAD_FORMAT);
         builder.compileShaders("dh_composite", vertSource, fragSource);
 
-        // UBOs — we need an empty UBO at binding 0 because VulkanMod expects
-        // at least one UBO in the descriptor set layout.
+        // UBO at binding 0: mat4 uInvProj (64 bytes) + int uDebugMode (4 bytes)
         List<UBO> ubos = new ArrayList<>();
         AlignedStruct.Builder uboBuilder = new AlignedStruct.Builder();
-        Uniform.Info dummyInfo = Uniform.createUniformInfo("float", "_unused", 1);
-        MappedBuffer dummyBuf = new MappedBuffer(4);
-        dummyBuf.putFloat(0, 0.0f);
-        dummyInfo.setBufferSupplier(() -> dummyBuf);
-        uboBuilder.addUniformInfo(dummyInfo);
+
+        this.invProjBuf = new MappedBuffer(64);
+        Uniform.Info invProjInfo = Uniform.createUniformInfo("matrix4x4", "uInvProj", 1);
+        invProjInfo.setBufferSupplier(() -> this.invProjBuf);
+        uboBuilder.addUniformInfo(invProjInfo);
+
+        this.debugModeBuf = new MappedBuffer(4);
+        this.debugModeBuf.putInt(0, 0);
+        Uniform.Info debugModeInfo = Uniform.createUniformInfo("int", "uDebugMode", 1);
+        debugModeInfo.setBufferSupplier(() -> this.debugModeBuf);
+        uboBuilder.addUniformInfo(debugModeInfo);
+
         UBO mainUbo = uboBuilder.buildUBO(0, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT);
         ubos.add(mainUbo);
 
-        // Image descriptors — DH color at binding 1, DH depth at binding 2
+        // Image descriptors — DH color/depth + SSAO/fog debug textures
         List<ImageDescriptor> imageDescriptors = new ArrayList<>();
         imageDescriptors.add(new ImageDescriptor(1, "sampler2D", "gDhColorTexture", DH_COLOR_TEXTURE_SLOT));
         imageDescriptors.add(new ImageDescriptor(2, "sampler2D", "gDhDepthTexture", DH_DEPTH_TEXTURE_SLOT));
+        imageDescriptors.add(new ImageDescriptor(3, "sampler2D", "gSsaoTexture", DEBUG_SSAO_TEXTURE_SLOT));
+        imageDescriptors.add(new ImageDescriptor(4, "sampler2D", "gFogTexture", DEBUG_FOG_TEXTURE_SLOT));
 
         builder.setUniforms(ubos, imageDescriptors);
         this.compositePipeline = builder.createGraphicsPipeline();
@@ -160,14 +176,32 @@ public class DhCompositePipeline {
      * is active and after binding DH's framebuffer textures to the
      * VTextureSelector slots.
      */
-    public void render(VulkanImage dhColorTexture, VulkanImage dhDepthTexture) {
+    public void render(VulkanImage dhColorTexture, VulkanImage dhDepthTexture,
+            VulkanImage ssaoTexture, VulkanImage fogTexture,
+            int debugMode, float[] invProjMatrix) {
         if (!this.initialized) {
             return;
+        }
+
+        // Update uniforms
+        this.debugModeBuf.putInt(0, debugMode);
+        if (invProjMatrix != null && invProjMatrix.length == 16) {
+            for (int i = 0; i < 16; i++) {
+                this.invProjBuf.putFloat(i * 4, invProjMatrix[i]);
+            }
         }
 
         // Bind DH framebuffer textures to the expected slots
         VTextureSelector.bindTexture(DH_COLOR_TEXTURE_SLOT, dhColorTexture);
         VTextureSelector.bindTexture(DH_DEPTH_TEXTURE_SLOT, dhDepthTexture);
+
+        // Bind debug textures (SSAO and fog intermediates)
+        if (ssaoTexture != null) {
+            VTextureSelector.bindTexture(DEBUG_SSAO_TEXTURE_SLOT, ssaoTexture);
+        }
+        if (fogTexture != null) {
+            VTextureSelector.bindTexture(DEBUG_FOG_TEXTURE_SLOT, fogTexture);
+        }
 
         // Set pipeline state for composite: no blend, no cull, depth write
         boolean prevCull = VRenderSystem.cull;

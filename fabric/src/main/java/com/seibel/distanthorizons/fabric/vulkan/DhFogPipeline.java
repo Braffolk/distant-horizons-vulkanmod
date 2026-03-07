@@ -475,6 +475,13 @@ public class DhFogPipeline {
     // Cleanup //
     // ========== //
 
+    /**
+     * Returns the intermediate fog texture for debug visualization. May be null.
+     */
+    public VulkanImage getIntermediateTexture() {
+        return this.fogFramebuffer != null ? this.fogFramebuffer.getColorAttachment() : null;
+    }
+
     public void cleanup() {
         if (this.quadVertexBuffer != null) {
             this.quadVertexBuffer.scheduleFree();

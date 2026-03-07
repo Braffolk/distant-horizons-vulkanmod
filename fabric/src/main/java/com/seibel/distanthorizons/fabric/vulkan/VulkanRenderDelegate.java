@@ -9,6 +9,7 @@ package com.seibel.distanthorizons.fabric.vulkan;
 
 import com.seibel.distanthorizons.api.methods.events.sharedParameterObjects.DhApiRenderParam;
 import com.seibel.distanthorizons.core.config.Config;
+import com.seibel.distanthorizons.core.config.types.enums.EConfigEntryAppearance;
 import com.seibel.distanthorizons.core.logging.DhLogger;
 import com.seibel.distanthorizons.core.logging.DhLoggerBuilder;
 import com.seibel.distanthorizons.core.render.glObject.buffer.GLVertexBuffer;
@@ -116,6 +117,9 @@ public class VulkanRenderDelegate implements IVulkanRenderDelegate {
         }
 
         try {
+            // Lock/hide settings unsupported on the Vulkan path
+            disableUnsupportedSettings();
+
             this.renderContext.init();
             this.ensureQuadIndexBuffer(65536);
 
@@ -444,9 +448,27 @@ public class VulkanRenderDelegate implements IVulkanRenderDelegate {
         ((DefaultMainPass) Renderer.getInstance().getMainPass()).rebindMainTarget();
 
         // Composite DH's framebuffer onto MC's render target
+        int debugMode = Config.Client.Advanced.Debugging.vulkanDebugMode.get();
+        VulkanImage ssaoTex = this.ssaoPipeline != null ? this.ssaoPipeline.getIntermediateTexture() : null;
+        VulkanImage fogTex = this.fogPipeline != null ? this.fogPipeline.getIntermediateTexture() : null;
+
+        // Compute inverse projection matrix for debug depth/normal reconstruction
+        // (same approach as SSAO pipeline — proven to work)
+        Mat4f invProj = new Mat4f(renderParam.mcProjectionMatrix);
+        invProj.invert();
+        // Write in column-major order for std140
+        float[] invProjArray = new float[] {
+                invProj.m00, invProj.m10, invProj.m20, invProj.m30,
+                invProj.m01, invProj.m11, invProj.m21, invProj.m31,
+                invProj.m02, invProj.m12, invProj.m22, invProj.m32,
+                invProj.m03, invProj.m13, invProj.m23, invProj.m33
+        };
+
         this.compositePipeline.render(
                 this.dhFramebuffer.getFramebuffer().getColorAttachment(),
-                this.dhFramebuffer.getFramebuffer().getDepthAttachment());
+                this.dhFramebuffer.getFramebuffer().getDepthAttachment(),
+                ssaoTex, fogTex,
+                debugMode, invProjArray);
 
         // Restore VulkanMod render state
         VRenderSystem.cull = this.savedCullState;
@@ -493,5 +515,36 @@ public class VulkanRenderDelegate implements IVulkanRenderDelegate {
         this.renderContext.cleanup();
         this.initialized = false;
         LOGGER.info("[DH-Vulkan] VulkanRenderDelegate cleaned up.");
+    }
+
+    /**
+     * Lock or hide config settings that are unsupported on the Vulkan path.
+     * - Wireframe/debug wireframe: visible but locked (planned for future)
+     * - Instance rendering, OpenGL, vanilla fog: hidden from UI
+     */
+    private void disableUnsupportedSettings() {
+        // Visible but locked — these are planned features
+        Config.Client.Advanced.Debugging.renderWireframe.setApiValue(false);
+        Config.Client.Advanced.Debugging.DebugWireframe.enableRendering.setApiValue(false);
+        Config.Client.Advanced.Debugging.DebugWireframe.showWorldGenQueue.setApiValue(false);
+        Config.Client.Advanced.Debugging.DebugWireframe.showNetworkSyncOnLoadQueue.setApiValue(false);
+        Config.Client.Advanced.Debugging.DebugWireframe.showRenderSectionStatus.setApiValue(false);
+        Config.Client.Advanced.Debugging.DebugWireframe.showRenderSectionToggling.setApiValue(false);
+        Config.Client.Advanced.Debugging.DebugWireframe.showQuadTreeRenderStatus.setApiValue(false);
+        Config.Client.Advanced.Debugging.DebugWireframe.showFullDataUpdateStatus.setApiValue(false);
+
+        // Hidden — not applicable to Vulkan
+        Config.Client.Advanced.Graphics.GenericRendering.enableInstancedRendering
+                .setAppearance(EConfigEntryAppearance.ONLY_IN_FILE);
+        Config.Client.Advanced.Graphics.Fog.enableVanillaFog
+                .setAppearance(EConfigEntryAppearance.ONLY_IN_FILE);
+        Config.Client.Advanced.Debugging.OpenGl.overrideVanillaGLLogger
+                .setAppearance(EConfigEntryAppearance.ONLY_IN_FILE);
+        Config.Client.Advanced.Debugging.OpenGl.onlyLogGlErrorsOnce
+                .setAppearance(EConfigEntryAppearance.ONLY_IN_FILE);
+        Config.Client.Advanced.Debugging.OpenGl.glErrorHandlingMode
+                .setAppearance(EConfigEntryAppearance.ONLY_IN_FILE);
+        Config.Client.Advanced.Debugging.OpenGl.glUploadMode
+                .setAppearance(EConfigEntryAppearance.ONLY_IN_FILE);
     }
 }
