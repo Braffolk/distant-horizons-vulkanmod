@@ -19,6 +19,7 @@ import com.seibel.distanthorizons.core.util.math.Vec3f;
 import net.minecraft.client.Minecraft;
 import net.vulkanmod.vulkan.Renderer;
 import net.vulkanmod.vulkan.VRenderSystem;
+import net.vulkanmod.vulkan.pass.DefaultMainPass;
 import net.vulkanmod.vulkan.memory.MemoryTypes;
 import net.vulkanmod.vulkan.shader.PipelineState;
 import net.vulkanmod.vulkan.memory.buffer.Buffer;
@@ -41,6 +42,11 @@ public class VulkanRenderDelegate implements IVulkanRenderDelegate {
     private final VulkanRenderContext renderContext;
     private boolean initialized = false;
     private boolean initFailed = false;
+
+    /** DH-owned framebuffer — LODs render into this instead of MC's render pass */
+    private DhVulkanFramebuffer dhFramebuffer;
+    /** Composite pipeline — blends DH's framebuffer onto MC's */
+    private DhCompositePipeline compositePipeline;
 
     /** Shared index buffer for quad rendering (6 indices per quad) */
     private IndexBuffer quadIndexBuffer;
@@ -90,6 +96,17 @@ public class VulkanRenderDelegate implements IVulkanRenderDelegate {
         try {
             this.renderContext.init();
             this.ensureQuadIndexBuffer(65536);
+
+            // Initialize DH framebuffer matching MC's viewport
+            int width = Renderer.getInstance().getSwapChain().getWidth();
+            int height = Renderer.getInstance().getSwapChain().getHeight();
+            this.dhFramebuffer = new DhVulkanFramebuffer();
+            this.dhFramebuffer.init(width, height);
+
+            // Initialize composite pipeline
+            this.compositePipeline = new DhCompositePipeline();
+            this.compositePipeline.init();
+
             this.initialized = true;
             LOGGER.info("[DH-Vulkan] VulkanRenderDelegate initialized.");
         } catch (Exception e) {
@@ -150,15 +167,16 @@ public class VulkanRenderDelegate implements IVulkanRenderDelegate {
         this.savedBlendDstAlpha = PipelineState.blendInfo.dstAlphaFactor;
         this.savedBlendOp = PipelineState.blendInfo.blendOp;
 
-        VRenderSystem.cull = false; // DH handles its own face culling
+        VRenderSystem.cull = true; // Back-face culling — halves fragment count
+        VRenderSystem.depthTest = true; // Ensure Early-Z is active
         VRenderSystem.depthMask = true; // LODs need to write depth
+        VRenderSystem.depthFun = 515; // GL_LEQUAL
         VRenderSystem.topology = 3; // VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST
         VRenderSystem.polygonMode = 0; // VK_POLYGON_MODE_FILL
         PipelineState.blendInfo.enabled = false; // Opaque LODs don't need blending
 
-        // Push LOD depth slightly behind MC terrain so MC always wins depth test
-        VRenderSystem.polygonOffset(1.0f, 256.0f);
-        VRenderSystem.enablePolygonOffset();
+        // No polygon offset needed — we render to our own framebuffer now,
+        // and the composite step handles depth comparison with MC terrain.
 
         // Bind MC's lightmap texture to slot 2.
         // Cast to GlTexture (vanilla MC class) to get the GL ID, then resolve
@@ -176,6 +194,10 @@ public class VulkanRenderDelegate implements IVulkanRenderDelegate {
         } catch (Exception e) {
             LOGGER.error("[DH-Vulkan] Failed to bind MC lightmap", e);
         }
+
+        // Switch from MC's render pass to DH's own framebuffer
+        Renderer.getInstance().endRenderPass();
+        this.dhFramebuffer.beginRenderPass();
 
         this.renderContext.bindTerrainPipeline();
     }
@@ -213,11 +235,10 @@ public class VulkanRenderDelegate implements IVulkanRenderDelegate {
         // Clip distance — use DH's overdraw-based calculation.
         // Now that we use MC's projection matrix, LOD depth values are compatible
         // with MC's depth buffer, so overdraw produces a smooth transition.
-        float dhNearClipDistance = RenderUtil.getNearClipPlaneInBlocks();
-        if (!Config.Client.Advanced.Debugging.lodOnlyMode.get()) {
-            dhNearClipDistance += 16f;
-        }
-        this.renderContext.setUniformFloat("uClipDistance", dhNearClipDistance);
+        // No uClipDistance — LODs should fill in for slow-loading chunks.
+        // The composite shader adds a depth bias so MC terrain always wins
+        // the depth test where it exists.
+        this.renderContext.setUniformFloat("uClipDistance", 0.0f);
 
         // Dither
         this.renderContext.setUniformBool("uDitherDhRendering",
@@ -339,6 +360,20 @@ public class VulkanRenderDelegate implements IVulkanRenderDelegate {
 
     @Override
     public void endFrame() {
+        // End DH's render pass — this transitions the color+depth attachments
+        // to SHADER_READ_ONLY_OPTIMAL for sampling in the composite step.
+        Renderer.getInstance().endRenderPass();
+
+        // Rebind MC's main render pass so we can composite onto it.
+        // DefaultMainPass.rebindMainTarget() handles starting an auxiliary
+        // render pass with LOAD_OP_LOAD (preserving MC's existing content).
+        ((DefaultMainPass) Renderer.getInstance().getMainPass()).rebindMainTarget();
+
+        // Composite DH's framebuffer onto MC's render target
+        this.compositePipeline.render(
+                this.dhFramebuffer.getFramebuffer().getColorAttachment(),
+                this.dhFramebuffer.getFramebuffer().getDepthAttachment());
+
         // Restore VulkanMod render state
         VRenderSystem.cull = this.savedCullState;
         VRenderSystem.depthMask = this.savedDepthMask;
@@ -351,7 +386,6 @@ public class VulkanRenderDelegate implements IVulkanRenderDelegate {
         PipelineState.blendInfo.srcAlphaFactor = this.savedBlendSrcAlpha;
         PipelineState.blendInfo.dstAlphaFactor = this.savedBlendDstAlpha;
         PipelineState.blendInfo.blendOp = this.savedBlendOp;
-        VRenderSystem.disablePolygonOffset();
     }
 
     @Override
@@ -364,6 +398,14 @@ public class VulkanRenderDelegate implements IVulkanRenderDelegate {
         if (this.quadIndexBuffer != null) {
             this.quadIndexBuffer.scheduleFree();
             this.quadIndexBuffer = null;
+        }
+        if (this.compositePipeline != null) {
+            this.compositePipeline.cleanup();
+            this.compositePipeline = null;
+        }
+        if (this.dhFramebuffer != null) {
+            this.dhFramebuffer.cleanup();
+            this.dhFramebuffer = null;
         }
         this.renderContext.cleanup();
         LOGGER.info("[DH-Vulkan] VulkanRenderDelegate cleaned up.");
