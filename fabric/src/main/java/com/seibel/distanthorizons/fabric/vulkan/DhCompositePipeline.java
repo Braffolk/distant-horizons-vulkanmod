@@ -125,8 +125,7 @@ public class DhCompositePipeline {
     /**
      * Creates the composite graphics pipeline:
      * - Vertex shader: fullscreen quad
-     * - Fragment shader: samples DH color + depth, writes both
-     * - No UBO uniforms needed (just samplers)
+     * - Fragment shader: samples DH color + depth, writes both with bias
      */
     private void createPipeline() {
         String vertSource = readShaderResource("shaders/vulkan/dh_apply.vert");
@@ -136,8 +135,7 @@ public class DhCompositePipeline {
         builder.compileShaders("dh_composite", vertSource, fragSource);
 
         // UBOs — we need an empty UBO at binding 0 because VulkanMod expects
-        // at least one UBO in the descriptor set layout. We create a minimal
-        // dummy UBO with a single unused float.
+        // at least one UBO in the descriptor set layout.
         List<UBO> ubos = new ArrayList<>();
         AlignedStruct.Builder uboBuilder = new AlignedStruct.Builder();
         Uniform.Info dummyInfo = Uniform.createUniformInfo("float", "_unused", 1);
@@ -171,7 +169,7 @@ public class DhCompositePipeline {
         VTextureSelector.bindTexture(DH_COLOR_TEXTURE_SLOT, dhColorTexture);
         VTextureSelector.bindTexture(DH_DEPTH_TEXTURE_SLOT, dhDepthTexture);
 
-        // Set pipeline state for composite: no blend, no cull, depth write always
+        // Set pipeline state for composite: no blend, no cull, depth write
         boolean prevCull = VRenderSystem.cull;
         boolean prevDepthMask = VRenderSystem.depthMask;
         int prevDepthFun = VRenderSystem.depthFun;

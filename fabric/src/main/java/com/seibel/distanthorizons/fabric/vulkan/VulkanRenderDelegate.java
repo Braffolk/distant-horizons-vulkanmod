@@ -26,6 +26,7 @@ import net.vulkanmod.vulkan.memory.buffer.Buffer;
 import net.vulkanmod.vulkan.memory.buffer.IndexBuffer;
 import net.vulkanmod.vulkan.memory.buffer.VertexBuffer;
 import net.vulkanmod.vulkan.texture.VTextureSelector;
+import net.vulkanmod.vulkan.texture.VulkanImage;
 
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
@@ -235,10 +236,12 @@ public class VulkanRenderDelegate implements IVulkanRenderDelegate {
         // Clip distance — use DH's overdraw-based calculation.
         // Now that we use MC's projection matrix, LOD depth values are compatible
         // with MC's depth buffer, so overdraw produces a smooth transition.
-        // No uClipDistance — LODs should fill in for slow-loading chunks.
-        // The composite shader adds a depth bias so MC terrain always wins
-        // the depth test where it exists.
-        this.renderContext.setUniformFloat("uClipDistance", 0.0f);
+        // Clip distance — prevents LODs from rendering where MC terrain
+        // exists. This avoids double-rendering of transparent blocks (water,
+        // leaves, glass) in the near zone. The composite depth bias handles
+        // opaque blocks beyond this distance.
+        float dhNearClipDistance = RenderUtil.getNearClipPlaneInBlocks();
+        this.renderContext.setUniformFloat("uClipDistance", dhNearClipDistance);
 
         // Dither
         this.renderContext.setUniformBool("uDitherDhRendering",
