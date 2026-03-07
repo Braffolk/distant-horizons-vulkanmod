@@ -47,15 +47,35 @@ public class VulkanRenderDelegate implements IVulkanRenderDelegate {
     private int quadIndexBufferCapacity = 0;
 
     /**
-     * Cache of uploaded Vulkan vertex buffers, keyed by the GLVertexBuffer's
-     * vulkanBufferHandle identity hash.
+     * Tracks a cached Vulkan VertexBuffer alongside the identity of the
+     * ByteBuffer it was created from, for invalidation when terrain is re-uploaded.
      */
-    private final Map<Integer, VertexBuffer> vulkanBufferCache = new ConcurrentHashMap<>();
+    private static class CachedBuffer {
+        final VertexBuffer vkBuffer;
+        final int handleIdentity;
+
+        CachedBuffer(VertexBuffer vkBuffer, int handleIdentity) {
+            this.vkBuffer = vkBuffer;
+            this.handleIdentity = handleIdentity;
+        }
+    }
+
+    /** Cache of uploaded Vulkan vertex buffers, keyed by GLVertexBuffer identity */
+    private final Map<Integer, CachedBuffer> vulkanBufferCache = new ConcurrentHashMap<>();
 
     /** Saved VRenderSystem state — restored in endFrame() */
     private boolean savedCullState;
     private boolean savedDepthMask;
+    private int savedDepthFun;
+    private int savedTopology;
+    private int savedPolygonMode;
+    // Saved blend state (all 6 fields)
     private boolean savedBlendEnabled;
+    private int savedBlendSrcRgb;
+    private int savedBlendDstRgb;
+    private int savedBlendSrcAlpha;
+    private int savedBlendDstAlpha;
+    private int savedBlendOp;
 
     public VulkanRenderDelegate() {
         this.renderContext = VulkanRenderContext.getInstance();
@@ -120,9 +140,20 @@ public class VulkanRenderDelegate implements IVulkanRenderDelegate {
         // Save and override VulkanMod render state for DH rendering
         this.savedCullState = VRenderSystem.cull;
         this.savedDepthMask = VRenderSystem.depthMask;
+        this.savedDepthFun = VRenderSystem.depthFun;
+        this.savedTopology = VRenderSystem.topology;
+        this.savedPolygonMode = VRenderSystem.polygonMode;
         this.savedBlendEnabled = PipelineState.blendInfo.enabled;
+        this.savedBlendSrcRgb = PipelineState.blendInfo.srcRgbFactor;
+        this.savedBlendDstRgb = PipelineState.blendInfo.dstRgbFactor;
+        this.savedBlendSrcAlpha = PipelineState.blendInfo.srcAlphaFactor;
+        this.savedBlendDstAlpha = PipelineState.blendInfo.dstAlphaFactor;
+        this.savedBlendOp = PipelineState.blendInfo.blendOp;
+
         VRenderSystem.cull = false; // DH handles its own face culling
         VRenderSystem.depthMask = true; // LODs need to write depth
+        VRenderSystem.topology = 3; // VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST
+        VRenderSystem.polygonMode = 0; // VK_POLYGON_MODE_FILL
         PipelineState.blendInfo.enabled = false; // Opaque LODs don't need blending
 
         // Push LOD depth slightly behind MC terrain so MC always wins depth test
@@ -227,7 +258,7 @@ public class VulkanRenderDelegate implements IVulkanRenderDelegate {
     @Override
     public long uploadVertexData(ByteBuffer vertexData, int vertexCount) {
         int dataSize = vertexData.remaining();
-        VertexBuffer vkVertexBuffer = new VertexBuffer(dataSize, MemoryTypes.HOST_MEM);
+        VertexBuffer vkVertexBuffer = new VertexBuffer(dataSize, MemoryTypes.GPU_MEM);
         vkVertexBuffer.copyBuffer(vertexData, dataSize);
         return vkVertexBuffer.getId();
     }
@@ -244,12 +275,18 @@ public class VulkanRenderDelegate implements IVulkanRenderDelegate {
         }
 
         try {
-            VertexBuffer vkBuffer;
+            int vboId = System.identityHashCode(vbo);
             int handleId = System.identityHashCode(handle);
 
-            vkBuffer = this.vulkanBufferCache.get(handleId);
+            CachedBuffer cached = this.vulkanBufferCache.get(vboId);
 
-            if (vkBuffer == null && handle instanceof ByteBuffer) {
+            // Invalidate if the ByteBuffer handle changed (terrain was re-uploaded)
+            if (cached != null && cached.handleIdentity != handleId) {
+                cached.vkBuffer.scheduleFree();
+                cached = null;
+            }
+
+            if (cached == null && handle instanceof ByteBuffer) {
                 ByteBuffer vertexData = (ByteBuffer) handle;
                 int dataSize = vertexData.remaining();
 
@@ -257,15 +294,16 @@ public class VulkanRenderDelegate implements IVulkanRenderDelegate {
                     return;
                 }
 
-                vkBuffer = new VertexBuffer(dataSize, MemoryTypes.HOST_MEM);
+                VertexBuffer vkBuffer = new VertexBuffer(dataSize, MemoryTypes.GPU_MEM);
                 vertexData.position(0);
                 vkBuffer.copyBuffer(vertexData, dataSize);
                 vertexData.position(0);
 
-                this.vulkanBufferCache.put(handleId, vkBuffer);
+                cached = new CachedBuffer(vkBuffer, handleId);
+                this.vulkanBufferCache.put(vboId, cached);
             }
 
-            if (vkBuffer == null) {
+            if (cached == null) {
                 return;
             }
 
@@ -276,7 +314,7 @@ public class VulkanRenderDelegate implements IVulkanRenderDelegate {
             }
 
             // THE draw call
-            this.renderContext.drawIndexed(vkBuffer, this.quadIndexBuffer, indexCount);
+            this.renderContext.drawIndexed(cached.vkBuffer, this.quadIndexBuffer, indexCount);
 
         } catch (Exception e) {
             LOGGER.error("[DH-Vulkan] Error during drawBuffer: {}", e.getMessage());
@@ -304,14 +342,22 @@ public class VulkanRenderDelegate implements IVulkanRenderDelegate {
         // Restore VulkanMod render state
         VRenderSystem.cull = this.savedCullState;
         VRenderSystem.depthMask = this.savedDepthMask;
+        VRenderSystem.depthFun = this.savedDepthFun;
+        VRenderSystem.topology = this.savedTopology;
+        VRenderSystem.polygonMode = this.savedPolygonMode;
         PipelineState.blendInfo.enabled = this.savedBlendEnabled;
+        PipelineState.blendInfo.srcRgbFactor = this.savedBlendSrcRgb;
+        PipelineState.blendInfo.dstRgbFactor = this.savedBlendDstRgb;
+        PipelineState.blendInfo.srcAlphaFactor = this.savedBlendSrcAlpha;
+        PipelineState.blendInfo.dstAlphaFactor = this.savedBlendDstAlpha;
+        PipelineState.blendInfo.blendOp = this.savedBlendOp;
         VRenderSystem.disablePolygonOffset();
     }
 
     @Override
     public void cleanup() {
-        for (VertexBuffer vb : this.vulkanBufferCache.values()) {
-            vb.scheduleFree();
+        for (CachedBuffer cached : this.vulkanBufferCache.values()) {
+            cached.vkBuffer.scheduleFree();
         }
         this.vulkanBufferCache.clear();
 

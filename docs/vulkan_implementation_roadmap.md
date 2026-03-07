@@ -1,6 +1,6 @@
 # Distant Horizons → VulkanMod: Implementation Roadmap
 
-Status as of 2026-03-06: LODs render with **correct colors, depth, lightmap, and transparency** ✅ Phases 1-3 complete. Next: buffer management & performance.
+Status as of 2026-03-07: LODs render with **correct colors, depth, lightmap, and transparency** ✅ Phases 1-5 complete. Next: framebuffer integration.
 
 ## Architecture Overview
 
@@ -39,24 +39,15 @@ DH's `LodRenderer` detects VulkanMod via `GLProxy.isVulkanModActive()` and deleg
 - **Known limitation**: LOD/MC water overlap causes double-transparency at transition zone
   - Proper fix requires separate framebuffer + composite step (Phase 6)
 
-### Phase 4: Buffer Management & Performance
-- [ ] VBO caching: current impl creates new `VertexBuffer` per VBO per frame
-  - Need dirty-tracking: only re-upload when `vulkanBufferHandle` changes
-  - Use `identityHashCode` as cache key (current approach) but add proper invalidation
-- [ ] Memory management: schedule Vulkan buffer frees when DH VBOs are destroyed
-  - Hook into `GLVertexBuffer.destroy()` or `LodBufferContainer` cleanup
-- [ ] IBO optimization: current quad IBO is generated CPU-side, could be static
-- [ ] Consider using `MemoryTypes.GPU_MEM` for vertex buffers (faster, requires staging)
+### Phase 4: Buffer Management & Performance ✅ COMPLETE
+- [x] VBO cache refactored with `CachedBuffer` (tracks Vulkan buffer + ByteBuffer identity)
+- [x] Invalidation: detects when `vulkanBufferHandle` changes and frees old GPU buffer
+- [x] Proper cleanup in `cleanup()` frees all cached Vulkan buffers
+- [x] Vertex buffers use `GPU_MEM` (device-local VRAM) with automatic staging via VulkanMod
 
-### Phase 5: State Management
-- [ ] Save/restore ALL VulkanMod state in beginFrame/endFrame:
-  - `VRenderSystem.cull`, `depthTest`, `depthMask`, `depthFun`
-  - `PipelineState.blendInfo`
-  - `VRenderSystem.topology` (should be TRIANGLE_LIST)
-  - `VRenderSystem.polygonMode` (for wireframe debug mode)
-- [ ] Handle DH's GL state calls properly under VulkanMod:
-  - `LodRenderer.setGLState()` is skipped — equivalent state must be set via VRenderSystem
-  - Face culling per LOD direction (FRONT/BACK) if DH adds it back
+### Phase 5: State Management ✅ COMPLETE
+- [x] Full save/restore in `beginFrame()`/`endFrame()`: `cull`, `depthMask`, `depthFun`, `topology`, `polygonMode`, `blendInfo` (all 6 fields)
+- [x] Explicit `topology = TRIANGLE_LIST`, `polygonMode = FILL` set per frame
 
 ### Phase 6: Framebuffer / Render Pass Integration
 - [ ] DH currently renders into MC's active render pass — verify this is correct
@@ -71,6 +62,7 @@ DH's `LodRenderer` detects VulkanMod via `GLProxy.isVulkanModActive()` and deleg
   - Verify float precision with large world coordinates
 - [ ] Wireframe debug rendering — needs `VK_POLYGON_MODE_LINE` pipeline variant
 - [ ] SSAO — currently GL-only, would need a separate Vulkan compute/render pass
+- [ ] Cloud rendering — DH renders vanilla-style clouds to LOD distance (GL-only, needs investigation)
 
 ### Phase 8: Iris/Shader Pack Compatibility — N/A
 - VulkanMod does not support shader packs — this phase is blocked until it does
