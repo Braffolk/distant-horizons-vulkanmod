@@ -89,8 +89,8 @@ DH's `LodRenderer` detects VulkanMod via `GLProxy.isVulkanModActive()` and deleg
 
 ## Phase 7: Shader Features
 - [x] **SSAO** — Vulkan-native 2-pass post-process, see details below
-- [ ] **Noise texture** — fragment shader applies procedural noise (`uNoiseEnabled`, `uNoiseSteps`, etc.) — noise texture not yet bound
-- [ ] **Fog** — currently GL-only, can now be implemented using DH's depth texture from Phase 6
+- [x] **Noise texture** — integrated into terrain fragment shader (`flat_shaded.frag`): procedural per-block dithering via `uNoiseEnabled`, `uNoiseSteps`, `uNoiseIntensity`, `uNoiseDropoff` uniforms populated from config
+- [x] **Fog** — Vulkan-native 2-pass post-process via `DhFogPipeline.java`, see details below
 - [ ] **Earth curvature** — vertex shader curves terrain based on `uEarthRadius` — verify float precision with large world coordinates
 - [ ] **Wireframe debug** — needs `VK_POLYGON_MODE_LINE` pipeline variant
 - [ ] **Cloud rendering** — DH renders vanilla-style clouds to LOD distance (GL-only, needs investigation)
@@ -125,6 +125,24 @@ DH's `LodRenderer` detects VulkanMod via `GLProxy.isVulkanModActive()` and deleg
 
 > [!NOTE]
 > **Projection matrix:** The Vulkan SSAO uses `mcProjectionMatrix` (not `dhProjectionMatrix`) because DH's LODs are rendered with MC's projection in the Vulkan path (for depth compatibility with MC terrain compositing). This differs from the GL path which uses `dhProjectionMatrix`. The parameters were tuned accordingly.
+
+### Fog Implementation Details
+
+**Files:**
+- `DhFogPipeline.java` — orchestrates both passes, manages resources (~25 config-driven uniforms)
+- `dh_fog.frag` — pass 1: depth → world pos reconstruction, far fog + height fog (3 falloff types, 10 mixing modes)
+- `dh_fog_apply.frag` — pass 2: depth-gated fog texture passthrough with SRC_ALPHA blend
+- Reuses `dh_ssao.vert` for fullscreen quad vertex shader
+
+**Architecture:**
+- **Pass 1** renders into intermediate RGBA16F `Framebuffer` (fog color + alpha 0.0–1.0)
+- **Pass 2** reads fog texture + DH depth, applies depth-gated fog with `SRC_ALPHA / ONE_MINUS_SRC_ALPHA` blend onto DH's color buffer
+- Inserted in `VulkanRenderDelegate.endFrame()` after SSAO, before composite
+- Gated on `Config.Client.Advanced.Graphics.Fog.enableDhFog`
+- Pass 2 render pass is cached (same pattern as SSAO)
+
+> [!IMPORTANT]
+> **Projection matrix for fog:** Like SSAO, the fog pipeline uses `mcProjectionMatrix * dhModelViewMatrix` for world position reconstruction. Initially `dhProjectionMatrix` was used (matching the GL path), but this caused all LODs to render as 100% fog because the depth values were produced with `mcProjectionMatrix`. The inverse matrix must always match the matrix that produced the depth buffer.
 
 ---
 

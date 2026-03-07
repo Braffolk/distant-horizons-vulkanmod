@@ -73,7 +73,7 @@ project.gradle.ext.getProperties().each { prop ->
 writeBuildGradlePredefine(rootProject.mcVers, rootProject.mcIndex)
 
 // Sets up the version string (the name we use for our jar)
-rootProject.versionStr = rootProject.mod_version + "-" + rootProject.minecraft_version // + "-" + new Date().format("yyyy_MM_dd_HH_mm")
+rootProject.versionStr = rootProject.mod_version + "-mc" + rootProject.minecraft_version // + "-" + new Date().format("yyyy_MM_dd_HH_mm")
 
 class NativeTransformer implements Transformer {
     private Predicate<String> fileMatcher

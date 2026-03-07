@@ -3,17 +3,20 @@
 A modified build of [Distant Horizons](https://www.curseforge.com/minecraft/mc-mods/distant-horizons) ([Modrinth](https://modrinth.com/mod/distanthorizons)) that works with [VulkanMod](https://github.com/xCollateral/VulkanMod). Renders LOD terrain through VulkanMod's Vulkan backend instead of OpenGL.
 
 **What works:**
-- LOD terrain with correct colors
+- LOD terrain rendering with correct colors
 - Lightmap (day/night lighting, block light)
-- Depth (LODs render behind normal terrain)
+- Depth compositing (LODs render behind normal terrain)
 - Water and glass transparency
+- Ambient occlusion (SSAO)
+- Distance and height fog (all falloff types and mixing modes)
+- Noise/dithering on LODs
+- Fade/clip distance transitions
 
 **What doesn't work yet:**
-- Noise/dithering on LODs
-- Ambient occlusion (SSAO)
-- Fog
 - Shader packs (VulkanMod doesn't support them)
-- Some DH rendering settings that depend on OpenGL
+- Earth curvature rendering
+- Wireframe debug mode
+- Cloud rendering to LOD distance
 
 **Important:**
 - Requires VulkanMod

@@ -53,6 +53,9 @@ public class VulkanRenderDelegate implements IVulkanRenderDelegate {
     /** SSAO pipeline — computes and applies ambient occlusion (Phase 7) */
     private DhSsaoPipeline ssaoPipeline;
 
+    /** Fog pipeline — computes and applies distance/height fog (Phase 7) */
+    private DhFogPipeline fogPipeline;
+
     /** Shared index buffer for quad rendering (6 indices per quad) */
     private IndexBuffer quadIndexBuffer;
     private int quadIndexBufferCapacity = 0;
@@ -129,6 +132,10 @@ public class VulkanRenderDelegate implements IVulkanRenderDelegate {
             // Initialize SSAO pipeline (Phase 7)
             this.ssaoPipeline = new DhSsaoPipeline();
             this.ssaoPipeline.init(width, height);
+
+            // Initialize Fog pipeline (Phase 7)
+            this.fogPipeline = new DhFogPipeline();
+            this.fogPipeline.init(width, height);
 
             this.initialized = true;
             LOGGER.info("[DH-Vulkan] VulkanRenderDelegate initialized.");
@@ -418,6 +425,19 @@ public class VulkanRenderDelegate implements IVulkanRenderDelegate {
             }
         }
 
+        // Phase 7: Fog post-process (after SSAO, before composite)
+        if (this.fogPipeline != null
+                && Config.Client.Advanced.Graphics.Fog.enableDhFog.get()) {
+            try {
+                this.fogPipeline.render(this.dhFramebuffer,
+                        new com.seibel.distanthorizons.core.util.math.Mat4f(renderParam.dhModelViewMatrix),
+                        new com.seibel.distanthorizons.core.util.math.Mat4f(renderParam.mcProjectionMatrix),
+                        renderParam.partialTicks);
+            } catch (Exception e) {
+                LOGGER.error("[DH-Vulkan] Fog render failed", e);
+            }
+        }
+
         // Rebind MC's main render pass so we can composite onto it.
         // DefaultMainPass.rebindMainTarget() handles starting an auxiliary
         // render pass with LOAD_OP_LOAD (preserving MC's existing content).
@@ -457,6 +477,10 @@ public class VulkanRenderDelegate implements IVulkanRenderDelegate {
         if (this.ssaoPipeline != null) {
             this.ssaoPipeline.cleanup();
             this.ssaoPipeline = null;
+        }
+        if (this.fogPipeline != null) {
+            this.fogPipeline.cleanup();
+            this.fogPipeline = null;
         }
         if (this.compositePipeline != null) {
             this.compositePipeline.cleanup();
