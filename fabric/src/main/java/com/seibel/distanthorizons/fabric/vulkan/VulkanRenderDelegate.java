@@ -28,8 +28,10 @@ import net.vulkanmod.vulkan.memory.buffer.VertexBuffer;
 import net.vulkanmod.vulkan.texture.VTextureSelector;
 import net.vulkanmod.vulkan.texture.VulkanImage;
 
+import java.lang.ref.WeakReference;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
+import java.util.Iterator;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -56,18 +58,35 @@ public class VulkanRenderDelegate implements IVulkanRenderDelegate {
     /**
      * Tracks a cached Vulkan VertexBuffer alongside the identity of the
      * ByteBuffer it was created from, for invalidation when terrain is re-uploaded.
+     * Also holds a WeakReference to the owning GLVertexBuffer for stale detection.
      */
     private static class CachedBuffer {
         final VertexBuffer vkBuffer;
         final int handleIdentity;
+        final WeakReference<GLVertexBuffer> ownerRef;
 
-        CachedBuffer(VertexBuffer vkBuffer, int handleIdentity) {
+        CachedBuffer(VertexBuffer vkBuffer, int handleIdentity, GLVertexBuffer owner) {
             this.vkBuffer = vkBuffer;
             this.handleIdentity = handleIdentity;
+            this.ownerRef = new WeakReference<>(owner);
+        }
+
+        /** @return true if the owning VBO has been garbage-collected */
+        boolean isStale() {
+            return this.ownerRef.get() == null;
+        }
+
+        void free() {
+            this.vkBuffer.scheduleFree();
         }
     }
 
-    /** Cache of uploaded Vulkan vertex buffers, keyed by GLVertexBuffer identity */
+    /**
+     * Cache of uploaded Vulkan vertex buffers, keyed by GLVertexBuffer identity
+     * hash.
+     * Stale entries (whose VBO has been GC'd) are swept each frame in beginFrame(),
+     * properly freeing GPU memory via scheduleFree().
+     */
     private final Map<Integer, CachedBuffer> vulkanBufferCache = new ConcurrentHashMap<>();
 
     /** Saved VRenderSystem state — restored in endFrame() */
@@ -153,6 +172,17 @@ public class VulkanRenderDelegate implements IVulkanRenderDelegate {
         }
         if (this.initFailed) {
             return;
+        }
+
+        // Sweep stale cache entries — VBOs that DH has destroyed and GC'd.
+        // Must call scheduleFree() since VulkanMod doesn't auto-free on Java GC.
+        Iterator<Map.Entry<Integer, CachedBuffer>> it = this.vulkanBufferCache.entrySet().iterator();
+        while (it.hasNext()) {
+            CachedBuffer cached = it.next().getValue();
+            if (cached.isStale()) {
+                cached.free();
+                it.remove();
+            }
         }
 
         // Save and override VulkanMod render state for DH rendering
@@ -281,10 +311,9 @@ public class VulkanRenderDelegate implements IVulkanRenderDelegate {
 
     @Override
     public long uploadVertexData(ByteBuffer vertexData, int vertexCount) {
-        int dataSize = vertexData.remaining();
-        VertexBuffer vkVertexBuffer = new VertexBuffer(dataSize, MemoryTypes.GPU_MEM);
-        vkVertexBuffer.copyBuffer(vertexData, dataSize);
-        return vkVertexBuffer.getId();
+        // No-op — this method is not called by DH core.
+        // If it were, we'd need to cache the returned buffer for later cleanup.
+        return 0;
     }
 
     @Override
@@ -306,7 +335,7 @@ public class VulkanRenderDelegate implements IVulkanRenderDelegate {
 
             // Invalidate if the ByteBuffer handle changed (terrain was re-uploaded)
             if (cached != null && cached.handleIdentity != handleId) {
-                cached.vkBuffer.scheduleFree();
+                cached.free();
                 cached = null;
             }
 
@@ -323,7 +352,7 @@ public class VulkanRenderDelegate implements IVulkanRenderDelegate {
                 vkBuffer.copyBuffer(vertexData, dataSize);
                 vertexData.position(0);
 
-                cached = new CachedBuffer(vkBuffer, handleId);
+                cached = new CachedBuffer(vkBuffer, handleId, vbo);
                 this.vulkanBufferCache.put(vboId, cached);
             }
 
@@ -394,7 +423,7 @@ public class VulkanRenderDelegate implements IVulkanRenderDelegate {
     @Override
     public void cleanup() {
         for (CachedBuffer cached : this.vulkanBufferCache.values()) {
-            cached.vkBuffer.scheduleFree();
+            cached.free();
         }
         this.vulkanBufferCache.clear();
 
