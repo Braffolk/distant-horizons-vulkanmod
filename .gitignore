@@ -45,3 +45,4 @@ build.properties
 # Don't add access transformers to git as they're dynamically generated
 accesstransformer.cfg
 vulkanmod/
+docs/

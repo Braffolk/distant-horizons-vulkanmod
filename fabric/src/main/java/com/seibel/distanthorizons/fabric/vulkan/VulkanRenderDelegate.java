@@ -266,13 +266,13 @@ public class VulkanRenderDelegate implements IVulkanRenderDelegate {
         }
         this.renderContext.setUniformFloat("uEarthRadius", curveRatio);
 
-        // Clip distance — prevents LODs from rendering where MC terrain
-        // exists. This avoids double-rendering of transparent blocks (water,
-        // leaves, glass) in the near zone where both MC and DH render the
-        // same block. Beyond clip distance, the composite depth test handles
-        // occlusion against MC's opaque terrain.
-        float dhNearClipDistance = RenderUtil.getNearClipPlaneInBlocks();
-        this.renderContext.setUniformFloat("uClipDistance", dhNearClipDistance);
+        // Clip distance — small fixed value for the Vulkan path.
+        // Since we composite LODs BEFORE MC terrain renders, MC's own depth
+        // test naturally overwrites LODs wherever MC has loaded chunks.
+        // However, at close range, leaf cutout transparency creates holes
+        // where LODs shine through. A 12-block clip distance hides this
+        // while preserving full gap-filling beyond that radius.
+        this.renderContext.setUniformFloat("uClipDistance", 7.0f);
 
         // Dither
         this.renderContext.setUniformBool("uDitherDhRendering",
