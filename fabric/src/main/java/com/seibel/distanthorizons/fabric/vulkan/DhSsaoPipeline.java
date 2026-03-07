@@ -93,9 +93,13 @@ public class DhSsaoPipeline {
     private GraphicsPipeline ssaoComputePipeline;
     private GraphicsPipeline ssaoApplyPipeline;
 
-    // Intermediate SSAO framebuffer (color-only, R16F)
+    // Intermediate SSAO framebuffer (color-only, R16F, half-resolution)
     private Framebuffer ssaoFramebuffer;
     private RenderPass ssaoRenderPass;
+
+    // Cached render pass for applying SSAO onto DH's color buffer (avoids per-frame
+    // creation)
+    private RenderPass applyRenderPass;
 
     // Shared fullscreen quad buffers
     private VertexBuffer quadVertexBuffer;
@@ -176,7 +180,7 @@ public class DhSsaoPipeline {
     // ========================== //
 
     private void createSsaoFramebuffer() {
-        // Color-only framebuffer with R16F format for raw occlusion values
+        // Full-resolution R16F framebuffer for raw occlusion values
         this.ssaoFramebuffer = new Framebuffer.Builder(this.width, this.height, 1, false)
                 .setFormat(VK_FORMAT_R16_SFLOAT)
                 .setLinearFiltering(true)
@@ -291,13 +295,13 @@ public class DhSsaoPipeline {
         invProj.invert();
         setUniformMat4(this.pass1Uniforms, "uInvProj", invProj);
         setUniformMat4(this.pass1Uniforms, "uProj", projectionMatrix);
-        setUniformInt(this.pass1Uniforms, "uSampleCount", 6);
+        setUniformInt(this.pass1Uniforms, "uSampleCount", 4); // reduced from 6 for perf
         setUniformFloat(this.pass1Uniforms, "uRadius", 4.0f);
         // Tuned down vs GL path — MC projection gives sharper depth gradients
         // than DH projection, producing stronger occlusion from correct normals.
-        setUniformFloat(this.pass1Uniforms, "uStrength", 0.16f); // slightly more visible
-        setUniformFloat(this.pass1Uniforms, "uMinLight", 0.35f); // allow slightly darker shadows
-        setUniformFloat(this.pass1Uniforms, "uBias", 0.03f); // slightly more sensitive to edges
+        setUniformFloat(this.pass1Uniforms, "uStrength", 0.18f);
+        setUniformFloat(this.pass1Uniforms, "uMinLight", 0.30f);
+        setUniformFloat(this.pass1Uniforms, "uBias", 0.025f);
         setUniformFloat(this.pass1Uniforms, "uFadeDistanceInBlocks", 1600.0f);
 
         // Bind DH depth texture for sampling
@@ -330,9 +334,9 @@ public class DhSsaoPipeline {
         // Pass 2: Blur + Apply //
         // ====================== //
 
-        // Fill pass 2 uniforms
+        // Fill pass 2 uniforms (use full resolution for blur sampling)
         setUniformVec2(this.pass2Uniforms, "gViewSize", this.width, this.height);
-        setUniformInt(this.pass2Uniforms, "gBlurRadius", 2);
+        setUniformInt(this.pass2Uniforms, "gBlurRadius", 0); // skip blur — bilinear filtering suffices
         setUniformFloat(this.pass2Uniforms, "gNear", RenderUtil.getNearClipPlaneInBlocks());
         setUniformFloat(this.pass2Uniforms, "gFar", RenderUtil.getFarClipPlaneDistanceInBlocks());
         setUniformInt(this.pass2Uniforms, "uDebugMode", DEBUG_SSAO ? 1 : 0);
@@ -361,30 +365,25 @@ public class DhSsaoPipeline {
             PipelineState.blendInfo.blendOp = 0; // VK_BLEND_OP_ADD
         }
 
-        // Render into DH's color framebuffer with LOAD_OP_LOAD to preserve existing
-        // content
-        // We need a separate render pass for DH's framebuffer configured with
-        // LOAD_OP_LOAD
-        // instead of CLEAR. We'll create a temporary RenderPass for this.
-        RenderPass.Builder applyRpBuilder = RenderPass.builder(dhFramebuffer.getFramebuffer());
-        applyRpBuilder.getColorAttachmentInfo()
-                .setOps(0 /* VK_ATTACHMENT_LOAD_OP_LOAD */, VK_ATTACHMENT_STORE_OP_STORE)
-                .setFinalLayout(VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
-        applyRpBuilder.getDepthAttachmentInfo()
-                .setOps(0 /* VK_ATTACHMENT_LOAD_OP_LOAD */, VK_ATTACHMENT_STORE_OP_STORE)
-                .setFinalLayout(VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
-        RenderPass applyRenderPass = applyRpBuilder.build();
+        // Use cached apply render pass (created once, reused every frame)
+        if (this.applyRenderPass == null) {
+            RenderPass.Builder applyRpBuilder = RenderPass.builder(dhFramebuffer.getFramebuffer());
+            applyRpBuilder.getColorAttachmentInfo()
+                    .setOps(0 /* VK_ATTACHMENT_LOAD_OP_LOAD */, VK_ATTACHMENT_STORE_OP_STORE)
+                    .setFinalLayout(VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+            applyRpBuilder.getDepthAttachmentInfo()
+                    .setOps(0 /* VK_ATTACHMENT_LOAD_OP_LOAD */, VK_ATTACHMENT_STORE_OP_STORE)
+                    .setFinalLayout(VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+            this.applyRenderPass = applyRpBuilder.build();
+        }
 
-        Renderer.getInstance().beginRenderPass(applyRenderPass, dhFramebuffer.getFramebuffer());
+        Renderer.getInstance().beginRenderPass(this.applyRenderPass, dhFramebuffer.getFramebuffer());
 
         Renderer.getInstance().bindGraphicsPipeline(this.ssaoApplyPipeline);
         Renderer.getInstance().uploadAndBindUBOs(this.ssaoApplyPipeline);
         Renderer.getDrawer().drawIndexed(this.quadVertexBuffer, this.quadIndexBuffer, 6);
 
         Renderer.getInstance().endRenderPass();
-
-        // Clean up temporary render pass
-        applyRenderPass.cleanUp();
 
         // Restore state
         VRenderSystem.cull = prevCull;
@@ -412,12 +411,16 @@ public class DhSsaoPipeline {
         LOGGER.info("[DH-Vulkan] Resizing DhSsaoPipeline: {}x{} -> {}x{}",
                 this.width, this.height, newWidth, newHeight);
 
-        // Clean up old SSAO framebuffer
+        // Clean up old SSAO framebuffer and cached apply render pass
         if (this.ssaoRenderPass != null) {
             this.ssaoRenderPass.cleanUp();
         }
         if (this.ssaoFramebuffer != null) {
             this.ssaoFramebuffer.cleanUp();
+        }
+        if (this.applyRenderPass != null) {
+            this.applyRenderPass.cleanUp();
+            this.applyRenderPass = null;
         }
 
         this.width = newWidth;
@@ -450,6 +453,10 @@ public class DhSsaoPipeline {
         if (this.ssaoRenderPass != null) {
             this.ssaoRenderPass.cleanUp();
             this.ssaoRenderPass = null;
+        }
+        if (this.applyRenderPass != null) {
+            this.applyRenderPass.cleanUp();
+            this.applyRenderPass = null;
         }
         if (this.ssaoFramebuffer != null) {
             this.ssaoFramebuffer.cleanUp();
