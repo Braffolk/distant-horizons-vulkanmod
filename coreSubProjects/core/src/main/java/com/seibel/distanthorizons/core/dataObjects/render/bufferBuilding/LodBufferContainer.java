@@ -288,9 +288,20 @@ public class LodBufferContainer implements AutoCloseable {
 		this.buffersUploaded = false;
 		boolean useVulkan = GLProxy.isVulkanModActive();
 
+		// Get the Vulkan delegate for freeing GPU buffers
+		com.seibel.distanthorizons.core.render.renderer.IVulkanRenderDelegate vulkanDelegate = null;
+		if (useVulkan) {
+			vulkanDelegate = com.seibel.distanthorizons.core.render.renderer.LodRenderer.INSTANCE.getVulkanDelegate();
+		}
+
 		for (GLVertexBuffer buffer : this.vbos) {
 			if (buffer != null) {
 				if (useVulkan) {
+					// Free the cached Vulkan VertexBuffer (GPU memory) first
+					if (vulkanDelegate != null) {
+						vulkanDelegate.freeBuffer(buffer);
+					}
+					// Then free the native ByteBuffer (CPU memory)
 					Object handle = buffer.vulkanBufferHandle;
 					if (handle instanceof java.nio.ByteBuffer) {
 						MemoryUtil.memFree((java.nio.ByteBuffer) handle);
@@ -305,6 +316,11 @@ public class LodBufferContainer implements AutoCloseable {
 		for (GLVertexBuffer buffer : this.vbosTransparent) {
 			if (buffer != null) {
 				if (useVulkan) {
+					// Free the cached Vulkan VertexBuffer (GPU memory) first
+					if (vulkanDelegate != null) {
+						vulkanDelegate.freeBuffer(buffer);
+					}
+					// Then free the native ByteBuffer (CPU memory)
 					Object handle = buffer.vulkanBufferHandle;
 					if (handle instanceof java.nio.ByteBuffer) {
 						MemoryUtil.memFree((java.nio.ByteBuffer) handle);

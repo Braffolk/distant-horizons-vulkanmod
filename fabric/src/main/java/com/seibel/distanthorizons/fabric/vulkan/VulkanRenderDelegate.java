@@ -28,7 +28,6 @@ import net.vulkanmod.vulkan.memory.buffer.VertexBuffer;
 import net.vulkanmod.vulkan.texture.VTextureSelector;
 import net.vulkanmod.vulkan.texture.VulkanImage;
 
-import java.lang.ref.WeakReference;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.util.Iterator;
@@ -58,22 +57,14 @@ public class VulkanRenderDelegate implements IVulkanRenderDelegate {
     /**
      * Tracks a cached Vulkan VertexBuffer alongside the identity of the
      * ByteBuffer it was created from, for invalidation when terrain is re-uploaded.
-     * Also holds a WeakReference to the owning GLVertexBuffer for stale detection.
      */
     private static class CachedBuffer {
         final VertexBuffer vkBuffer;
         final int handleIdentity;
-        final WeakReference<GLVertexBuffer> ownerRef;
 
-        CachedBuffer(VertexBuffer vkBuffer, int handleIdentity, GLVertexBuffer owner) {
+        CachedBuffer(VertexBuffer vkBuffer, int handleIdentity) {
             this.vkBuffer = vkBuffer;
             this.handleIdentity = handleIdentity;
-            this.ownerRef = new WeakReference<>(owner);
-        }
-
-        /** @return true if the owning VBO has been garbage-collected */
-        boolean isStale() {
-            return this.ownerRef.get() == null;
         }
 
         void free() {
@@ -84,8 +75,13 @@ public class VulkanRenderDelegate implements IVulkanRenderDelegate {
     /**
      * Cache of uploaded Vulkan vertex buffers, keyed by GLVertexBuffer identity
      * hash.
-     * Stale entries (whose VBO has been GC'd) are swept each frame in beginFrame(),
-     * properly freeing GPU memory via scheduleFree().
+     * <p>
+     * Entries are removed in two ways:
+     * 1. When drawBuffer() detects vulkanBufferHandle changed or became null
+     * (DH called LodBufferContainer.close() which nulls the handle)
+     * 2. When freeBufferForVbo() is called explicitly from
+     * LodBufferContainer.close()
+     * 3. When cleanup() is called on world unload
      */
     private final Map<Integer, CachedBuffer> vulkanBufferCache = new ConcurrentHashMap<>();
 
@@ -174,17 +170,6 @@ public class VulkanRenderDelegate implements IVulkanRenderDelegate {
             return;
         }
 
-        // Sweep stale cache entries — VBOs that DH has destroyed and GC'd.
-        // Must call scheduleFree() since VulkanMod doesn't auto-free on Java GC.
-        Iterator<Map.Entry<Integer, CachedBuffer>> it = this.vulkanBufferCache.entrySet().iterator();
-        while (it.hasNext()) {
-            CachedBuffer cached = it.next().getValue();
-            if (cached.isStale()) {
-                cached.free();
-                it.remove();
-            }
-        }
-
         // Save and override VulkanMod render state for DH rendering
         this.savedCullState = VRenderSystem.cull;
         this.savedDepthMask = VRenderSystem.depthMask;
@@ -263,9 +248,6 @@ public class VulkanRenderDelegate implements IVulkanRenderDelegate {
         }
         this.renderContext.setUniformFloat("uEarthRadius", curveRatio);
 
-        // Clip distance — use DH's overdraw-based calculation.
-        // Now that we use MC's projection matrix, LOD depth values are compatible
-        // with MC's depth buffer, so overdraw produces a smooth transition.
         // Clip distance — prevents LODs from rendering where MC terrain
         // exists. This avoids double-rendering of transparent blocks (water,
         // leaves, glass) in the near zone. The composite depth bias handles
@@ -322,20 +304,27 @@ public class VulkanRenderDelegate implements IVulkanRenderDelegate {
             return;
         }
 
+        int vboId = System.identityHashCode(vbo);
         Object handle = vbo.vulkanBufferHandle;
+
+        // DH has cleaned up this VBO (LodBufferContainer.close() nulls the handle).
+        // Free our cached Vulkan buffer immediately.
         if (handle == null) {
+            CachedBuffer stale = this.vulkanBufferCache.remove(vboId);
+            if (stale != null) {
+                stale.free();
+            }
             return;
         }
 
         try {
-            int vboId = System.identityHashCode(vbo);
             int handleId = System.identityHashCode(handle);
-
             CachedBuffer cached = this.vulkanBufferCache.get(vboId);
 
             // Invalidate if the ByteBuffer handle changed (terrain was re-uploaded)
             if (cached != null && cached.handleIdentity != handleId) {
                 cached.free();
+                this.vulkanBufferCache.remove(vboId);
                 cached = null;
             }
 
@@ -352,7 +341,7 @@ public class VulkanRenderDelegate implements IVulkanRenderDelegate {
                 vkBuffer.copyBuffer(vertexData, dataSize);
                 vertexData.position(0);
 
-                cached = new CachedBuffer(vkBuffer, handleId, vbo);
+                cached = new CachedBuffer(vkBuffer, handleId);
                 this.vulkanBufferCache.put(vboId, cached);
             }
 
@@ -371,6 +360,21 @@ public class VulkanRenderDelegate implements IVulkanRenderDelegate {
 
         } catch (Exception e) {
             LOGGER.error("[DH-Vulkan] Error during drawBuffer: {}", e.getMessage());
+        }
+    }
+
+    /**
+     * Frees the cached Vulkan VertexBuffer for a given GLVertexBuffer.
+     * Called from LodBufferContainer.close() when DH destroys a VBO.
+     * This is the primary cleanup path — ensures GPU memory is freed
+     * deterministically without relying on GC.
+     */
+    @Override
+    public void freeBuffer(GLVertexBuffer vbo) {
+        int vboId = System.identityHashCode(vbo);
+        CachedBuffer cached = this.vulkanBufferCache.remove(vboId);
+        if (cached != null) {
+            cached.free();
         }
     }
 
@@ -422,6 +426,7 @@ public class VulkanRenderDelegate implements IVulkanRenderDelegate {
 
     @Override
     public void cleanup() {
+        LOGGER.info("[DH-Vulkan] cleanup() called, freeing {} cached Vulkan buffers.", this.vulkanBufferCache.size());
         for (CachedBuffer cached : this.vulkanBufferCache.values()) {
             cached.free();
         }
@@ -440,6 +445,7 @@ public class VulkanRenderDelegate implements IVulkanRenderDelegate {
             this.dhFramebuffer = null;
         }
         this.renderContext.cleanup();
+        this.initialized = false;
         LOGGER.info("[DH-Vulkan] VulkanRenderDelegate cleaned up.");
     }
 }
