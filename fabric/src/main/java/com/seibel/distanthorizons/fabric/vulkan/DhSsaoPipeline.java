@@ -346,7 +346,7 @@ public class DhSsaoPipeline {
 
         Renderer.getInstance().bindGraphicsPipeline(this.ssaoApplyPipeline);
         Renderer.getInstance().uploadAndBindUBOs(this.ssaoApplyPipeline);
-        Renderer.getDrawer().drawIndexed(this.quadVertexBuffer, this.quadIndexBuffer, 6);
+        Renderer.getDrawer().draw(this.quadVertexBuffer, 3);
 
         Renderer.getInstance().endRenderPass();
 

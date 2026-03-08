@@ -418,7 +418,7 @@ public class DhFogPipeline {
         Renderer.getInstance().beginRenderPass(this.applyRenderPass, dhFramebuffer.getFramebuffer());
         Renderer.getInstance().bindGraphicsPipeline(this.fogApplyPipeline);
         Renderer.getInstance().uploadAndBindUBOs(this.fogApplyPipeline);
-        Renderer.getDrawer().drawIndexed(this.quadVertexBuffer, this.quadIndexBuffer, 6);
+        Renderer.getDrawer().draw(this.quadVertexBuffer, 3);
         Renderer.getInstance().endRenderPass();
 
         // Restore state
