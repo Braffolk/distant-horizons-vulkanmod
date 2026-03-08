@@ -201,7 +201,7 @@ public class VulkanRenderDelegate implements IVulkanRenderDelegate {
         this.savedBlendDstAlpha = PipelineState.blendInfo.dstAlphaFactor;
         this.savedBlendOp = PipelineState.blendInfo.blendOp;
 
-        VRenderSystem.cull = true; // Back-face culling — halves fragment count
+        VRenderSystem.cull = true; // Back-face culling for LOD terrain
         VRenderSystem.depthTest = true; // Ensure Early-Z is active
         VRenderSystem.depthMask = true; // LODs need to write depth
         VRenderSystem.depthFun = 515; // GL_LEQUAL

@@ -24,7 +24,7 @@ import net.vulkanmod.vulkan.VRenderSystem;
 import net.vulkanmod.vulkan.framebuffer.Framebuffer;
 import net.vulkanmod.vulkan.framebuffer.RenderPass;
 import net.vulkanmod.vulkan.memory.MemoryTypes;
-import net.vulkanmod.vulkan.memory.buffer.IndexBuffer;
+
 import net.vulkanmod.vulkan.memory.buffer.VertexBuffer;
 import net.vulkanmod.vulkan.shader.GraphicsPipeline;
 import net.vulkanmod.vulkan.shader.Pipeline;
@@ -109,7 +109,6 @@ public class DhFogPipeline {
 
     // Shared fullscreen quad buffers
     private VertexBuffer quadVertexBuffer;
-    private IndexBuffer quadIndexBuffer;
 
     // Uniform buffers
     private final Map<String, MappedBuffer> pass1Uniforms = new HashMap<>();
@@ -141,34 +140,20 @@ public class DhFogPipeline {
     // ==================== //
 
     private void createQuadBuffers() {
-        ByteBuffer vertexData = ByteBuffer.allocateDirect(32);
+        // Dummy vertex buffer — actual positions come from gl_VertexIndex in shader.
+        // 3 vertices × 2 floats × 4 bytes = 24 bytes
+        ByteBuffer vertexData = ByteBuffer.allocateDirect(24);
         vertexData.order(ByteOrder.nativeOrder());
-        vertexData.putFloat(-1.0f);
-        vertexData.putFloat(-1.0f);
-        vertexData.putFloat(1.0f);
-        vertexData.putFloat(-1.0f);
-        vertexData.putFloat(1.0f);
-        vertexData.putFloat(1.0f);
-        vertexData.putFloat(-1.0f);
-        vertexData.putFloat(1.0f);
+        vertexData.putFloat(0);
+        vertexData.putFloat(0);
+        vertexData.putFloat(0);
+        vertexData.putFloat(0);
+        vertexData.putFloat(0);
+        vertexData.putFloat(0);
         vertexData.flip();
 
         this.quadVertexBuffer = new VertexBuffer(vertexData.remaining(), MemoryTypes.GPU_MEM);
         this.quadVertexBuffer.copyBuffer(vertexData, vertexData.remaining());
-
-        ByteBuffer indexData = ByteBuffer.allocateDirect(6 * 4);
-        indexData.order(ByteOrder.nativeOrder());
-        indexData.putInt(0);
-        indexData.putInt(1);
-        indexData.putInt(2);
-        indexData.putInt(2);
-        indexData.putInt(3);
-        indexData.putInt(0);
-        indexData.flip();
-
-        this.quadIndexBuffer = new IndexBuffer(indexData.remaining(), MemoryTypes.GPU_MEM,
-                IndexBuffer.IndexType.UINT32);
-        this.quadIndexBuffer.copyBuffer(indexData, indexData.remaining());
     }
 
     // ========================== //
@@ -397,7 +382,7 @@ public class DhFogPipeline {
         Renderer.getInstance().beginRenderPass(this.fogRenderPass, this.fogFramebuffer);
         Renderer.getInstance().bindGraphicsPipeline(this.fogComputePipeline);
         Renderer.getInstance().uploadAndBindUBOs(this.fogComputePipeline);
-        Renderer.getDrawer().drawIndexed(this.quadVertexBuffer, this.quadIndexBuffer, 6);
+        Renderer.getDrawer().draw(this.quadVertexBuffer, 3);
         Renderer.getInstance().endRenderPass();
 
         // ====================== //
@@ -487,10 +472,7 @@ public class DhFogPipeline {
             this.quadVertexBuffer.scheduleFree();
             this.quadVertexBuffer = null;
         }
-        if (this.quadIndexBuffer != null) {
-            this.quadIndexBuffer.scheduleFree();
-            this.quadIndexBuffer = null;
-        }
+
         if (this.fogComputePipeline != null) {
             this.fogComputePipeline.cleanUp();
             this.fogComputePipeline = null;

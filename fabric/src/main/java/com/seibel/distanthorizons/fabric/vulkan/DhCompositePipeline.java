@@ -14,7 +14,7 @@ import com.seibel.distanthorizons.core.logging.DhLoggerBuilder;
 import net.vulkanmod.vulkan.Renderer;
 import net.vulkanmod.vulkan.VRenderSystem;
 import net.vulkanmod.vulkan.memory.MemoryTypes;
-import net.vulkanmod.vulkan.memory.buffer.IndexBuffer;
+
 import net.vulkanmod.vulkan.memory.buffer.VertexBuffer;
 import net.vulkanmod.vulkan.shader.GraphicsPipeline;
 import net.vulkanmod.vulkan.shader.Pipeline;
@@ -63,7 +63,7 @@ public class DhCompositePipeline {
 
     private GraphicsPipeline compositePipeline;
     private VertexBuffer quadVertexBuffer;
-    private IndexBuffer quadIndexBuffer;
+
     private boolean initialized = false;
 
     // Persistent uniform buffers
@@ -94,40 +94,27 @@ public class DhCompositePipeline {
     }
 
     /**
-     * Creates a fullscreen quad: 4 vertices at NDC corners, 6 indices (2
-     * triangles).
+     * Creates a single fullscreen triangle: 3 vertices forming an oversized
+     * triangle that fully covers the [-1,1]×[-1,1] NDC range. The GPU clips
+     * the excess — this is the Vulkan best practice for fullscreen passes,
+     * avoiding two-triangle issues entirely.
      */
     private void createQuadBuffers() {
-        // 4 vertices × 2 floats × 4 bytes = 32 bytes
-        ByteBuffer vertexData = ByteBuffer.allocateDirect(32);
+        // 3 vertices × 2 floats × 4 bytes = 24 bytes
+        ByteBuffer vertexData = ByteBuffer.allocateDirect(24);
         vertexData.order(ByteOrder.nativeOrder());
         vertexData.putFloat(-1.0f);
         vertexData.putFloat(-1.0f); // bottom-left
-        vertexData.putFloat(1.0f);
-        vertexData.putFloat(-1.0f); // bottom-right
-        vertexData.putFloat(1.0f);
-        vertexData.putFloat(1.0f); // top-right
+        vertexData.putFloat(3.0f);
+        vertexData.putFloat(-1.0f); // far right (clipped)
         vertexData.putFloat(-1.0f);
-        vertexData.putFloat(1.0f); // top-left
+        vertexData.putFloat(3.0f); // far top (clipped)
         vertexData.flip();
 
         this.quadVertexBuffer = new VertexBuffer(vertexData.remaining(), MemoryTypes.GPU_MEM);
         this.quadVertexBuffer.copyBuffer(vertexData, vertexData.remaining());
 
-        // 6 indices for 2 triangles
-        ByteBuffer indexData = ByteBuffer.allocateDirect(6 * 4);
-        indexData.order(ByteOrder.nativeOrder());
-        indexData.putInt(0);
-        indexData.putInt(1);
-        indexData.putInt(2);
-        indexData.putInt(2);
-        indexData.putInt(3);
-        indexData.putInt(0);
-        indexData.flip();
-
-        this.quadIndexBuffer = new IndexBuffer(indexData.remaining(), MemoryTypes.GPU_MEM,
-                IndexBuffer.IndexType.UINT32);
-        this.quadIndexBuffer.copyBuffer(indexData, indexData.remaining());
+        // No index buffer needed for 3-vertex draw
     }
 
     /**
@@ -217,7 +204,7 @@ public class DhCompositePipeline {
 
         VRenderSystem.cull = false;
         VRenderSystem.depthMask = true;
-        VRenderSystem.depthFun = 515; // GL_LEQUAL — only write where DH depth ≤ MC depth
+        VRenderSystem.depthFun = 519; // GL_ALWAYS — MC depth buffer has DONT_CARE garbage
         // Premultiplied alpha blending: DH's color buffer is already
         // alpha-premultiplied
         // from DH's own transparent pass blending, so use ONE (not SRC_ALPHA) to avoid
@@ -234,7 +221,7 @@ public class DhCompositePipeline {
         // Bind pipeline and draw
         Renderer.getInstance().bindGraphicsPipeline(this.compositePipeline);
         Renderer.getInstance().uploadAndBindUBOs(this.compositePipeline);
-        Renderer.getDrawer().drawIndexed(this.quadVertexBuffer, this.quadIndexBuffer, 6);
+        Renderer.getDrawer().draw(this.quadVertexBuffer, 3);
 
         // Restore state
         VRenderSystem.cull = prevCull;
@@ -253,10 +240,7 @@ public class DhCompositePipeline {
             this.quadVertexBuffer.scheduleFree();
             this.quadVertexBuffer = null;
         }
-        if (this.quadIndexBuffer != null) {
-            this.quadIndexBuffer.scheduleFree();
-            this.quadIndexBuffer = null;
-        }
+
         if (this.compositePipeline != null) {
             this.compositePipeline.cleanUp();
             this.compositePipeline = null;
