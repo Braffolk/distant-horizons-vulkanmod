@@ -1,6 +1,6 @@
 # Distant Horizons → VulkanMod: Implementation Roadmap
 
-Status as of 2026-03-07: **Phases 1-6 complete, SSAO ported.** LODs render with correct colors, depth, lightmap, transparency, compositing, and SSAO. Next: fog, noise, clouds.
+Status as of 2026-03-08: **Phases 1-7 complete.** LODs render with correct colors, depth, lightmap, transparency, compositing, SSAO, fog, and noise. Next: earth curvature, edge cases.
 
 ## Architecture Overview
 
@@ -8,11 +8,11 @@ Files under `fabric/src/main/java/com/seibel/distanthorizons/fabric/vulkan/`:
 - **`VulkanRenderContext.java`** — Pipeline creation, UBO management, shader conversion, draw calls
 - **`VulkanRenderDelegate.java`** — `IVulkanRenderDelegate` impl, per-frame uniform fill, VBO upload
 - **`DhVulkanFramebuffer.java`** — DH-owned Vulkan framebuffer with color+depth, auto-resize *(Phase 6)*
-- **`DhCompositePipeline.java`** — Fullscreen quad composite with depth bias *(Phase 6)*
+- **`DhCompositePipeline.java`** — Fullscreen triangle composite with depth bias *(Phase 6)*
 - **`IVulkanRenderDelegate.java`** — Interface in core (at `core/render/renderer/`)
 
 Vulkan shaders under `coreSubProjects/core/src/main/resources/shaders/vulkan/`:
-- **`dh_apply.vert`** — Composite vertex shader (fullscreen quad, Y-flip for Vulkan)
+- **`dh_apply.vert`** — Composite vertex shader (fullscreen triangle via `gl_VertexIndex`, Y-flip)
 - **`dh_apply.frag`** — Composite fragment shader (depth bias, `gl_FragDepth`)
 
 DH's `LodRenderer` detects VulkanMod via `GLProxy.isVulkanModActive()` and delegates to the Vulkan path.
@@ -65,7 +65,7 @@ DH's `LodRenderer` detects VulkanMod via `GLProxy.isVulkanModActive()` and deleg
 - [x] **DH-owned Vulkan framebuffer** (`DhVulkanFramebuffer.java`) — color (RGBA8) + depth attachments with `SAMPLED_BIT`
 - [x] **Render pass** with `LOAD_OP_CLEAR/STORE_OP_STORE` on both attachments, `finalLayout = SHADER_READ_ONLY_OPTIMAL`
 - [x] **Render pass switching** — flow: End MC pass → Begin DH pass → Render LODs → End DH pass → Rebind MC pass → Composite
-- [x] **Composite pipeline** (`DhCompositePipeline.java`) — fullscreen quad with depth writes via `gl_FragDepth`
+- [x] **Composite pipeline** (`DhCompositePipeline.java`) — fullscreen triangle (via `gl_VertexIndex`) with depth writes via `gl_FragDepth`
 - [x] **Composite shaders** (`dh_apply.vert`, `dh_apply.frag`) — Vulkan GLSL 450, Y-flip for framebuffer coords
 - [x] **Depth bias** (+0.0001 in composite shader) — LODs always slightly behind MC terrain, no z-fighting
 - [x] **`uClipDistance`** — uses `RenderUtil.getNearClipPlaneInBlocks()` to prevent double-rendering of transparent blocks (water, leaves) in near zone
@@ -99,7 +99,7 @@ DH's `LodRenderer` detects VulkanMod via `GLProxy.isVulkanModActive()` and deleg
 
 **Files:**
 - `DhSsaoPipeline.java` — orchestrates both passes, manages resources
-- `dh_ssao.vert` — shared fullscreen quad vertex shader (Vulkan Y-flip)
+- `dh_ssao.vert` — shared fullscreen triangle vertex shader (`gl_VertexIndex`, Y-flip)
 - `dh_ssao.frag` — pass 1: spiral depth-sampling occlusion computation
 - `dh_ssao_apply.frag` — pass 2: optional bilateral blur + multiplicative apply
 
@@ -132,7 +132,7 @@ DH's `LodRenderer` detects VulkanMod via `GLProxy.isVulkanModActive()` and deleg
 - `DhFogPipeline.java` — orchestrates both passes, manages resources (~25 config-driven uniforms)
 - `dh_fog.frag` — pass 1: depth → world pos reconstruction, far fog + height fog (3 falloff types, 10 mixing modes)
 - `dh_fog_apply.frag` — pass 2: depth-gated fog texture passthrough with SRC_ALPHA blend
-- Reuses `dh_ssao.vert` for fullscreen quad vertex shader
+- Reuses `dh_ssao.vert` for fullscreen triangle vertex shader
 
 **Architecture:**
 - **Pass 1** renders into intermediate RGBA16F `Framebuffer` (fog color + alpha 0.0–1.0)
@@ -143,6 +143,22 @@ DH's `LodRenderer` detects VulkanMod via `GLProxy.isVulkanModActive()` and deleg
 
 > [!IMPORTANT]
 > **Projection matrix for fog:** Like SSAO, the fog pipeline uses `mcProjectionMatrix * dhModelViewMatrix` for world position reconstruction. Initially `dhProjectionMatrix` was used (matching the GL path), but this caused all LODs to render as 100% fog because the depth values were produced with `mcProjectionMatrix`. The inverse matrix must always match the matrix that produced the depth buffer.
+
+---
+
+## Known Quirks & Platform Differences
+
+> [!CAUTION]
+> **NVIDIA: VulkanMod's `GPU_MEM` vertex buffers produce incorrect data in fullscreen quad geometry.**
+> When using a 4-vertex quad with index buffer (`drawIndexed(vbo, ibo, 6)`), NVIDIA only rasterized one of the two triangles. The vertex buffer data was read incorrectly, likely caused by VulkanMod's VMA sub-allocation offsets or async staging buffer transfers.
+>
+> **Fix:** All fullscreen passes (composite, SSAO, fog) generate positions from `gl_VertexIndex` in the vertex shader, bypassing vertex buffer data entirely. A single oversized triangle at NDC `(-1,-1), (3,-1), (-1,3)` covers the entire viewport — the GPU clips the excess. This is also a Vulkan best practice (fewer vertices, no shared diagonal edge, no helper lane overhead).
+>
+> The `vPosition` input is declared but unused (required by VulkanMod's pipeline vertex format binding). A dummy 24-byte vertex buffer is still bound.
+
+> [!WARNING]
+> **Composite depth test must use `GL_ALWAYS` (519).**
+> The composite runs before MC terrain, so MC's depth buffer contains `DONT_CARE` garbage. `GL_LEQUAL` fails against random values. MoltenVK implicitly clears to 1.0, hiding the bug on macOS.
 
 ---
 
@@ -169,8 +185,8 @@ DH's `LodRenderer` detects VulkanMod via `GLProxy.isVulkanModActive()` and deleg
 | `VulkanRenderContext.java` | Pipeline, UBOs, shader conversion, draw API |
 | `VulkanRenderDelegate.java` | Per-frame uniforms, VBO cache, draw dispatch, render pass switching |
 | `DhVulkanFramebuffer.java` | DH-owned Vulkan framebuffer (color + depth) |
-| `DhCompositePipeline.java` | Fullscreen quad composite pipeline |
-| `dh_apply.vert` / `dh_apply.frag` | Vulkan composite shaders |
+| `DhCompositePipeline.java` | Fullscreen triangle composite pipeline |
+| `dh_apply.vert` / `dh_apply.frag` | Vulkan composite shaders (`gl_VertexIndex` fullscreen triangle) |
 | `GLVertexBuffer.java` | VBO with `vulkanBufferHandle` ByteBuffer field |
 | `LodBufferContainer.java` | Uploads vertex data, stores `vulkanBufferHandle` |
 | `DhTerrainShaderProgram.java` | GL shader/VAO setup (reference for vertex format) |
