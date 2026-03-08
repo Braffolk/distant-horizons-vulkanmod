@@ -18,6 +18,7 @@ import org.spongepowered.asm.mixin.Unique;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
+import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 
 /**
  * Tier 1 mixin: Replaces the entire DH render pipeline when VulkanMod is
@@ -74,10 +75,10 @@ public class MixinLodRenderer implements IVulkanLodRenderer {
      * Vulkan is active.
      */
     @Inject(method = "createRenderObjects", at = @At("HEAD"), cancellable = true)
-    private void dhvulkan$skipGLRenderObjectCreation(CallbackInfo ci) {
+    private void dhvulkan$skipGLRenderObjectCreation(CallbackInfoReturnable<Boolean> cir) {
         if (IVulkanGLProxy.isVulkanModActive()) {
             LodRenderer.LOGGER.info("[DH-VulkanMod] Skipping GL render object creation (VulkanMod active)");
-            ci.cancel();
+            cir.setReturnValue(true); // signal success to caller
         }
     }
 
@@ -90,7 +91,14 @@ public class MixinLodRenderer implements IVulkanLodRenderer {
     @Inject(method = "renderLodPass(Lcom/seibel/distanthorizons/core/render/renderer/RenderParams;Lcom/seibel/distanthorizons/core/wrapperInterfaces/minecraft/IProfilerWrapper;Z)V", at = @At("HEAD"), cancellable = true)
     private void dhvulkan$vulkanRenderPass(RenderParams renderParams, IProfilerWrapper profiler,
             boolean runningDeferredPass, CallbackInfo ci) {
-        if (!IVulkanGLProxy.isVulkanModActive() || this.dhvulkan$vulkanDelegate == null) {
+        if (!IVulkanGLProxy.isVulkanModActive()) {
+            return;
+        }
+
+        // Wire the delegate lazily (LodRenderer.INSTANCE doesn't exist during mod init)
+        com.braffolk.dhvulkan.DhVulkanModEntrypoint.wireIfNeeded();
+
+        if (this.dhvulkan$vulkanDelegate == null) {
             return; // Let DH's normal GL path run
         }
 

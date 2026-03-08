@@ -48,6 +48,10 @@ public class VulkanRenderDelegate implements IVulkanRenderDelegate {
     private boolean initialized = false;
     private boolean initFailed = false;
 
+    // Debug counters
+    private int debugFrameCount = 0;
+    private int debugDrawCount = 0;
+
     /** DH-owned framebuffer — LODs render into this instead of MC's render pass */
     private DhVulkanFramebuffer dhFramebuffer;
     /** Composite pipeline — blends DH's framebuffer onto MC's */
@@ -203,7 +207,7 @@ public class VulkanRenderDelegate implements IVulkanRenderDelegate {
         this.savedBlendDstAlpha = PipelineState.blendInfo.dstAlphaFactor;
         this.savedBlendOp = PipelineState.blendInfo.blendOp;
 
-        VRenderSystem.cull = true; // Back-face culling for LOD terrain
+        VRenderSystem.cull = true; // Back-face culling for LOD terrain (~50% fragment reduction)
         VRenderSystem.depthTest = true; // Ensure Early-Z is active
         VRenderSystem.depthMask = true; // LODs need to write depth
         VRenderSystem.depthFun = 515; // GL_LEQUAL
@@ -236,6 +240,7 @@ public class VulkanRenderDelegate implements IVulkanRenderDelegate {
         this.dhFramebuffer.beginRenderPass();
 
         this.renderContext.bindTerrainPipeline();
+        this.debugDrawCount = 0;
     }
 
     @Override
@@ -378,6 +383,7 @@ public class VulkanRenderDelegate implements IVulkanRenderDelegate {
 
             // THE draw call
             this.renderContext.drawIndexed(cached.vkBuffer, this.quadIndexBuffer, indexCount);
+            this.debugDrawCount++;
 
         } catch (Exception e) {
             LOGGER.error("[DH-Vulkan] Error during drawBuffer: {}", e.getMessage());
@@ -417,6 +423,14 @@ public class VulkanRenderDelegate implements IVulkanRenderDelegate {
 
     @Override
     public void endFrame(DhApiRenderParam renderParam) {
+        this.debugFrameCount++;
+        if (this.debugFrameCount >= 60 && this.debugFrameCount <= 62) {
+            boolean ssaoEnabled = Config.Client.Advanced.Graphics.Ssao.enableSsao.get();
+            boolean fogEnabled = Config.Client.Advanced.Graphics.Fog.enableDhFog.get();
+            LOGGER.info("[DH-Vulkan] endFrame #{}: drew {} buffers, SSAO={}, Fog={}, cache={}",
+                    this.debugFrameCount, this.debugDrawCount, ssaoEnabled, fogEnabled,
+                    this.vulkanBufferCache.size());
+        }
         // End DH's render pass — this transitions the color+depth attachments
         // to SHADER_READ_ONLY_OPTIMAL for sampling in post-process + composite.
         Renderer.getInstance().endRenderPass();

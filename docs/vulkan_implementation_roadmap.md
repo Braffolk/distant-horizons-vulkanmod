@@ -1,21 +1,31 @@
 # Distant Horizons → VulkanMod: Implementation Roadmap
 
-Status as of 2026-03-08: **Phases 1-7 complete.** LODs render with correct colors, depth, lightmap, transparency, compositing, SSAO, fog, and noise. Next: earth curvature, edge cases.
+Status as of 2026-03-08: **Phases 1-7 + extension mod port complete.** LODs render with correct colors, depth, lightmap, transparency, compositing, SSAO, fog, and noise via a standalone extension mod (mixin-based, no DH source modifications).
 
 ## Architecture Overview
 
-Files under `fabric/src/main/java/com/seibel/distanthorizons/fabric/vulkan/`:
+The Vulkan backend is implemented as a **standalone Fabric mod** (`dh-vulkanmod`) in the `vulkan/` subproject. It uses **mixins** to intercept DH's rendering pipeline without modifying DH's source code. This allows it to work as a drop-in extension alongside unmodified DH releases.
+
+Core files under `vulkan/src/main/java/com/braffolk/dhvulkan/`:
 - **`VulkanRenderContext.java`** — Pipeline creation, UBO management, shader conversion, draw calls
-- **`VulkanRenderDelegate.java`** — `IVulkanRenderDelegate` impl, per-frame uniform fill, VBO upload
-- **`DhVulkanFramebuffer.java`** — DH-owned Vulkan framebuffer with color+depth, auto-resize *(Phase 6)*
-- **`DhCompositePipeline.java`** — Fullscreen triangle composite with depth bias *(Phase 6)*
-- **`IVulkanRenderDelegate.java`** — Interface in core (at `core/render/renderer/`)
+- **`VulkanRenderDelegate.java`** — `IVulkanRenderDelegate` impl, per-frame uniform fill, VBO cache
+- **`DhVulkanFramebuffer.java`** — DH-owned Vulkan framebuffer with color+depth, auto-resize
+- **`DhCompositePipeline.java`** — Fullscreen triangle composite with depth bias
+- **`IVulkanRenderDelegate.java`** — Interface for the Vulkan delegate
 
-Vulkan shaders under `coreSubProjects/core/src/main/resources/shaders/vulkan/`:
-- **`dh_apply.vert`** — Composite vertex shader (fullscreen triangle via `gl_VertexIndex`, Y-flip)
-- **`dh_apply.frag`** — Composite fragment shader (depth bias, `gl_FragDepth`)
+Mixins under `vulkan/src/main/java/com/braffolk/dhvulkan/mixin/`:
+- **`MixinLodBufferContainer`** — Intercepts `uploadBuffersDirect()` to store raw vertex data directly
+- **`MixinLodRenderer`** — Redirects `LodRenderer.renderLodPass()` to the Vulkan delegate
+- **`MixinLevelRenderer`** — Triggers composite after MC terrain renders
+- **`MixinGLProxy`** — Creates dummy GLProxy, bypasses GL thread assertions
+- **`MixinGLBuffer`** — Cancels GL buffer operations (bind, create, upload, destroy)
+- **`MixinGLVertexBuffer`** — Duck interface for storing Vulkan buffer handles on VBOs
+- **`MixinGLState`** — Cancels GL state machine operations
 
-DH's `LodRenderer` detects VulkanMod via `GLProxy.isVulkanModActive()` and delegates to the Vulkan path.
+Vulkan shaders under `vulkan/src/main/resources/shaders/vulkan/`:
+- **`dh_apply.vert`** / **`dh_apply.frag`** — Composite shaders
+- **`dh_ssao.vert`** / **`dh_ssao.frag`** / **`dh_ssao_apply.frag`** — SSAO shaders
+- **`dh_fog.frag`** / **`dh_fog_apply.frag`** — Fog shaders
 
 ---
 
@@ -177,23 +187,47 @@ DH's `LodRenderer` detects VulkanMod via `GLProxy.isVulkanModActive()` and deleg
 
 ---
 
+## Phase 10: Extension Mod Port ✅ COMPLETE
+
+**Goal:** Port the Vulkan backend from a DH source fork to a standalone Fabric extension mod that works alongside unmodified DH releases.
+
+### Key Design Decision: Clean Override vs Monkeypatch
+
+The fork modified `LodBufferContainer.uploadBuffersDirect()` directly to add a Vulkan code path that bypasses `vbo.uploadBuffer()` and stores raw ByteBuffer data on the VBO. The initial extension mod approach used a low-level mixin on `GLBuffer.uploadBuffer()` to intercept data — this caused **missing east/west faces** because the interception was too deep in the call stack and version-dependent.
+
+The fix: **`MixinLodBufferContainer`** intercepts `uploadBuffersDirect()` at HEAD, replicating the fork's approach. This grabs raw ByteBuffers from the quad builder *before* any GL operations, stores them via a duck interface, and cancels the entire GL upload path.
+
+### Files Created/Modified
+- **[NEW]** `MixinLodBufferContainer.java` — Clean buffer upload interception
+- **[NEW]** `MixinLodRenderer.java` — Redirects rendering to VulkanRenderDelegate
+- **[NEW]** `MixinLevelRenderer.java` — Composite trigger after MC terrain
+- **[NEW]** `MixinGLProxy.java` — Dummy GLProxy, thread assertion bypass
+- **[NEW]** `MixinGLBuffer.java` — GL call cancellation
+- **[NEW]** `MixinGLVertexBuffer.java` — Duck interface (IVulkanVertexBuffer)
+- **[NEW]** `DhVulkanModEntrypoint.java` — Fabric entrypoint
+- **[NEW]** `DhVulkanConfig.java` — Mod config
+
+### Lessons Learned
+- Intercept data at the **highest stable level** (LodBufferContainer), not deep in the GL stack
+- Duck interfaces (`IVulkanVertexBuffer`) are the clean way to add fields to DH classes via mixin
+- DH's `GLProxy.queueRunningOnRenderThread()` works correctly even with a dummy GLProxy
+- Terrain shaders (`standard.vert`, `flat_shaded.frag`) load from DH's jar at runtime — no need to bundle
+
+---
+
 ## Key Files Reference
 
 | File | Purpose |
 |------|---------|
-| `LodRenderer.java` | Main render entry point, Vulkan path branching |
 | `VulkanRenderContext.java` | Pipeline, UBOs, shader conversion, draw API |
 | `VulkanRenderDelegate.java` | Per-frame uniforms, VBO cache, draw dispatch, render pass switching |
 | `DhVulkanFramebuffer.java` | DH-owned Vulkan framebuffer (color + depth) |
 | `DhCompositePipeline.java` | Fullscreen triangle composite pipeline |
-| `dh_apply.vert` / `dh_apply.frag` | Vulkan composite shaders (`gl_VertexIndex` fullscreen triangle) |
-| `GLVertexBuffer.java` | VBO with `vulkanBufferHandle` ByteBuffer field |
-| `LodBufferContainer.java` | Uploads vertex data, stores `vulkanBufferHandle` |
-| `DhTerrainShaderProgram.java` | GL shader/VAO setup (reference for vertex format) |
-| `VertexFormats.java` | DH's custom `LodVertexFormat` definition |
-| `GraphicsPipeline.java` | VulkanMod pipeline creation, vertex input mapping |
-| `PipelineState.java` | VulkanMod render state (cull, blend, depth) |
-| `VRenderSystem.java` | VulkanMod's GL state tracker |
+| `MixinLodBufferContainer.java` | Intercepts buffer upload, stores raw vertex data |
+| `MixinLodRenderer.java` | Redirects LodRenderer to Vulkan delegate |
+| `dh_apply.vert` / `dh_apply.frag` | Vulkan composite shaders |
+| `VertexFormats.java` (DH) | DH's custom vertex format definition (16 bytes) |
+| `PipelineState.java` (VulkanMod) | Render state (cull, blend, depth) |
 
 ## Vertex Format (16 bytes per vertex)
 

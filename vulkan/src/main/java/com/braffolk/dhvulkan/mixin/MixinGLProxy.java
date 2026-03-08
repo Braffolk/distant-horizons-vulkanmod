@@ -1,32 +1,73 @@
 package com.braffolk.dhvulkan.mixin;
 
 import com.braffolk.dhvulkan.duck.IVulkanGLProxy;
+import com.seibel.distanthorizons.api.enums.config.EDhApiGpuUploadMethod;
 import com.seibel.distanthorizons.core.render.glObject.GLProxy;
 import org.spongepowered.asm.mixin.Mixin;
+import org.spongepowered.asm.mixin.Shadow;
+import org.spongepowered.asm.mixin.Unique;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
-import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
+import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 
 /**
- * Mixin into {@link GLProxy} to skip OpenGL context initialization when
- * VulkanMod is active.
- * VulkanMod replaces MC's OpenGL context with Vulkan, so all GL calls would
- * crash.
+ * Mixin into {@link GLProxy} to prevent GL context initialization when
+ * VulkanMod
+ * is active.
+ *
+ * Creates a dummy GLProxy instance via sun.misc.Unsafe (bypassing the GL-heavy
+ * constructor) so that DH's hasInstance() returns true and the data pipeline
+ * (buffer uploads, thread checks) continues to work. Essential fields like
+ * preferredUploadMethod are set via reflection after creation.
  */
 @Mixin(value = GLProxy.class, remap = false)
 public class MixinGLProxy {
 
-    /**
-     * Skip the entire constructor body when VulkanMod is active.
-     * The constructor tries to get GL capabilities, check GL versions, etc.
-     * — none of which is possible without an GL context.
-     */
-    @Inject(method = "<init>", at = @At("HEAD"), cancellable = true)
-    private void dhvulkan$skipGLInit(CallbackInfo ci) {
-        if (IVulkanGLProxy.isVulkanModActive()) {
-            GLProxy.LOGGER.info("VulkanMod detected. Skipping OpenGL context setup — using Vulkan rendering backend.");
-            GLProxy.LOGGER.info(GLProxy.class.getSimpleName() + " creation successful (VulkanMod mode).");
-            ci.cancel();
+    @Shadow
+    private static GLProxy instance;
+
+    @Unique
+    private static boolean dhvulkan$dummyCreated = false;
+
+    @Inject(method = "getInstance", at = @At("HEAD"), cancellable = true)
+    private static void dhvulkan$skipGetInstance(CallbackInfoReturnable<GLProxy> cir) {
+        if (!IVulkanGLProxy.isVulkanModActive())
+            return;
+
+        if (!dhvulkan$dummyCreated) {
+            try {
+                // Create a GLProxy without invoking its constructor (which does GL calls).
+                sun.misc.Unsafe unsafe = dhvulkan$getUnsafe();
+                instance = (GLProxy) unsafe.allocateInstance(GLProxy.class);
+
+                // Set required fields that DH reads during buffer upload.
+                // preferredUploadMethod is used by getGpuUploadMethod() which is called
+                // from LodBufferContainer.uploadBuffersDirect().
+                java.lang.reflect.Field uploadField = GLProxy.class.getDeclaredField("preferredUploadMethod");
+                uploadField.setAccessible(true);
+                uploadField.set(instance, EDhApiGpuUploadMethod.DATA); // most basic, no special GL features needed
+
+                dhvulkan$dummyCreated = true;
+                GLProxy.LOGGER.info("[DH-VulkanMod] Created dummy GLProxy (VulkanMod active, no GL context).");
+            } catch (Exception e) {
+                GLProxy.LOGGER.error("[DH-VulkanMod] Failed to create dummy GLProxy", e);
+            }
         }
+
+        cir.setReturnValue(instance);
+    }
+
+    @Inject(method = "runningOnRenderThread", at = @At("HEAD"), cancellable = true)
+    private static void dhvulkan$alwaysOnRenderThread(CallbackInfoReturnable<Boolean> cir) {
+        if (IVulkanGLProxy.isVulkanModActive()) {
+            cir.setReturnValue(true);
+        }
+    }
+
+    @Unique
+    private static sun.misc.Unsafe dhvulkan$getUnsafe() throws Exception {
+        java.lang.reflect.Field f = sun.misc.Unsafe.class.getDeclaredField("theUnsafe");
+        f.setAccessible(true);
+        return (sun.misc.Unsafe) f.get(null);
     }
 }

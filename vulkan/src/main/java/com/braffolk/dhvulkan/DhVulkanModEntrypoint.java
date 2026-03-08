@@ -14,10 +14,15 @@ import org.apache.logging.log4j.Logger;
  * Detects VulkanMod, creates the {@link VulkanRenderDelegate}, and wires it
  * into
  * DH's {@link LodRenderer} via the {@link IVulkanLodRenderer} duck interface.
+ *
+ * The delegate is wired lazily on first render frame because
+ * LodRenderer.INSTANCE
+ * may not exist during Fabric's onInitializeClient phase.
  */
 public class DhVulkanModEntrypoint implements ClientModInitializer {
 
     private static final Logger LOGGER = LogManager.getLogger("DH-VulkanMod");
+    private static VulkanRenderDelegate pendingDelegate;
 
     @Override
     public void onInitializeClient() {
@@ -34,16 +39,27 @@ public class DhVulkanModEntrypoint implements ClientModInitializer {
 
         LOGGER.info("[DH-VulkanMod] VulkanMod detected. Vulkan rendering backend will be used.");
 
-        // VulkanRenderDelegate initialization is deferred to the first render frame
-        // because VulkanMod's pipeline / device aren't ready during mod init.
-        // We set up the delegate lazily via the LodRenderer mixin.
-        IVulkanLodRenderer lodRenderer = (IVulkanLodRenderer) LodRenderer.INSTANCE;
+        // Create the delegate now, but defer wiring until LodRenderer.INSTANCE exists
+        pendingDelegate = new VulkanRenderDelegate();
+        LOGGER.info("[DH-VulkanMod] VulkanRenderDelegate created. Will wire on first render frame.");
+    }
 
-        // Create and set the delegate. The delegate itself defers GPU init to
-        // beginFrame().
-        VulkanRenderDelegate delegate = new VulkanRenderDelegate();
-        lodRenderer.dhvulkan$setVulkanDelegate(delegate);
+    /**
+     * Called from MixinLodRenderer before the first render pass to wire the
+     * delegate.
+     * This ensures LodRenderer.INSTANCE exists.
+     */
+    public static void wireIfNeeded() {
+        if (pendingDelegate == null)
+            return;
 
-        LOGGER.info("[DH-VulkanMod] VulkanRenderDelegate wired into LodRenderer. Ready.");
+        try {
+            IVulkanLodRenderer lodRenderer = (IVulkanLodRenderer) LodRenderer.INSTANCE;
+            lodRenderer.dhvulkan$setVulkanDelegate(pendingDelegate);
+            LOGGER.info("[DH-VulkanMod] VulkanRenderDelegate wired into LodRenderer. Ready.");
+            pendingDelegate = null;
+        } catch (Exception e) {
+            LOGGER.error("[DH-VulkanMod] Failed to wire delegate", e);
+        }
     }
 }

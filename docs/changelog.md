@@ -1,3 +1,29 @@
+## TODO TITLE
+
+First release as a standalone Fabric extension mod (`dh-vulkanmod`). Works alongside unmodified Distant Horizons 2.4.5+.
+
+### Architecture
+
+- Ported Vulkan rendering backend from a DH source fork to a mixin-based extension mod
+- All DH interception via mixins — no DH source modifications required
+- Standalone jar installable alongside any compatible DH release
+
+### Critical Fix: Missing LOD Faces
+
+- **Fixed** east/west-facing LOD faces not rendering. The initial approach intercepted vertex data too deep in DH's GL call stack (`GLBuffer.uploadBuffer()`), which was fragile and version-dependent. Replaced with `MixinLodBufferContainer` that intercepts `uploadBuffersDirect()` at the same level the fork operated at — grabbing raw ByteBuffers directly from the quad builder and bypassing the entire GL upload pipeline.
+
+### Included Features (from fork)
+
+- Native Vulkan LOD rendering via VulkanMod
+- DH-owned framebuffer with composite pipeline
+- SSAO post-processing (2-pass, configurable)
+- Fog post-processing (distance + height fog)
+- Noise/dithering on LOD terrain
+- Lightmap integration via VulkanMod's GL emulation
+- Deterministic GPU memory management with buffer cache
+
+---
+
 ## v2.4.6+vm.3
 
 ### Rendering Fixes
