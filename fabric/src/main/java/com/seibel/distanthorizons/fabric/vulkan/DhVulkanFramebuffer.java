@@ -13,6 +13,8 @@ import net.vulkanmod.vulkan.Renderer;
 import net.vulkanmod.vulkan.framebuffer.Framebuffer;
 import net.vulkanmod.vulkan.framebuffer.RenderPass;
 
+import net.vulkanmod.vulkan.texture.VulkanImage;
+
 /**
  * Manages DH's private Vulkan framebuffer with color (RGBA8) and depth
  * attachments. LODs are rendered into this framebuffer, then composited
@@ -26,6 +28,11 @@ public class DhVulkanFramebuffer {
     private static final DhLogger LOGGER = new DhLoggerBuilder().build();
 
     // Vulkan constants (from VK10) — inlined to avoid compile-time LWJGL dependency
+    private static final int VK_FORMAT_R8G8B8A8_UNORM = 37;
+    private static final int VK_FORMAT_D32_SFLOAT = 126;
+    private static final int VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT = 16; // 0x10
+    private static final int VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT = 32; // 0x20
+    private static final int VK_IMAGE_USAGE_SAMPLED_BIT = 4; // 0x04
     private static final int VK_ATTACHMENT_LOAD_OP_CLEAR = 1;
     private static final int VK_ATTACHMENT_STORE_OP_STORE = 0;
     private static final int VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL = 5;
@@ -54,10 +61,24 @@ public class DhVulkanFramebuffer {
     }
 
     private void createFramebufferAndPass() {
-        // 1 color attachment (RGBA8) + depth attachment (matching MC's depth format)
-        // Framebuffer.Builder auto-sets SAMPLED_BIT on both attachments
-        this.framebuffer = new Framebuffer.Builder(this.width, this.height, 1, true)
-                .build();
+        // Create images manually so we can force D32_SFLOAT for the depth attachment.
+        // VulkanMod's default depth format on NVIDIA is D24_S8 (depth-stencil), whose
+        // image view includes stencil aspect bits and cannot be sampled as sampler2D
+        // by the composite/SSAO/fog shaders.
+        VulkanImage colorImage = VulkanImage.builder(this.width, this.height)
+                .setFormat(VK_FORMAT_R8G8B8A8_UNORM)
+                .setUsage(VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT)
+                .setLinearFiltering(true)
+                .setClamp(true)
+                .createVulkanImage();
+
+        VulkanImage depthImage = VulkanImage.createDepthImage(
+                VK_FORMAT_D32_SFLOAT,
+                this.width, this.height,
+                VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+                false, true);
+
+        this.framebuffer = Framebuffer.builder(colorImage, depthImage).build();
 
         // Render pass: clear both attachments, store both, final layout =
         // SHADER_READ_ONLY

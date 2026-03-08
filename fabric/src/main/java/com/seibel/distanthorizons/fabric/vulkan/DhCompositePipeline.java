@@ -14,7 +14,7 @@ import com.seibel.distanthorizons.core.logging.DhLoggerBuilder;
 import net.vulkanmod.vulkan.Renderer;
 import net.vulkanmod.vulkan.VRenderSystem;
 import net.vulkanmod.vulkan.memory.MemoryTypes;
-import net.vulkanmod.vulkan.memory.buffer.IndexBuffer;
+
 import net.vulkanmod.vulkan.memory.buffer.VertexBuffer;
 import net.vulkanmod.vulkan.shader.GraphicsPipeline;
 import net.vulkanmod.vulkan.shader.Pipeline;
@@ -56,11 +56,19 @@ public class DhCompositePipeline {
     static final int DH_COLOR_TEXTURE_SLOT = 3;
     /** VTextureSelector slot for DH depth texture */
     static final int DH_DEPTH_TEXTURE_SLOT = 4;
+    /** VTextureSelector slot for SSAO intermediate texture (debug) */
+    static final int DEBUG_SSAO_TEXTURE_SLOT = 5;
+    /** VTextureSelector slot for fog intermediate texture (debug) */
+    static final int DEBUG_FOG_TEXTURE_SLOT = 6;
 
     private GraphicsPipeline compositePipeline;
     private VertexBuffer quadVertexBuffer;
-    private IndexBuffer quadIndexBuffer;
+
     private boolean initialized = false;
+
+    // Persistent uniform buffers
+    private MappedBuffer invProjBuf;
+    private MappedBuffer debugModeBuf;
 
     /**
      * Simple vertex format for the fullscreen quad: just vec2 position.
@@ -86,40 +94,27 @@ public class DhCompositePipeline {
     }
 
     /**
-     * Creates a fullscreen quad: 4 vertices at NDC corners, 6 indices (2
-     * triangles).
+     * Creates a single fullscreen triangle: 3 vertices forming an oversized
+     * triangle that fully covers the [-1,1]×[-1,1] NDC range. The GPU clips
+     * the excess — this is the Vulkan best practice for fullscreen passes,
+     * avoiding two-triangle issues entirely.
      */
     private void createQuadBuffers() {
-        // 4 vertices × 2 floats × 4 bytes = 32 bytes
-        ByteBuffer vertexData = ByteBuffer.allocateDirect(32);
+        // 3 vertices × 2 floats × 4 bytes = 24 bytes
+        ByteBuffer vertexData = ByteBuffer.allocateDirect(24);
         vertexData.order(ByteOrder.nativeOrder());
         vertexData.putFloat(-1.0f);
         vertexData.putFloat(-1.0f); // bottom-left
-        vertexData.putFloat(1.0f);
-        vertexData.putFloat(-1.0f); // bottom-right
-        vertexData.putFloat(1.0f);
-        vertexData.putFloat(1.0f); // top-right
+        vertexData.putFloat(3.0f);
+        vertexData.putFloat(-1.0f); // far right (clipped)
         vertexData.putFloat(-1.0f);
-        vertexData.putFloat(1.0f); // top-left
+        vertexData.putFloat(3.0f); // far top (clipped)
         vertexData.flip();
 
         this.quadVertexBuffer = new VertexBuffer(vertexData.remaining(), MemoryTypes.GPU_MEM);
         this.quadVertexBuffer.copyBuffer(vertexData, vertexData.remaining());
 
-        // 6 indices for 2 triangles
-        ByteBuffer indexData = ByteBuffer.allocateDirect(6 * 4);
-        indexData.order(ByteOrder.nativeOrder());
-        indexData.putInt(0);
-        indexData.putInt(1);
-        indexData.putInt(2);
-        indexData.putInt(2);
-        indexData.putInt(3);
-        indexData.putInt(0);
-        indexData.flip();
-
-        this.quadIndexBuffer = new IndexBuffer(indexData.remaining(), MemoryTypes.GPU_MEM,
-                IndexBuffer.IndexType.UINT32);
-        this.quadIndexBuffer.copyBuffer(indexData, indexData.remaining());
+        // No index buffer needed for 3-vertex draw
     }
 
     /**
@@ -134,22 +129,30 @@ public class DhCompositePipeline {
         Pipeline.Builder builder = new Pipeline.Builder(QUAD_FORMAT);
         builder.compileShaders("dh_composite", vertSource, fragSource);
 
-        // UBOs — we need an empty UBO at binding 0 because VulkanMod expects
-        // at least one UBO in the descriptor set layout.
+        // UBO at binding 0: mat4 uInvProj (64 bytes) + int uDebugMode (4 bytes)
         List<UBO> ubos = new ArrayList<>();
         AlignedStruct.Builder uboBuilder = new AlignedStruct.Builder();
-        Uniform.Info dummyInfo = Uniform.createUniformInfo("float", "_unused", 1);
-        MappedBuffer dummyBuf = new MappedBuffer(4);
-        dummyBuf.putFloat(0, 0.0f);
-        dummyInfo.setBufferSupplier(() -> dummyBuf);
-        uboBuilder.addUniformInfo(dummyInfo);
+
+        this.invProjBuf = new MappedBuffer(64);
+        Uniform.Info invProjInfo = Uniform.createUniformInfo("matrix4x4", "uInvProj", 1);
+        invProjInfo.setBufferSupplier(() -> this.invProjBuf);
+        uboBuilder.addUniformInfo(invProjInfo);
+
+        this.debugModeBuf = new MappedBuffer(4);
+        this.debugModeBuf.putInt(0, 0);
+        Uniform.Info debugModeInfo = Uniform.createUniformInfo("int", "uDebugMode", 1);
+        debugModeInfo.setBufferSupplier(() -> this.debugModeBuf);
+        uboBuilder.addUniformInfo(debugModeInfo);
+
         UBO mainUbo = uboBuilder.buildUBO(0, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT);
         ubos.add(mainUbo);
 
-        // Image descriptors — DH color at binding 1, DH depth at binding 2
+        // Image descriptors — DH color/depth + SSAO/fog debug textures
         List<ImageDescriptor> imageDescriptors = new ArrayList<>();
         imageDescriptors.add(new ImageDescriptor(1, "sampler2D", "gDhColorTexture", DH_COLOR_TEXTURE_SLOT));
         imageDescriptors.add(new ImageDescriptor(2, "sampler2D", "gDhDepthTexture", DH_DEPTH_TEXTURE_SLOT));
+        imageDescriptors.add(new ImageDescriptor(3, "sampler2D", "gSsaoTexture", DEBUG_SSAO_TEXTURE_SLOT));
+        imageDescriptors.add(new ImageDescriptor(4, "sampler2D", "gFogTexture", DEBUG_FOG_TEXTURE_SLOT));
 
         builder.setUniforms(ubos, imageDescriptors);
         this.compositePipeline = builder.createGraphicsPipeline();
@@ -160,36 +163,76 @@ public class DhCompositePipeline {
      * is active and after binding DH's framebuffer textures to the
      * VTextureSelector slots.
      */
-    public void render(VulkanImage dhColorTexture, VulkanImage dhDepthTexture) {
+    public void render(VulkanImage dhColorTexture, VulkanImage dhDepthTexture,
+            VulkanImage ssaoTexture, VulkanImage fogTexture,
+            int debugMode, float[] invProjMatrix) {
         if (!this.initialized) {
             return;
+        }
+
+        // Update uniforms
+        this.debugModeBuf.putInt(0, debugMode);
+        if (invProjMatrix != null && invProjMatrix.length == 16) {
+            for (int i = 0; i < 16; i++) {
+                this.invProjBuf.putFloat(i * 4, invProjMatrix[i]);
+            }
         }
 
         // Bind DH framebuffer textures to the expected slots
         VTextureSelector.bindTexture(DH_COLOR_TEXTURE_SLOT, dhColorTexture);
         VTextureSelector.bindTexture(DH_DEPTH_TEXTURE_SLOT, dhDepthTexture);
 
-        // Set pipeline state for composite: no blend, no cull, depth write
+        // Bind debug textures (SSAO and fog intermediates)
+        if (ssaoTexture != null) {
+            VTextureSelector.bindTexture(DEBUG_SSAO_TEXTURE_SLOT, ssaoTexture);
+        }
+        if (fogTexture != null) {
+            VTextureSelector.bindTexture(DEBUG_FOG_TEXTURE_SLOT, fogTexture);
+        }
+
+        // Set pipeline state for composite: premultiplied alpha blend, no cull, depth
+        // write
         boolean prevCull = VRenderSystem.cull;
         boolean prevDepthMask = VRenderSystem.depthMask;
         int prevDepthFun = VRenderSystem.depthFun;
         boolean prevBlend = PipelineState.blendInfo.enabled;
+        int prevSrcRgb = PipelineState.blendInfo.srcRgbFactor;
+        int prevDstRgb = PipelineState.blendInfo.dstRgbFactor;
+        int prevSrcAlpha = PipelineState.blendInfo.srcAlphaFactor;
+        int prevDstAlpha = PipelineState.blendInfo.dstAlphaFactor;
+        int prevBlendOp = PipelineState.blendInfo.blendOp;
 
         VRenderSystem.cull = false;
         VRenderSystem.depthMask = true;
-        VRenderSystem.depthFun = 515; // GL_LEQUAL — only write where DH depth ≤ MC depth
-        PipelineState.blendInfo.enabled = false;
+        VRenderSystem.depthFun = 519; // GL_ALWAYS — MC depth buffer has DONT_CARE garbage
+        // Premultiplied alpha blending: DH's color buffer is already
+        // alpha-premultiplied
+        // from DH's own transparent pass blending, so use ONE (not SRC_ALPHA) to avoid
+        // double-multiplication. This correctly composites transparent LODs (water)
+        // onto
+        // MC's sky, while opaque LODs (alpha=1) fully overwrite.
+        PipelineState.blendInfo.enabled = true;
+        PipelineState.blendInfo.srcRgbFactor = 1; // VK_BLEND_FACTOR_ONE
+        PipelineState.blendInfo.dstRgbFactor = 7; // VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA
+        PipelineState.blendInfo.srcAlphaFactor = 1; // VK_BLEND_FACTOR_ONE
+        PipelineState.blendInfo.dstAlphaFactor = 7; // VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA
+        PipelineState.blendInfo.blendOp = 0; // VK_BLEND_OP_ADD
 
         // Bind pipeline and draw
         Renderer.getInstance().bindGraphicsPipeline(this.compositePipeline);
         Renderer.getInstance().uploadAndBindUBOs(this.compositePipeline);
-        Renderer.getDrawer().drawIndexed(this.quadVertexBuffer, this.quadIndexBuffer, 6);
+        Renderer.getDrawer().draw(this.quadVertexBuffer, 3);
 
         // Restore state
         VRenderSystem.cull = prevCull;
         VRenderSystem.depthMask = prevDepthMask;
         VRenderSystem.depthFun = prevDepthFun;
         PipelineState.blendInfo.enabled = prevBlend;
+        PipelineState.blendInfo.srcRgbFactor = prevSrcRgb;
+        PipelineState.blendInfo.dstRgbFactor = prevDstRgb;
+        PipelineState.blendInfo.srcAlphaFactor = prevSrcAlpha;
+        PipelineState.blendInfo.dstAlphaFactor = prevDstAlpha;
+        PipelineState.blendInfo.blendOp = prevBlendOp;
     }
 
     public void cleanup() {
@@ -197,10 +240,7 @@ public class DhCompositePipeline {
             this.quadVertexBuffer.scheduleFree();
             this.quadVertexBuffer = null;
         }
-        if (this.quadIndexBuffer != null) {
-            this.quadIndexBuffer.scheduleFree();
-            this.quadIndexBuffer = null;
-        }
+
         if (this.compositePipeline != null) {
             this.compositePipeline.cleanUp();
             this.compositePipeline = null;

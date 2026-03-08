@@ -95,6 +95,8 @@ public class LodRenderer {
 	 * Vulkan rendering delegate, set by the fabric module when VulkanMod is active
 	 */
 	private IVulkanRenderDelegate vulkanDelegate = null;
+	/** Cached render params from the last endFrame(), used by deferredComposite */
+	private DhApiRenderParam lastVulkanRenderParams = null;
 
 	public void setVulkanDelegate(IVulkanRenderDelegate delegate) {
 		this.vulkanDelegate = delegate;
@@ -361,6 +363,8 @@ public class LodRenderer {
 			lodShaderProgram.unbind();
 		} else {
 			this.vulkanDelegate.endFrame(renderParams);
+			// Store params for the deferred composite call
+			this.lastVulkanRenderParams = renderParams;
 		}
 
 		// end of internal LOD profiling
@@ -368,6 +372,18 @@ public class LodRenderer {
 	}
 
 	// endregion
+
+	/**
+	 * Called AFTER MC finishes rendering all terrain layers (opaque + translucent).
+	 * Composites DH's framebuffer onto MC's render target with correct depth
+	 * testing.
+	 */
+	public void compositeVulkanFrame() {
+		if (this.vulkanDelegate != null && this.lastVulkanRenderParams != null) {
+			this.vulkanDelegate.deferredComposite(this.lastVulkanRenderParams);
+			this.lastVulkanRenderParams = null;
+		}
+	}
 
 	// =================//
 	// Setup Functions //

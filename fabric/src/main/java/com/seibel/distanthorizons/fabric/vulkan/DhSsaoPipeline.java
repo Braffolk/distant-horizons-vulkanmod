@@ -18,7 +18,7 @@ import net.vulkanmod.vulkan.VRenderSystem;
 import net.vulkanmod.vulkan.framebuffer.Framebuffer;
 import net.vulkanmod.vulkan.framebuffer.RenderPass;
 import net.vulkanmod.vulkan.memory.MemoryTypes;
-import net.vulkanmod.vulkan.memory.buffer.IndexBuffer;
+
 import net.vulkanmod.vulkan.memory.buffer.VertexBuffer;
 import net.vulkanmod.vulkan.shader.GraphicsPipeline;
 import net.vulkanmod.vulkan.shader.Pipeline;
@@ -97,7 +97,6 @@ public class DhSsaoPipeline {
 
     // Shared fullscreen quad buffers
     private VertexBuffer quadVertexBuffer;
-    private IndexBuffer quadIndexBuffer;
 
     // Uniform buffers for pass 1 (occlusion computation)
     private final Map<String, MappedBuffer> pass1Uniforms = new HashMap<>();
@@ -136,36 +135,20 @@ public class DhSsaoPipeline {
     // ==================== //
 
     private void createQuadBuffers() {
-        // 4 vertices × 2 floats × 4 bytes = 32 bytes
-        ByteBuffer vertexData = ByteBuffer.allocateDirect(32);
+        // Dummy vertex buffer — actual positions come from gl_VertexIndex in shader.
+        // 3 vertices × 2 floats × 4 bytes = 24 bytes
+        ByteBuffer vertexData = ByteBuffer.allocateDirect(24);
         vertexData.order(ByteOrder.nativeOrder());
-        vertexData.putFloat(-1.0f);
-        vertexData.putFloat(-1.0f); // bottom-left
-        vertexData.putFloat(1.0f);
-        vertexData.putFloat(-1.0f); // bottom-right
-        vertexData.putFloat(1.0f);
-        vertexData.putFloat(1.0f); // top-right
-        vertexData.putFloat(-1.0f);
-        vertexData.putFloat(1.0f); // top-left
+        vertexData.putFloat(0);
+        vertexData.putFloat(0);
+        vertexData.putFloat(0);
+        vertexData.putFloat(0);
+        vertexData.putFloat(0);
+        vertexData.putFloat(0);
         vertexData.flip();
 
         this.quadVertexBuffer = new VertexBuffer(vertexData.remaining(), MemoryTypes.GPU_MEM);
         this.quadVertexBuffer.copyBuffer(vertexData, vertexData.remaining());
-
-        // 6 indices for 2 triangles
-        ByteBuffer indexData = ByteBuffer.allocateDirect(6 * 4);
-        indexData.order(ByteOrder.nativeOrder());
-        indexData.putInt(0);
-        indexData.putInt(1);
-        indexData.putInt(2);
-        indexData.putInt(2);
-        indexData.putInt(3);
-        indexData.putInt(0);
-        indexData.flip();
-
-        this.quadIndexBuffer = new IndexBuffer(indexData.remaining(), MemoryTypes.GPU_MEM,
-                IndexBuffer.IndexType.UINT32);
-        this.quadIndexBuffer.copyBuffer(indexData, indexData.remaining());
     }
 
     // ========================== //
@@ -318,7 +301,7 @@ public class DhSsaoPipeline {
 
         Renderer.getInstance().bindGraphicsPipeline(this.ssaoComputePipeline);
         Renderer.getInstance().uploadAndBindUBOs(this.ssaoComputePipeline);
-        Renderer.getDrawer().drawIndexed(this.quadVertexBuffer, this.quadIndexBuffer, 6);
+        Renderer.getDrawer().draw(this.quadVertexBuffer, 3);
 
         // End SSAO render pass — transitions SSAO texture to SHADER_READ_ONLY
         Renderer.getInstance().endRenderPass();
@@ -363,7 +346,7 @@ public class DhSsaoPipeline {
 
         Renderer.getInstance().bindGraphicsPipeline(this.ssaoApplyPipeline);
         Renderer.getInstance().uploadAndBindUBOs(this.ssaoApplyPipeline);
-        Renderer.getDrawer().drawIndexed(this.quadVertexBuffer, this.quadIndexBuffer, 6);
+        Renderer.getDrawer().draw(this.quadVertexBuffer, 3);
 
         Renderer.getInstance().endRenderPass();
 
@@ -412,15 +395,19 @@ public class DhSsaoPipeline {
     // Cleanup //
     // ========== //
 
+    /**
+     * Returns the intermediate SSAO texture for debug visualization. May be null.
+     */
+    public VulkanImage getIntermediateTexture() {
+        return this.ssaoFramebuffer != null ? this.ssaoFramebuffer.getColorAttachment() : null;
+    }
+
     public void cleanup() {
         if (this.quadVertexBuffer != null) {
             this.quadVertexBuffer.scheduleFree();
             this.quadVertexBuffer = null;
         }
-        if (this.quadIndexBuffer != null) {
-            this.quadIndexBuffer.scheduleFree();
-            this.quadIndexBuffer = null;
-        }
+
         if (this.ssaoComputePipeline != null) {
             this.ssaoComputePipeline.cleanUp();
             this.ssaoComputePipeline = null;

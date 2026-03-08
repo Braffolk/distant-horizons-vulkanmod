@@ -98,6 +98,10 @@ dependencies {
 
     // VulkanMod - compile-only dependency for native Vulkan rendering backend
     modCompileOnly files("${rootDir}/vulkanmod/VulkanMod_1.21.11-0.6.1.jar")
+    // LWJGL vulkan types (VkCommandBuffer, MemoryStack) are surfaced by VulkanMod's
+    // API and needed at compile time. Already present at runtime via VulkanMod.
+    compileOnly "org.lwjgl:lwjgl:3.3.4"
+    compileOnly "org.lwjgl:lwjgl-vulkan:3.3.4"
 }
 
 private static boolean buildVersionBefore(String minecraft_version, String compareVersion)
