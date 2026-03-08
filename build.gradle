@@ -140,6 +140,9 @@ class NativeTransformer implements Transformer {
 }
 
 subprojects { p ->
+    // Skip the vulkan extension mod — it manages its own build independently
+    if (p == project(":vulkan")) return
+
     // Does the same as "p == project(":common") || p == project(":fabric") || p == project(":quilt")  || p == project(":forge") || p == project("WhateverWeAddLaterOn")"
     // Useful later on so we dont have duplicated code
     def isMinecraftSubProject = p != project(":core") && p != project(":api")
@@ -522,6 +525,9 @@ subprojects { p ->
 }
 
 allprojects { p ->
+    // Skip the vulkan extension mod — it manages its own build independently
+    if (p == project(":vulkan")) return
+
     // Does the same as "p == project(":common") || p == project(":fabric") || p == project(":quilt")  || p == project(":forge") || p == project("WhateverWeAddLaterOn")"
     // Useful later on so we dont have duplicated code
     def isMinecraftSubProject = p != project(":core") && p != project(":api")

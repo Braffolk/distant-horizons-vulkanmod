@@ -151,4 +151,7 @@ for (loader in ((String) gradle.builds_for).split(",")) {
 }
 
 
+// Vulkan extension mod (standalone Fabric mod that depends on DH + VulkanMod)
+include("vulkan")
+
 rootProject.name = "DistantHorizons"

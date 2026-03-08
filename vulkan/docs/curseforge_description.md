@@ -1,7 +1,5 @@
 # Distant Horizons — VulkanMod Port
 
-![alt text](https://github.com/Braffolk/distant-horizons-vulkanmod/raw/main/docs/dh-vulkanmod.jpg)
-
 A modified build of [Distant Horizons](https://www.curseforge.com/minecraft/mc-mods/distant-horizons) ([Modrinth](https://modrinth.com/mod/distanthorizons)) that works with [VulkanMod](https://github.com/xCollateral/VulkanMod). Renders LOD terrain through VulkanMod's Vulkan backend instead of OpenGL.
 
 **What works:**

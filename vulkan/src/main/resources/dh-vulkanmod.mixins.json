@@ -1,0 +1,17 @@
+{
+    "required": true,
+    "package": "com.braffolk.dhvulkan.mixin",
+    "compatibilityLevel": "JAVA_21",
+    "client": [
+        "MixinGLProxy",
+        "MixinGLState",
+        "MixinGLBuffer",
+        "MixinGLVertexBuffer",
+        "MixinLodRenderer",
+        "MixinLodBufferContainer",
+        "MixinLevelRenderer"
+    ],
+    "injectors": {
+        "defaultRequire": 1
+    }
+}
