@@ -46,3 +46,4 @@ build.properties
 accesstransformer.cfg
 vulkanmod/
 docs/handoff*
+jars/
