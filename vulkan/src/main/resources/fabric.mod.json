@@ -17,9 +17,6 @@
     "icon": "assets/dh-vulkanmod/icon.png",
     "environment": "client",
     "entrypoints": {
-        "preLaunch": [
-            "com.braffolk.dhvulkan.DhVulkanPreLaunch"
-        ],
         "client": [
             "com.braffolk.dhvulkan.DhVulkanModEntrypoint"
         ]
