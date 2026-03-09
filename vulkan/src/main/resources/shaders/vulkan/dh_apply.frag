@@ -6,13 +6,15 @@ layout(location = 0) out vec4 fragColor;
 // UBO at binding 0
 layout(std140, binding = 0) uniform CompositeUBO {
     mat4 uInvProj;    // inverse projection matrix for depth reconstruction
-    int uDebugMode;   // 0=off, 1=depth, 2=ssao, 3=fog_alpha, 4=fog_color, 5=normals
+    int uDebugMode;   // 0=off, 1=depth, 2=ssao, 3=fog_alpha, 4=fog_color, 5=normals, 6=mc_depth
+    int uUseMcDepth;  // 0=no MC depth comparison, 1=discard where MC terrain is closer
 };
 
 layout(set = 0, binding = 1) uniform sampler2D gDhColorTexture;
 layout(set = 0, binding = 2) uniform sampler2D gDhDepthTexture;
 layout(set = 0, binding = 3) uniform sampler2D gSsaoTexture;
 layout(set = 0, binding = 4) uniform sampler2D gFogTexture;
+layout(set = 0, binding = 5) uniform sampler2D gMcDepthTexture;
 
 /**
  * Reconstruct view-space position from depth using inverse projection.
@@ -40,6 +42,18 @@ void main() {
     // Nothing drawn by DH here
     if (dhDepth >= 1.0) {
         discard;
+    }
+
+    // MC depth comparison: if MC rendered terrain at this pixel, discard the LOD.
+    // We check if mcDepth < 0.9999 rather than comparing DH vs MC depth values
+    // directly, because DH and MC use different projection matrices (different
+    // near/far planes), making their raw depth values non-comparable.
+    // Where MC rendered nothing (sky, unloaded chunks), depth stays at 1.0.
+    if (uUseMcDepth != 0) {
+        float mcDepth = texture(gMcDepthTexture, TexCoord).r;
+        if (mcDepth < 0.9999) {
+            discard;  // MC terrain exists here → hide LOD
+        }
     }
 
     if (uDebugMode == 0) {
@@ -73,13 +87,17 @@ void main() {
         // Reconstructed normals from depth
         fragColor = vec4(reconstructNormal(TexCoord, dhDepth), 1.0);
     }
+    else if (uDebugMode == 6) {
+        // MC depth visualization (debug) — linearized for visibility
+        float mcDepth = texture(gMcDepthTexture, TexCoord).r;
+        // Exaggerate differences: pow makes near-1.0 values more visible
+        float vis = 1.0 - pow(mcDepth, 256.0);
+        fragColor = vec4(vis, vis, vis, 1.0);
+    }
     else {
         fragColor = texture(gDhColorTexture, TexCoord);
     }
 
-    // Bias DH depth behind MC terrain so MC always wins the depth test.
-    // 0.001 is large enough to prevent LOD fragments from leaking through at
-    // block edges and leaf boundaries, yet small enough to avoid visible
-    // "popping" at distant LOD transitions.
+    // Bias DH depth behind MC terrain to prevent Z-fighting.
     gl_FragDepth = min(dhDepth + 0.001, 1.0);
 }

@@ -267,6 +267,22 @@ public final class Compat {
         #endif
     }
 
+    // ========================= //
+    // Swapchain access //
+    // ========================= //
+
+    /**
+     * Get MC's swapchain depth attachment for depth-compared compositing.
+     * Returns the VulkanImage backing MC's depth buffer.
+     */
+    public static VulkanImage getSwapChainDepthAttachment() {
+        #if MC_VER >= MC_1_21_1
+        return Renderer.getInstance().getSwapChain().getDepthAttachment();
+        #else
+        return net.vulkanmod.vulkan.Vulkan.getSwapChain().getDepthAttachment();
+        #endif
+    }
+
     private Compat() {
     }
 }

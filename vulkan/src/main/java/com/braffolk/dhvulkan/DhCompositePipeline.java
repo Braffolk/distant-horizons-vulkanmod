@@ -58,6 +58,10 @@ public class DhCompositePipeline {
     static final int DEBUG_SSAO_TEXTURE_SLOT = 5;
     /** VTextureSelector slot for fog intermediate texture (debug) */
     static final int DEBUG_FOG_TEXTURE_SLOT = 6;
+    /**
+     * VTextureSelector slot for MC's depth texture (for depth-compared composite)
+     */
+    static final int MC_DEPTH_TEXTURE_SLOT = 7;
 
     private GraphicsPipeline compositePipeline;
     private Object quadVertexBuffer;
@@ -67,6 +71,7 @@ public class DhCompositePipeline {
     // Persistent uniform buffers
     private MappedBuffer invProjBuf;
     private MappedBuffer debugModeBuf;
+    private MappedBuffer useMcDepthBuf;
 
     /**
      * Simple vertex format for the fullscreen quad: just vec2 position.
@@ -127,7 +132,8 @@ public class DhCompositePipeline {
         Pipeline.Builder builder = new Pipeline.Builder(QUAD_FORMAT);
         builder.compileShaders("dh_composite", vertSource, fragSource);
 
-        // UBO at binding 0: mat4 uInvProj (64 bytes) + int uDebugMode (4 bytes)
+        // UBO at binding 0: mat4 uInvProj (64 bytes) + int uDebugMode (4 bytes) + int
+        // uUseMcDepth (4 bytes)
         List<UBO> ubos = new ArrayList<>();
         AlignedStruct.Builder uboBuilder = new AlignedStruct.Builder();
 
@@ -138,18 +144,24 @@ public class DhCompositePipeline {
         this.debugModeBuf.putInt(0, 0);
         Compat.addUniformWithBuffer(uboBuilder, "int", "uDebugMode", 1, () -> this.debugModeBuf);
 
+        this.useMcDepthBuf = new MappedBuffer(4);
+        this.useMcDepthBuf.putInt(0, 0);
+        Compat.addUniformWithBuffer(uboBuilder, "int", "uUseMcDepth", 1, () -> this.useMcDepthBuf);
+
         UBO mainUbo = uboBuilder.buildUBO(0, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT);
         Compat.setUniformSuppliers(mainUbo, java.util.Map.of(
                 "uInvProj", this.invProjBuf,
-                "uDebugMode", this.debugModeBuf));
+                "uDebugMode", this.debugModeBuf,
+                "uUseMcDepth", this.useMcDepthBuf));
         ubos.add(mainUbo);
 
-        // Image descriptors — DH color/depth + SSAO/fog debug textures
+        // Image descriptors — DH color/depth + SSAO/fog debug + MC depth
         List<ImageDescriptor> imageDescriptors = new ArrayList<>();
         imageDescriptors.add(new ImageDescriptor(1, "sampler2D", "gDhColorTexture", DH_COLOR_TEXTURE_SLOT));
         imageDescriptors.add(new ImageDescriptor(2, "sampler2D", "gDhDepthTexture", DH_DEPTH_TEXTURE_SLOT));
         imageDescriptors.add(new ImageDescriptor(3, "sampler2D", "gSsaoTexture", DEBUG_SSAO_TEXTURE_SLOT));
         imageDescriptors.add(new ImageDescriptor(4, "sampler2D", "gFogTexture", DEBUG_FOG_TEXTURE_SLOT));
+        imageDescriptors.add(new ImageDescriptor(5, "sampler2D", "gMcDepthTexture", MC_DEPTH_TEXTURE_SLOT));
 
         builder.setUniforms(ubos, imageDescriptors);
         this.compositePipeline = builder.createGraphicsPipeline();
@@ -159,9 +171,15 @@ public class DhCompositePipeline {
      * Draws the fullscreen composite quad. Must be called while MC's render pass
      * is active and after binding DH's framebuffer textures to the
      * VTextureSelector slots.
+     *
+     * @param mcDepthTexture MC's depth attachment for depth comparison, or null to
+     *                       skip.
+     *                       When non-null, LOD fragments are discarded where MC
+     *                       terrain is closer.
      */
     public void render(VulkanImage dhColorTexture, VulkanImage dhDepthTexture,
             VulkanImage ssaoTexture, VulkanImage fogTexture,
+            VulkanImage mcDepthTexture,
             int debugMode, float[] invProjMatrix) {
         if (!this.initialized) {
             return;
@@ -169,6 +187,7 @@ public class DhCompositePipeline {
 
         // Update uniforms
         this.debugModeBuf.putInt(0, debugMode);
+        this.useMcDepthBuf.putInt(0, mcDepthTexture != null ? 1 : 0);
         if (invProjMatrix != null && invProjMatrix.length == 16) {
             for (int i = 0; i < 16; i++) {
                 this.invProjBuf.putFloat(i * 4, invProjMatrix[i]);
@@ -187,6 +206,11 @@ public class DhCompositePipeline {
             VTextureSelector.bindTexture(DEBUG_FOG_TEXTURE_SLOT, fogTexture);
         }
 
+        // Bind MC depth texture for depth comparison (if available)
+        if (mcDepthTexture != null) {
+            VTextureSelector.bindTexture(MC_DEPTH_TEXTURE_SLOT, mcDepthTexture);
+        }
+
         // Set pipeline state for composite: premultiplied alpha blend, no cull, depth
         // write
         boolean prevCull = VRenderSystem.cull;
@@ -201,13 +225,13 @@ public class DhCompositePipeline {
 
         VRenderSystem.cull = false;
         VRenderSystem.depthMask = true;
-        VRenderSystem.depthFun = 519; // GL_ALWAYS — MC depth buffer has DONT_CARE garbage
+        // When using MC depth comparison, use GL_ALWAYS since the shader handles
+        // depth testing via the MC depth texture. Without MC depth, also use
+        // GL_ALWAYS because MC's depth buffer is uninitialized at this point.
+        VRenderSystem.depthFun = 519; // GL_ALWAYS
         // Premultiplied alpha blending: DH's color buffer is already
-        // alpha-premultiplied
-        // from DH's own transparent pass blending, so use ONE (not SRC_ALPHA) to avoid
-        // double-multiplication. This correctly composites transparent LODs (water)
-        // onto
-        // MC's sky, while opaque LODs (alpha=1) fully overwrite.
+        // alpha-premultiplied from DH's own transparent pass blending,
+        // so use ONE (not SRC_ALPHA) to avoid double-multiplication.
         PipelineState.blendInfo.enabled = true;
         PipelineState.blendInfo.srcRgbFactor = 1; // VK_BLEND_FACTOR_ONE
         PipelineState.blendInfo.dstRgbFactor = 7; // VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA

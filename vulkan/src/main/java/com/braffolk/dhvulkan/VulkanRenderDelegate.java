@@ -264,13 +264,33 @@ public class VulkanRenderDelegate implements IVulkanRenderDelegate {
         }
         this.renderContext.setUniformFloat("uEarthRadius", curveRatio);
 
-        // Clip distance — small fixed value for the Vulkan path.
-        // Since we composite LODs BEFORE MC terrain renders, MC's own depth
-        // test naturally overwrites LODs wherever MC has loaded chunks.
-        // However, at close range, leaf cutout transparency creates holes
-        // where LODs shine through. A 12-block clip distance hides this
-        // while preserving full gap-filling beyond that radius.
-        this.renderContext.setUniformFloat("uClipDistance", 7.0f);
+        // Clip distance — matches DH's default overdraw prevention logic.
+        // Config value < 0 = auto mode (tiered by render distance), ≥ 0 = manual.
+        // We skip DH's FOV correction as it's designed for their GL fade renderer.
+        int renderDistChunks = Minecraft.getInstance().options.getEffectiveRenderDistance();
+        float overdrawConfig = ((Number) Config.Client.Advanced.Graphics.Culling.overdrawPrevention.get()).floatValue();
+        float overdraw;
+        if (overdrawConfig <= 0) {
+            // Auto: scale by render distance (same tiers as DH)
+            if (renderDistChunks <= 2)
+                overdraw = 0.2f;
+            else if (renderDistChunks <= 4)
+                overdraw = 0.3f;
+            else if (renderDistChunks <= 6)
+                overdraw = 0.6f;
+            else if (renderDistChunks <= 10)
+                overdraw = 0.8f;
+            else
+                overdraw = 0.9f;
+        } else {
+            overdraw = Math.max(0.05f, Math.min(overdrawConfig, 1.0f));
+        }
+        float clipDist = renderDistChunks * 16.0f * overdraw;
+        if (this.debugFrameCount >= 60 && this.debugFrameCount <= 62) {
+            LOGGER.info("[DH-Vulkan] clipDist={}, renderDistChunks={}, overdrawConfig={}, overdraw={}",
+                    clipDist, renderDistChunks, overdrawConfig, overdraw);
+        }
+        this.renderContext.setUniformFloat("uClipDistance", clipDist);
 
         // Dither
         this.renderContext.setUniformBool("uDitherDhRendering",
@@ -451,16 +471,83 @@ public class VulkanRenderDelegate implements IVulkanRenderDelegate {
             }
         }
 
-        // Composite DH's framebuffer onto MC's render target BEFORE MC renders
-        // terrain. This is the correct ordering because:
-        // 1. MC's depth buffer is still ~1.0 here → all LODs pass depth test
-        // 2. LOD depth is written into MC's depth buffer
-        // 3. MC opaque terrain then renders ON TOP (MC depth < LOD depth → overwrites)
-        // 4. MC transparent terrain (water) renders ON TOP with alpha blending,
-        // so LODs are visible through water — exactly like vanilla MC rendering
+        // Composite routing based on vanillaFadeMode:
+        // NONE: composite now (before MC terrain) — fast, visible border at clip
+        // distance
+        // SINGLE_PASS / DOUBLE_PASS: defer to deferredComposite() (after MC terrain)
+        // where we can compare against MC's depth buffer for per-pixel correct overlap
+        com.seibel.distanthorizons.api.enums.config.EDhApiMcRenderingFadeMode fadeMode = Config.Client.Advanced.Graphics.Quality.vanillaFadeMode
+                .get();
+
         Renderer.getInstance().endRenderPass();
         ((DefaultMainPass) Renderer.getInstance().getMainPass()).rebindMainTarget();
 
+        if (fadeMode == com.seibel.distanthorizons.api.enums.config.EDhApiMcRenderingFadeMode.NONE) {
+            // NONE mode: composite immediately without MC depth comparison.
+            // MC terrain renders after this and overwrites via depth test.
+            this.runComposite(renderParam, null);
+        }
+        // else: SINGLE_PASS / DOUBLE_PASS — deferredComposite() will handle it
+
+        // Restore VulkanMod render state (so MC can render normally after this)
+        VRenderSystem.cull = this.savedCullState;
+        VRenderSystem.depthMask = this.savedDepthMask;
+        VRenderSystem.depthFun = this.savedDepthFun;
+        VRenderSystem.topology = this.savedTopology;
+        VRenderSystem.polygonMode = this.savedPolygonMode;
+        PipelineState.blendInfo.enabled = this.savedBlendEnabled;
+        PipelineState.blendInfo.srcRgbFactor = this.savedBlendSrcRgb;
+        PipelineState.blendInfo.dstRgbFactor = this.savedBlendDstRgb;
+        PipelineState.blendInfo.srcAlphaFactor = this.savedBlendSrcAlpha;
+        PipelineState.blendInfo.dstAlphaFactor = this.savedBlendDstAlpha;
+        PipelineState.blendInfo.blendOp = this.savedBlendOp;
+    }
+
+    @Override
+    public void deferredComposite(DhApiRenderParam renderParam) {
+        // SINGLE_PASS and DOUBLE_PASS: composite AFTER MC terrain has rendered,
+        // using MC's depth buffer for per-pixel depth comparison.
+        // This prevents LODs from showing through loaded chunks and transparent blocks.
+        com.seibel.distanthorizons.api.enums.config.EDhApiMcRenderingFadeMode fadeMode = Config.Client.Advanced.Graphics.Quality.vanillaFadeMode
+                .get();
+
+        if (fadeMode == com.seibel.distanthorizons.api.enums.config.EDhApiMcRenderingFadeMode.NONE) {
+            return; // Already composited in endFrame()
+        }
+
+        try {
+            // Get MC's depth buffer from the swapchain.
+            // At this point MC has finished rendering terrain, so the depth buffer
+            // contains valid depth values for all loaded chunks and blocks.
+            VulkanImage mcDepth = Compat.getSwapChainDepthAttachment();
+
+            // End MC's current render pass so we can bind the depth attachment as a
+            // texture.
+            // The depth image was created with VK_IMAGE_USAGE_SAMPLED_BIT so this is valid.
+            Renderer.getInstance().endRenderPass();
+            ((DefaultMainPass) Renderer.getInstance().getMainPass()).rebindMainTarget();
+
+            this.runComposite(renderParam, mcDepth);
+        } catch (Exception e) {
+            LOGGER.error("[DH-Vulkan] Deferred composite with MC depth failed, falling back to no-depth composite", e);
+            // Fallback: composite without MC depth comparison
+            try {
+                Renderer.getInstance().endRenderPass();
+                ((DefaultMainPass) Renderer.getInstance().getMainPass()).rebindMainTarget();
+                this.runComposite(renderParam, null);
+            } catch (Exception e2) {
+                LOGGER.error("[DH-Vulkan] Fallback composite also failed", e2);
+            }
+        }
+    }
+
+    /**
+     * Shared composite logic. Renders DH's framebuffer onto MC's render target.
+     *
+     * @param mcDepthTexture MC's depth attachment for per-pixel depth comparison,
+     *                       or null to skip.
+     */
+    private void runComposite(DhApiRenderParam renderParam, VulkanImage mcDepthTexture) {
         if (this.compositePipeline != null && this.dhFramebuffer != null) {
             int debugMode = DhVulkanConfig.get().vulkanDebugMode ? 1 : 0;
             VulkanImage ssaoTex = this.ssaoPipeline != null ? this.ssaoPipeline.getIntermediateTexture() : null;
@@ -479,28 +566,9 @@ public class VulkanRenderDelegate implements IVulkanRenderDelegate {
                     this.dhFramebuffer.getFramebuffer().getColorAttachment(),
                     this.dhFramebuffer.getFramebuffer().getDepthAttachment(),
                     ssaoTex, fogTex,
+                    mcDepthTexture,
                     debugMode, invProjArray);
         }
-
-        // Restore VulkanMod render state (so MC can render normally after this)
-        VRenderSystem.cull = this.savedCullState;
-        VRenderSystem.depthMask = this.savedDepthMask;
-        VRenderSystem.depthFun = this.savedDepthFun;
-        VRenderSystem.topology = this.savedTopology;
-        VRenderSystem.polygonMode = this.savedPolygonMode;
-        PipelineState.blendInfo.enabled = this.savedBlendEnabled;
-        PipelineState.blendInfo.srcRgbFactor = this.savedBlendSrcRgb;
-        PipelineState.blendInfo.dstRgbFactor = this.savedBlendDstRgb;
-        PipelineState.blendInfo.srcAlphaFactor = this.savedBlendSrcAlpha;
-        PipelineState.blendInfo.dstAlphaFactor = this.savedBlendDstAlpha;
-        PipelineState.blendInfo.blendOp = this.savedBlendOp;
-    }
-
-    @Override
-    public void deferredComposite(DhApiRenderParam renderParam) {
-        // No-op: composite now happens in endFrame() BEFORE MC terrain rendering.
-        // This ensures MC opaque terrain overwrites LODs via depth test, and MC
-        // transparent terrain (water, leaves) blends on top of LODs correctly.
     }
 
     @Override
