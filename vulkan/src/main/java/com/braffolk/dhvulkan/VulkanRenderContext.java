@@ -141,17 +141,13 @@ public class VulkanRenderContext {
     // ======================//
 
     /**
-     * Creates the terrain rendering pipeline from DH's GLSL shaders.
-     * Compiles standard.vert and flat_shaded.frag to SPIR-V.
-     * Sets up persistent MappedBuffer uniforms with custom suppliers.
+     * Creates the terrain rendering pipeline from native Vulkan GLSL 450 shaders.
+     * These are self-contained — no conversion from DH's GL shaders needed.
      */
     private GraphicsPipeline createTerrainPipeline() {
 
-        String vertSource = readShaderResource("shaders/standard.vert");
-        String fragSource = readShaderResource("shaders/flat_shaded.frag");
-
-        vertSource = convertGlslForVulkan(vertSource, true);
-        fragSource = convertGlslForVulkan(fragSource, false);
+        String vertSource = readShaderResource("shaders/vulkan/dh_terrain.vert");
+        String fragSource = readShaderResource("shaders/vulkan/dh_terrain.frag");
 
         Pipeline.Builder builder = new Pipeline.Builder(DH_TERRAIN_FORMAT);
         builder.compileShaders("dh_terrain", vertSource, fragSource);
@@ -347,111 +343,5 @@ public class VulkanRenderContext {
         } catch (Exception e) {
             throw new RuntimeException("[DH-Vulkan] Failed to read shader: " + path, e);
         }
-    }
-
-    /**
-     * Convert DH's GLSL 1.50 shaders to GLSL 4.50 for Vulkan/SPIR-V compilation.
-     * Key changes:
-     * - Version 150 → 450
-     * - Add layout(location=N) qualifiers to inputs/outputs
-     * - Convert individual uniforms to a UBO block
-     * - Convert sampler to descriptor set binding
-     * - Change uvec4 vPosition → ivec4 (matches VK_FORMAT_R16G16B16A16_SINT)
-     * and add uvec4 cast for unsigned bitwise operations
-     */
-    static String convertGlslForVulkan(String source, boolean isVertex) {
-        source = source.replace("#version 150 core", "#version 450");
-        source = source.replace("#version 150", "#version 450");
-
-        if (isVertex) {
-            // Change uvec4 → ivec4 to match VK_FORMAT_R16G16B16A16_SINT from vertex format
-            source = source.replaceFirst("in uvec4 vPosition;",
-                    "layout(location = 0) in ivec4 vPosition;");
-            source = source.replaceFirst("in vec4 color;",
-                    "layout(location = 1) in vec4 color;");
-
-            source = source.replaceFirst("out vec4 vPos;", "layout(location = 0) out vec4 vPos;");
-            source = source.replaceFirst("out vec4 vertexColor;", "layout(location = 1) out vec4 vertexColor;");
-            source = source.replaceFirst("out vec3 vertexWorldPos;", "layout(location = 2) out vec3 vertexWorldPos;");
-            source = source.replaceFirst("out float vertexYPos;", "layout(location = 3) out float vertexYPos;");
-
-            // In main(), add a uvec4 conversion and fix type casts:
-            // ivec4 → vec4 for vPos, ivec4 → vec3/float for worldPos/yPos
-            source = source.replace("vPos = vPosition;",
-                    "uvec4 uVPosition = uvec4(vPosition);\n    vPos = vec4(vPosition);");
-            source = source.replace("vertexWorldPos = vPosition.xyz", "vertexWorldPos = vec3(vPosition.xyz)");
-            source = source.replace("vertexYPos = vPosition.y", "vertexYPos = float(vPosition.y)");
-            source = source.replace("uint meta = vPosition.a;", "uint meta = uVPosition.a;");
-
-            // Lightmap lookup: VulkanMod uses texelFetch with integer coords, not texture()
-            // with normalized UVs. Replace individual lines to avoid whitespace mismatch.
-            // VulkanMod convention: texelFetch(lightMap, ivec2(blockLight, skyLight), 0)
-            source = source.replace(
-                    "float skyLight = (float(lights/16u)+0.5) / 16.0;",
-                    "int iSkyLight = int(lights / 16u);");
-            source = source.replace(
-                    "float blockLight = (mod(float(lights), 16.0)+0.5) / 16.0;",
-                    "int iBlockLight = int(lights) & 0xF;");
-            source = source.replace(
-                    "vec4(texture(uLightMap, vec2(skyLight, blockLight)).xyz, 1.0)",
-                    "vec4(texelFetch(uLightMap, ivec2(iSkyLight, iBlockLight), 0).rgb, 1.0)");
-        } else {
-            source = source.replaceFirst("in vec4 vPos;", "layout(location = 0) in vec4 vPos;");
-            source = source.replaceFirst("in vec4 vertexColor;", "layout(location = 1) in vec4 vertexColor;");
-            source = source.replaceFirst("in vec3 vertexWorldPos;", "layout(location = 2) in vec3 vertexWorldPos;");
-
-            // gl_FragCoord is a built-in in GLSL 4.50; remove the redeclaration
-            source = source.replace("in vec4 gl_FragCoord;", "");
-
-            source = source.replaceFirst("out vec4 fragColor;", "layout(location = 0) out vec4 fragColor;");
-        }
-
-        // CRITICAL: Both vertex and fragment shaders MUST have the SAME UBO layout
-        // because they share the same descriptor set (binding=0). We hardcode the
-        // complete UBO with ALL uniforms in the same order.
-        String fullUboBlock = "layout(set = 0, binding = 0) uniform DhUniforms {\n"
-                + "    mat4 uCombinedMatrix;\n"
-                + "    vec3 uModelOffset;\n"
-                + "    float uWorldYOffset;\n"
-                + "    float uMircoOffset;\n"
-                + "    float uEarthRadius;\n"
-                + "    int uIsWhiteWorld;\n" // bool as int for std140
-                + "    float uClipDistance;\n"
-                + "    int uDitherDhRendering;\n" // bool as int
-                + "    int uNoiseEnabled;\n" // bool as int
-                + "    int uNoiseSteps;\n"
-                + "    float uNoiseIntensity;\n"
-                + "    int uNoiseDropoff;\n"
-                + "};\n\n";
-
-        // Remove all individual uniform declarations (they're now in the UBO)
-        String[] uniformNames = {
-                "uCombinedMatrix", "uModelOffset", "uWorldYOffset",
-                "uMircoOffset", "uEarthRadius", "uIsWhiteWorld",
-                "uClipDistance", "uDitherDhRendering",
-                "uNoiseEnabled", "uNoiseSteps", "uNoiseIntensity", "uNoiseDropoff"
-        };
-
-        for (String name : uniformNames) {
-            // Match "uniform TYPE name" optionally with "= defaultValue"
-            String regex = "uniform\\s+(\\w+)\\s+" + name + "\\s*(=\\s*[^;]+)?;";
-            source = source.replaceFirst(regex, "// moved to UBO: " + name);
-        }
-
-        // Fix boolean expressions: bool→int means we can't use ! or implicit bool
-        // conversion
-        source = source.replace("!uIsWhiteWorld", "uIsWhiteWorld == 0");
-        source = source.replace("if (uDitherDhRendering)", "if (uDitherDhRendering != 0)");
-        source = source.replace("if (uNoiseEnabled)", "if (uNoiseEnabled != 0)");
-
-        // Sampler binding — lightmap at descriptor set 0, binding 1
-        source = source.replace("uniform sampler2D uLightMap;",
-                "layout(set = 0, binding = 1) uniform sampler2D uLightMap;");
-
-        // Insert UBO block after version declaration
-        int versionEnd = source.indexOf('\n') + 1;
-        source = source.substring(0, versionEnd) + "\n" + fullUboBlock + source.substring(versionEnd);
-
-        return source;
     }
 }
