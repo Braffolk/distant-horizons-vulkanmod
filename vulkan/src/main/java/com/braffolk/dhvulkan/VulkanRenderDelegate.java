@@ -279,13 +279,8 @@ public class VulkanRenderDelegate implements IVulkanRenderDelegate {
         // Noise
         boolean noiseEnabled = Config.Client.Advanced.Graphics.NoiseTexture.enableNoiseTexture.get();
         int noiseSteps = Config.Client.Advanced.Graphics.NoiseTexture.noiseSteps.get();
-        float noiseIntensity = Config.Client.Advanced.Graphics.NoiseTexture.noiseIntensity.get().floatValue();
-        #if MC_VER < MC_1_21_1
-        // DH 1.20.6 config returns an unscaled integer (e.g. 40 = 40%).
-        // Original GL shader multiplies by 0.01; our shared Vulkan shader doesn't,
-        // so scale here instead.
-        noiseIntensity *= 0.01f;
-        #endif
+        float noiseIntensity = Compat.scaleNoiseIntensity(
+                Config.Client.Advanced.Graphics.NoiseTexture.noiseIntensity.get().floatValue());
         int noiseDropoff = Config.Client.Advanced.Graphics.NoiseTexture.noiseDropoff.get();
 
         this.renderContext.setUniformBool("uNoiseEnabled", noiseEnabled);

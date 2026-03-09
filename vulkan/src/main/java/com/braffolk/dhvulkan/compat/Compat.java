@@ -251,6 +251,22 @@ public final class Compat {
         }
     }
 
+    // ========================= //
+    // Config value scaling //
+    // ========================= //
+
+    /**
+     * DH 1.20.6 config returns noise intensity as an unscaled integer (e.g. 40 = 40%).
+     * DH 1.21.1+ returns it as a pre-scaled 0-1 float. Normalize here.
+     */
+    public static float scaleNoiseIntensity(float raw) {
+        #if MC_VER < MC_1_21_1
+        return raw * 0.01f;
+        #else
+        return raw;
+        #endif
+    }
+
     private Compat() {
     }
 }
