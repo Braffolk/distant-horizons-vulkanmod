@@ -165,6 +165,7 @@ public class DhCompositePipeline {
 
         builder.setUniforms(ubos, imageDescriptors);
         this.compositePipeline = builder.createGraphicsPipeline();
+
     }
 
     /**
@@ -198,18 +199,13 @@ public class DhCompositePipeline {
         VTextureSelector.bindTexture(DH_COLOR_TEXTURE_SLOT, dhColorTexture);
         VTextureSelector.bindTexture(DH_DEPTH_TEXTURE_SLOT, dhDepthTexture);
 
-        // Bind debug textures (SSAO and fog intermediates)
-        if (ssaoTexture != null) {
-            VTextureSelector.bindTexture(DEBUG_SSAO_TEXTURE_SLOT, ssaoTexture);
-        }
-        if (fogTexture != null) {
-            VTextureSelector.bindTexture(DEBUG_FOG_TEXTURE_SLOT, fogTexture);
-        }
-
-        // Bind MC depth texture for depth comparison (if available)
-        if (mcDepthTexture != null) {
-            VTextureSelector.bindTexture(MC_DEPTH_TEXTURE_SLOT, mcDepthTexture);
-        }
+        // VM 0.4.2 requires ALL image descriptor slots to have valid images —
+        // null causes NPE in Pipeline.updateDescriptorSet(). Use white texture
+        // fallback.
+        VulkanImage fallback = VTextureSelector.getWhiteTexture();
+        VTextureSelector.bindTexture(DEBUG_SSAO_TEXTURE_SLOT, ssaoTexture != null ? ssaoTexture : fallback);
+        VTextureSelector.bindTexture(DEBUG_FOG_TEXTURE_SLOT, fogTexture != null ? fogTexture : fallback);
+        VTextureSelector.bindTexture(MC_DEPTH_TEXTURE_SLOT, mcDepthTexture != null ? mcDepthTexture : fallback);
 
         // Set pipeline state for composite: premultiplied alpha blend, no cull, depth
         // write

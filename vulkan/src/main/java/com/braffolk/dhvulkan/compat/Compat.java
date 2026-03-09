@@ -14,6 +14,7 @@ import net.vulkanmod.vulkan.memory.MemoryTypes;
 import com.mojang.blaze3d.vertex.VertexFormat;
 import com.mojang.blaze3d.vertex.VertexFormatElement;
 import net.vulkanmod.vulkan.texture.VulkanImage;
+import net.vulkanmod.vulkan.texture.VTextureSelector;
 
 import java.nio.ByteBuffer;
 
@@ -119,12 +120,13 @@ public final class Compat {
         return new VertexFormatElement(id, index, type, usage, count);
         #else
         // MC 1.20: VertexFormatElement(id, Type, Usage, count)
-        // id must be 0 for non-UV usages. Only UV allows multiple indices.
-        // Remap GENERIC → UV so we can use id as the UV index.
-        if (usage == VertexFormatElement.Usage.GENERIC) {
-            return new VertexFormatElement(id, type, VertexFormatElement.Usage.UV, count);
+        // Non-UV usages MUST have id=0 (MC validates this at construction).
+        // CRITICAL: Do NOT remap GENERIC→UV! VulkanMod's UV handler doesn't
+        // support INT type, resulting in VK_FORMAT_UNDEFINED → DEVICE_LOST.
+        // GENERIC with id=0 is valid and VulkanMod maps INT→VK_FORMAT_R32_SINT.
+        if (usage == VertexFormatElement.Usage.UV) {
+            return new VertexFormatElement(id, type, usage, count);
         }
-        // For non-UV usages (POSITION, COLOR, NORMAL), id must be 0
         return new VertexFormatElement(0, type, usage, count);
         #endif
     }
@@ -177,6 +179,9 @@ public final class Compat {
         Renderer.getInstance().beginRenderPass(renderPass, framebuffer);
         #else
         try {
+            // End any currently active render pass first
+            Renderer.getInstance().endRenderPass();
+
             java.lang.reflect.Field cmdField = Renderer.class.getDeclaredField("currentCmdBuffer");
             cmdField.setAccessible(true);
             org.lwjgl.vulkan.VkCommandBuffer cmdBuffer =
@@ -184,8 +189,42 @@ public final class Compat {
             org.lwjgl.system.MemoryStack stack = org.lwjgl.system.MemoryStack.stackPush();
             framebuffer.beginRenderPass(cmdBuffer, renderPass, stack);
             stack.close();
+
+            // CRITICAL: update Renderer's state so endRenderPass() works.
+            // Without this, endRenderPass() sees boundFramebuffer==null and no-ops,
+            // leaving nested render passes open → DEVICE_LOST on NVIDIA.
+            Renderer.getInstance().setBoundFramebuffer(framebuffer);
+            Renderer.getInstance().setBoundRenderPass(renderPass);
         } catch (Exception e) {
             throw new RuntimeException("[DH-Vulkan] Failed to begin render pass on VM 0.4.2", e);
+        }
+        #endif
+    }
+
+    /**
+     * Rebind MC's main render target (swapchain) so the composite can draw into it.
+     * On VM 0.6.1, DefaultMainPass.rebindMainTarget() handles state internally.
+     * On VM 0.4.2, it calls swapChain.beginRenderPass() directly without updating
+     * Renderer state — we must fix up boundFramebuffer/boundRenderPass afterward.
+     */
+    public static void rebindMainTarget() {
+        net.vulkanmod.vulkan.pass.DefaultMainPass mainPass =
+                (net.vulkanmod.vulkan.pass.DefaultMainPass) Renderer.getInstance().getMainPass();
+        mainPass.rebindMainTarget();
+
+        #if MC_VER < MC_1_21_1
+        // VM 0.4.2: rebindMainTarget starts auxRenderPass on swapChain but doesn't
+        // update Renderer state. Fix up so bindGraphicsPipeline/endRenderPass work.
+        try {
+            java.lang.reflect.Field auxField =
+                    net.vulkanmod.vulkan.pass.DefaultMainPass.class.getDeclaredField("auxRenderPass");
+            auxField.setAccessible(true);
+            net.vulkanmod.vulkan.framebuffer.RenderPass auxPass =
+                    (net.vulkanmod.vulkan.framebuffer.RenderPass) auxField.get(mainPass);
+            Renderer.getInstance().setBoundFramebuffer(net.vulkanmod.vulkan.Vulkan.getSwapChain());
+            Renderer.getInstance().setBoundRenderPass(auxPass);
+        } catch (Exception e) {
+            throw new RuntimeException("[DH-Vulkan] Failed to rebind main target on VM 0.4.2", e);
         }
         #endif
     }
@@ -243,8 +282,9 @@ public final class Compat {
                     net.vulkanmod.gl.VkGlTexture.getTexture(glTex.glId());
             return vkGlTex != null ? vkGlTex.getVulkanImage() : null;
             #else
-            // VM 0.4.2 doesn't have VkGlTexture bridge — lightmap not available yet
-            return null;
+            // VM 0.4.2: MC already binds lightmap to slot 2 before our hook fires.
+            // Just read it directly from VTextureSelector.
+            return VTextureSelector.getBoundTexture(2);
             #endif
         } catch (Exception e) {
             return null;
@@ -282,6 +322,9 @@ public final class Compat {
         return net.vulkanmod.vulkan.Vulkan.getSwapChain().getDepthAttachment();
         #endif
     }
+
+    private static final com.seibel.distanthorizons.core.logging.DhLogger LOGGER = new com.seibel.distanthorizons.core.logging.DhLoggerBuilder()
+            .build();
 
     private Compat() {
     }

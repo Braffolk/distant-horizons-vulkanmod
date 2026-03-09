@@ -233,6 +233,7 @@ public class DhFogPipeline {
 
         builder.setUniforms(ubos, imageDescriptors);
         this.fogComputePipeline = builder.createGraphicsPipeline();
+
     }
 
     // ====================== //
@@ -260,6 +261,7 @@ public class DhFogPipeline {
 
         builder.setUniforms(ubos, imageDescriptors);
         this.fogApplyPipeline = builder.createGraphicsPipeline();
+
     }
 
     // ============ //

@@ -204,6 +204,7 @@ public class DhSsaoPipeline {
 
         builder.setUniforms(ubos, imageDescriptors);
         this.ssaoComputePipeline = builder.createGraphicsPipeline();
+
     }
 
     // ====================== //
@@ -238,6 +239,7 @@ public class DhSsaoPipeline {
 
         builder.setUniforms(ubos, imageDescriptors);
         this.ssaoApplyPipeline = builder.createGraphicsPipeline();
+
     }
 
     // ============ //

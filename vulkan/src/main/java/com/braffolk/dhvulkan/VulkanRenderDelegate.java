@@ -45,9 +45,11 @@ public class VulkanRenderDelegate implements IVulkanRenderDelegate {
     private boolean initialized = false;
     private boolean initFailed = false;
 
+    // Frame state — reset every beginFrame()
+    private boolean frameReady = false;
+
     // Debug counters
-    private int debugFrameCount = 0;
-    private int debugDrawCount = 0;
+    private int drawCount = 0;
 
     /** DH-owned framebuffer — LODs render into this instead of MC's render pass */
     private DhVulkanFramebuffer dhFramebuffer;
@@ -120,34 +122,28 @@ public class VulkanRenderDelegate implements IVulkanRenderDelegate {
         }
 
         try {
-            // Lock/hide settings unsupported on the Vulkan path
             disableUnsupportedSettings();
 
+            LOGGER.info("[DH-Vulkan] Init: creating pipeline...");
             this.renderContext.init();
+
+            LOGGER.info("[DH-Vulkan] Init: creating index buffer...");
             this.ensureQuadIndexBuffer(65536);
 
-            // Initialize DH framebuffer matching MC's viewport
+            LOGGER.info("[DH-Vulkan] Init: creating framebuffer...");
             int width = Compat.getSwapChainWidth();
             int height = Compat.getSwapChainHeight();
             this.dhFramebuffer = new DhVulkanFramebuffer();
             this.dhFramebuffer.init(width, height);
 
-            // Initialize composite pipeline
+            LOGGER.info("[DH-Vulkan] Init: creating composite pipeline...");
             this.compositePipeline = new DhCompositePipeline();
             this.compositePipeline.init();
 
-            // Initialize SSAO pipeline (Phase 7)
-            this.ssaoPipeline = new DhSsaoPipeline();
-            this.ssaoPipeline.init(width, height);
-
-            // Initialize Fog pipeline (Phase 7)
-            this.fogPipeline = new DhFogPipeline();
-            this.fogPipeline.init(width, height);
-
             this.initialized = true;
-            LOGGER.info("[DH-Vulkan] VulkanRenderDelegate initialized.");
+            LOGGER.info("[DH-Vulkan] Init complete. All resources created.");
         } catch (Exception e) {
-            LOGGER.error("[DH-Vulkan] VulkanRenderDelegate init failed — LODs will not render", e);
+            LOGGER.error("[DH-Vulkan] Init FAILED", e);
             this.initFailed = true;
         }
     }
@@ -183,14 +179,33 @@ public class VulkanRenderDelegate implements IVulkanRenderDelegate {
 
     @Override
     public void beginFrame() {
+        this.drawCount = 0;
+        this.frameReady = false;
+
+        if (this.initFailed)
+            return;
+
+        // ===== INIT (first frame only) =====
         if (!this.initialized) {
+            Renderer.getInstance().endRenderPass();
             this.init();
-        }
-        if (this.initFailed) {
+            if (this.initFailed)
+                return;
+            Compat.rebindMainTarget();
             return;
         }
 
-        // Save and override VulkanMod render state for DH rendering
+        // Bind MC's lightmap texture
+        try {
+            VulkanImage lightmapImage = Compat.getLightmapVulkanImage();
+            if (lightmapImage != null) {
+                VTextureSelector.setLightTexture(lightmapImage);
+            }
+        } catch (Exception e) {
+            LOGGER.error("[DH-Vulkan] Failed to bind MC lightmap", e);
+        }
+
+        // Save MC render state (restored in endFrame)
         this.savedCullState = VRenderSystem.cull;
         this.savedDepthMask = VRenderSystem.depthMask;
         this.savedDepthFun = VRenderSystem.depthFun;
@@ -203,75 +218,48 @@ public class VulkanRenderDelegate implements IVulkanRenderDelegate {
         this.savedBlendDstAlpha = PipelineState.blendInfo.dstAlphaFactor;
         this.savedBlendOp = PipelineState.blendInfo.blendOp;
 
-        VRenderSystem.cull = true; // Back-face culling for LOD terrain (~50% fragment reduction)
-        VRenderSystem.depthTest = true; // Ensure Early-Z is active
-        VRenderSystem.depthMask = true; // LODs need to write depth
+        // Set DH render state
+        VRenderSystem.cull = true;
+        VRenderSystem.depthTest = true;
+        VRenderSystem.depthMask = true;
         VRenderSystem.depthFun = 515; // GL_LEQUAL
         VRenderSystem.topology = 3; // VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST
         VRenderSystem.polygonMode = 0; // VK_POLYGON_MODE_FILL
-        PipelineState.blendInfo.enabled = false; // Opaque LODs don't need blending
+        PipelineState.blendInfo.enabled = false;
 
-        // No polygon offset needed — we render to our own framebuffer now,
-        // and the composite step handles depth comparison with MC terrain.
-
-        // Bind MC's lightmap texture to slot 2.
-        // Cast to GlTexture (vanilla MC class) to get the GL ID, then resolve
-        // through VkGlTexture → VulkanImage (same data VulkanMod's terrain uses).
-        try {
-            VulkanImage lightmapImage = Compat.getLightmapVulkanImage();
-            if (lightmapImage != null) {
-                VTextureSelector.setLightTexture(lightmapImage);
-            }
-        } catch (Exception e) {
-            LOGGER.error("[DH-Vulkan] Failed to bind MC lightmap", e);
-        }
-
-        // Switch from MC's render pass to DH's own framebuffer
+        // End MC's render pass, start DH's framebuffer pass
         Renderer.getInstance().endRenderPass();
         this.dhFramebuffer.beginRenderPass();
 
+        // Bind terrain pipeline
         this.renderContext.bindTerrainPipeline();
-        this.debugDrawCount = 0;
+
+        this.drawCount = 0;
+        this.frameReady = true;
     }
 
     @Override
     public void fillUniformData(DhApiRenderParam renderParameters) {
-        if (this.initFailed) {
+        if (!this.frameReady)
             return;
-        }
 
-        // Combined projection * model-view matrix
-        // IMPORTANT: Use MC's projection matrix (not DH's) so LOD depth values
-        // are compatible with MC's depth buffer. DH's projection has a much larger
-        // far plane which would make LOD depth values SMALLER (closer) than MC terrain,
-        // causing LODs to incorrectly render in front of MC chunks.
+        // ===== STAGE 3: SET UNIFORMS =====
+        // Just writes values to mapped buffers. NO Vulkan calls.
+
         Mat4f combinedMatrix = new Mat4f(renderParameters.mcProjectionMatrix);
         combinedMatrix.multiply(renderParameters.dhModelViewMatrix);
         this.renderContext.setUniformMat4("uCombinedMatrix", combinedMatrix);
-
-        // World Y offset
         this.renderContext.setUniformFloat("uWorldYOffset", (float) renderParameters.worldYOffset);
-
-        // Micro offset (prevents z-fighting)
         this.renderContext.setUniformFloat("uMircoOffset", 0.01f);
 
-        // Earth curvature
         float curveRatio = Config.Client.Advanced.Graphics.Experimental.earthCurveRatio.get();
-        if (curveRatio < -1.0f || curveRatio > 1.0f) {
-            curveRatio = 6371000.0f / curveRatio;
-        } else {
-            curveRatio = 0.0f;
-        }
-        this.renderContext.setUniformFloat("uEarthRadius", curveRatio);
+        this.renderContext.setUniformFloat("uEarthRadius",
+                (curveRatio < -1.0f || curveRatio > 1.0f) ? 6371000.0f / curveRatio : 0.0f);
 
-        // Clip distance — matches DH's default overdraw prevention logic.
-        // Config value < 0 = auto mode (tiered by render distance), ≥ 0 = manual.
-        // We skip DH's FOV correction as it's designed for their GL fade renderer.
         int renderDistChunks = Minecraft.getInstance().options.getEffectiveRenderDistance();
         float overdrawConfig = ((Number) Config.Client.Advanced.Graphics.Culling.overdrawPrevention.get()).floatValue();
         float overdraw;
         if (overdrawConfig <= 0) {
-            // Auto: scale by render distance (same tiers as DH)
             if (renderDistChunks <= 2)
                 overdraw = 0.2f;
             else if (renderDistChunks <= 4)
@@ -285,70 +273,52 @@ public class VulkanRenderDelegate implements IVulkanRenderDelegate {
         } else {
             overdraw = Math.max(0.05f, Math.min(overdrawConfig, 1.0f));
         }
-        float clipDist = renderDistChunks * 16.0f * overdraw;
-        this.renderContext.setUniformFloat("uClipDistance", clipDist);
-
-        // Dither
+        this.renderContext.setUniformFloat("uClipDistance", renderDistChunks * 16.0f * overdraw);
         this.renderContext.setUniformBool("uDitherDhRendering",
                 Config.Client.Advanced.Graphics.Quality.ditherDhFade.get());
 
-        // Noise
         boolean noiseEnabled = Config.Client.Advanced.Graphics.NoiseTexture.enableNoiseTexture.get();
-        int noiseSteps = Config.Client.Advanced.Graphics.NoiseTexture.noiseSteps.get();
-        float noiseIntensity = Compat.scaleNoiseIntensity(
-                Config.Client.Advanced.Graphics.NoiseTexture.noiseIntensity.get().floatValue());
-        int noiseDropoff = Config.Client.Advanced.Graphics.NoiseTexture.noiseDropoff.get();
-
         this.renderContext.setUniformBool("uNoiseEnabled", noiseEnabled);
-        this.renderContext.setUniformInt("uNoiseSteps", noiseSteps);
-        this.renderContext.setUniformFloat("uNoiseIntensity", noiseIntensity);
-        this.renderContext.setUniformInt("uNoiseDropoff", noiseDropoff);
-
-        // Debug
+        this.renderContext.setUniformInt("uNoiseSteps", Config.Client.Advanced.Graphics.NoiseTexture.noiseSteps.get());
+        this.renderContext.setUniformFloat("uNoiseIntensity", Compat.scaleNoiseIntensity(
+                Config.Client.Advanced.Graphics.NoiseTexture.noiseIntensity.get().floatValue()));
+        this.renderContext.setUniformInt("uNoiseDropoff",
+                Config.Client.Advanced.Graphics.NoiseTexture.noiseDropoff.get());
         this.renderContext.setUniformBool("uIsWhiteWorld",
                 Config.Client.Advanced.Debugging.enableWhiteWorld.get());
-
-        // Model offset starts at origin — updated per-buffer via setModelOffset()
         this.renderContext.setUniformVec3f("uModelOffset", new Vec3f(0, 0, 0));
 
-        // Bind UBOs + descriptors after setting all uniforms
+        // Upload UBOs after setting all uniforms
         this.renderContext.uploadAndBindUBOs();
     }
 
     @Override
     public void setModelOffset(Vec3f modelOffset) {
-        if (this.initFailed) {
+        if (this.initFailed)
             return;
-        }
-
-        // Update the model offset uniform and re-bind UBOs
         this.renderContext.setUniformVec3f("uModelOffset", modelOffset);
         this.renderContext.uploadAndBindUBOs();
     }
 
     @Override
     public long uploadVertexData(ByteBuffer vertexData, int vertexCount) {
-        // No-op — this method is not called by DH core.
-        // If it were, we'd need to cache the returned buffer for later cleanup.
-        return 0;
+        return 0; // Not used by DH core
     }
 
     @Override
     public void drawBuffer(GLVertexBuffer vbo, int indexCount) {
-        if (this.initFailed || indexCount <= 0) {
+        if (!this.frameReady || indexCount <= 0)
             return;
-        }
 
+        // ===== STAGE 4: DRAW =====
         int vboId = System.identityHashCode(vbo);
         Object handle = ((IVulkanVertexBuffer) vbo).dhvulkan$getVulkanBufferHandle();
 
-        // DH has cleaned up this VBO (LodBufferContainer.close() nulls the handle).
-        // Free our cached Vulkan buffer immediately.
+        // VBO was destroyed
         if (handle == null) {
             CachedBuffer stale = this.vulkanBufferCache.remove(vboId);
-            if (stale != null) {
+            if (stale != null)
                 stale.free();
-            }
             return;
         }
 
@@ -356,20 +326,19 @@ public class VulkanRenderDelegate implements IVulkanRenderDelegate {
             int handleId = System.identityHashCode(handle);
             CachedBuffer cached = this.vulkanBufferCache.get(vboId);
 
-            // Invalidate if the ByteBuffer handle changed (terrain was re-uploaded)
+            // Invalidate if handle changed (terrain re-uploaded)
             if (cached != null && cached.handleIdentity != handleId) {
                 cached.free();
                 this.vulkanBufferCache.remove(vboId);
                 cached = null;
             }
 
+            // Upload vertex data if not cached
             if (cached == null && handle instanceof ByteBuffer) {
                 ByteBuffer vertexData = (ByteBuffer) handle;
                 int dataSize = vertexData.remaining();
-
-                if (dataSize <= 0) {
+                if (dataSize <= 0)
                     return;
-                }
 
                 Object vkBuffer = Compat.createGpuVertexBuffer(dataSize);
                 vertexData.position(0);
@@ -380,11 +349,10 @@ public class VulkanRenderDelegate implements IVulkanRenderDelegate {
                 this.vulkanBufferCache.put(vboId, cached);
             }
 
-            if (cached == null) {
+            if (cached == null)
                 return;
-            }
 
-            // Ensure index buffer is large enough
+            // Ensure index buffer capacity
             int quadCount = indexCount / 6;
             if (quadCount > this.quadIndexBufferCapacity) {
                 this.ensureQuadIndexBuffer(quadCount + 1024);
@@ -392,123 +360,109 @@ public class VulkanRenderDelegate implements IVulkanRenderDelegate {
 
             // THE draw call
             this.renderContext.drawIndexed(cached.vkBuffer, this.quadIndexBuffer, indexCount);
-            this.debugDrawCount++;
+            this.drawCount++;
 
         } catch (Exception e) {
-            LOGGER.error("[DH-Vulkan] Error during drawBuffer: {}", e.getMessage());
+            LOGGER.error("[DH-Vulkan] drawBuffer error", e);
         }
     }
 
     /**
      * Frees the cached Vulkan VertexBuffer for a given GLVertexBuffer.
      * Called from LodBufferContainer.close() when DH destroys a VBO.
-     * This is the primary cleanup path — ensures GPU memory is freed
-     * deterministically without relying on GC.
      */
     @Override
     public void freeBuffer(GLVertexBuffer vbo) {
         int vboId = System.identityHashCode(vbo);
         CachedBuffer cached = this.vulkanBufferCache.remove(vboId);
-        if (cached != null) {
+        if (cached != null)
             cached.free();
-        }
     }
 
     @Override
     public void setBlendState(boolean enabled) {
+        if (this.initFailed)
+            return;
         PipelineState.blendInfo.enabled = enabled;
         if (enabled) {
-            // Match GL path: glBlendFuncSeparate(SRC_ALPHA, ONE_MINUS_SRC_ALPHA, ONE,
-            // ONE_MINUS_SRC_ALPHA)
-            PipelineState.blendInfo.srcRgbFactor = 6; // VK_BLEND_FACTOR_SRC_ALPHA
-            PipelineState.blendInfo.dstRgbFactor = 7; // VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA
-            PipelineState.blendInfo.srcAlphaFactor = 1; // VK_BLEND_FACTOR_ONE
-            PipelineState.blendInfo.dstAlphaFactor = 7; // VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA
-            PipelineState.blendInfo.blendOp = 0; // VK_BLEND_OP_ADD
+            PipelineState.blendInfo.srcRgbFactor = 6;
+            PipelineState.blendInfo.dstRgbFactor = 7;
+            PipelineState.blendInfo.srcAlphaFactor = 1;
+            PipelineState.blendInfo.dstAlphaFactor = 7;
+            PipelineState.blendInfo.blendOp = 0;
         }
-        // Re-bind pipeline so VulkanMod picks up the new blend state
         this.renderContext.bindTerrainPipeline();
     }
 
     @Override
     public void endFrame(DhApiRenderParam renderParam) {
-        this.debugFrameCount++;
-        if (this.debugFrameCount >= 60 && this.debugFrameCount <= 62) {
-            boolean ssaoEnabled = Config.Client.Advanced.Graphics.Ssao.enableSsao.get();
-            boolean fogEnabled = Config.Client.Advanced.Graphics.Fog.enableDhFog.get();
-            LOGGER.info("[DH-Vulkan] endFrame #{}: drew {} buffers, SSAO={}, Fog={}, cache={}",
-                    this.debugFrameCount, this.debugDrawCount, ssaoEnabled, fogEnabled,
-                    this.vulkanBufferCache.size());
-        }
-        // End DH's render pass — this transitions the color+depth attachments
-        // to SHADER_READ_ONLY_OPTIMAL for sampling in post-process + composite.
-        Renderer.getInstance().endRenderPass();
+        if (!this.frameReady)
+            return;
 
-        // Phase 7: SSAO post-process (between LOD render and composite)
-        if (this.ssaoPipeline != null && Config.Client.Advanced.Graphics.Ssao.enableSsao.get()) {
-            try {
-                this.ssaoPipeline.render(this.dhFramebuffer,
-                        new com.seibel.distanthorizons.core.util.math.Mat4f(renderParam.mcProjectionMatrix));
-            } catch (Exception e) {
-                LOGGER.error("[DH-Vulkan] SSAO render failed", e);
+        try {
+            // End DH's render pass — transitions attachments to SHADER_READ_ONLY
+            Renderer.getInstance().endRenderPass();
+
+            // SSAO post-process (between LOD render and composite)
+            if (this.ssaoPipeline != null && Config.Client.Advanced.Graphics.Ssao.enableSsao.get()) {
+                try {
+                    this.ssaoPipeline.render(this.dhFramebuffer,
+                            new Mat4f(renderParam.mcProjectionMatrix));
+                } catch (Exception e) {
+                    LOGGER.error("[DH-Vulkan] SSAO render failed", e);
+                }
             }
-        }
 
-        // Phase 7: Fog post-process (after SSAO, before composite)
-        if (this.fogPipeline != null
-                && Config.Client.Advanced.Graphics.Fog.enableDhFog.get()) {
-            try {
-                this.fogPipeline.render(this.dhFramebuffer,
-                        new com.seibel.distanthorizons.core.util.math.Mat4f(renderParam.dhModelViewMatrix),
-                        new com.seibel.distanthorizons.core.util.math.Mat4f(renderParam.mcProjectionMatrix),
-                        renderParam.partialTicks);
-            } catch (Exception e) {
-                LOGGER.error("[DH-Vulkan] Fog render failed", e);
+            // Fog post-process (after SSAO, before composite)
+            if (this.fogPipeline != null && Config.Client.Advanced.Graphics.Fog.enableDhFog.get()) {
+                try {
+                    this.fogPipeline.render(this.dhFramebuffer,
+                            new Mat4f(renderParam.dhModelViewMatrix),
+                            new Mat4f(renderParam.mcProjectionMatrix),
+                            renderParam.partialTicks);
+                } catch (Exception e) {
+                    LOGGER.error("[DH-Vulkan] Fog render failed", e);
+                }
             }
-        }
 
-        // Composite routing:
-        // On 1.21.11+: NONE composites here, SINGLE/DOUBLE defer to deferredComposite()
-        //              with MC depth comparison for per-pixel correct overlap.
-        // On 1.20.6:   All modes composite here (clip distance handles overlap).
-        //              deferredComposite MixinLevelRenderer injection unreliable on older VM.
-        #if MC_VER >= MC_1_21_1
-        com.seibel.distanthorizons.api.enums.config.EDhApiMcRenderingFadeMode fadeMode = Config.Client.Advanced.Graphics.Quality.vanillaFadeMode
-                .get();
-        #endif
+            // End any render pass left by SSAO/Fog, then rebind MC
+            Renderer.getInstance().endRenderPass();
+            Compat.rebindMainTarget();
 
-        Renderer.getInstance().endRenderPass();
-        ((DefaultMainPass) Renderer.getInstance().getMainPass()).rebindMainTarget();
-
-        #if MC_VER >= MC_1_21_1
-        if (fadeMode == com.seibel.distanthorizons.api.enums.config.EDhApiMcRenderingFadeMode.NONE) {
+            #if MC_VER >= MC_1_21_1
+            // VM 0.6.1+: check fade mode for deferred vs immediate composite
+            com.seibel.distanthorizons.api.enums.config.EDhApiMcRenderingFadeMode fadeMode =
+                    Config.Client.Advanced.Graphics.Quality.vanillaFadeMode.get();
+            if (fadeMode == com.seibel.distanthorizons.api.enums.config.EDhApiMcRenderingFadeMode.NONE) {
+                this.runComposite(renderParam, null);
+            }
+            // else: SINGLE_PASS / DOUBLE_PASS — deferredComposite() will handle it
+            #else
+            // VM 0.4.2: always composite here — clip distance handles terrain overlap
             this.runComposite(renderParam, null);
-        }
-        // else: SINGLE_PASS / DOUBLE_PASS — deferredComposite() will handle it
-        #else
-        // 1.20.6: always composite here, MC terrain renders after and overwrites via depth test
-        this.runComposite(renderParam, null);
-        #endif
+            #endif
 
-        // Restore VulkanMod render state (so MC can render normally after this)
-        VRenderSystem.cull = this.savedCullState;
-        VRenderSystem.depthMask = this.savedDepthMask;
-        VRenderSystem.depthFun = this.savedDepthFun;
-        VRenderSystem.topology = this.savedTopology;
-        VRenderSystem.polygonMode = this.savedPolygonMode;
-        PipelineState.blendInfo.enabled = this.savedBlendEnabled;
-        PipelineState.blendInfo.srcRgbFactor = this.savedBlendSrcRgb;
-        PipelineState.blendInfo.dstRgbFactor = this.savedBlendDstRgb;
-        PipelineState.blendInfo.srcAlphaFactor = this.savedBlendSrcAlpha;
-        PipelineState.blendInfo.dstAlphaFactor = this.savedBlendDstAlpha;
-        PipelineState.blendInfo.blendOp = this.savedBlendOp;
+            // Restore MC render state
+            VRenderSystem.cull = this.savedCullState;
+            VRenderSystem.depthMask = this.savedDepthMask;
+            VRenderSystem.depthFun = this.savedDepthFun;
+            VRenderSystem.topology = this.savedTopology;
+            VRenderSystem.polygonMode = this.savedPolygonMode;
+            PipelineState.blendInfo.enabled = this.savedBlendEnabled;
+            PipelineState.blendInfo.srcRgbFactor = this.savedBlendSrcRgb;
+            PipelineState.blendInfo.dstRgbFactor = this.savedBlendDstRgb;
+            PipelineState.blendInfo.srcAlphaFactor = this.savedBlendSrcAlpha;
+            PipelineState.blendInfo.dstAlphaFactor = this.savedBlendDstAlpha;
+            PipelineState.blendInfo.blendOp = this.savedBlendOp;
+        } catch (Exception e) {
+            LOGGER.error("[DH-Vulkan] endFrame error", e);
+        }
     }
 
     @Override
     public void deferredComposite(DhApiRenderParam renderParam) {
         // SINGLE_PASS and DOUBLE_PASS: composite AFTER MC terrain has rendered,
         // using MC's depth buffer for per-pixel depth comparison.
-        // This prevents LODs from showing through loaded chunks and transparent blocks.
         com.seibel.distanthorizons.api.enums.config.EDhApiMcRenderingFadeMode fadeMode = Config.Client.Advanced.Graphics.Quality.vanillaFadeMode
                 .get();
 
@@ -517,24 +471,15 @@ public class VulkanRenderDelegate implements IVulkanRenderDelegate {
         }
 
         try {
-            // Get MC's depth buffer from the swapchain.
-            // At this point MC has finished rendering terrain, so the depth buffer
-            // contains valid depth values for all loaded chunks and blocks.
             VulkanImage mcDepth = Compat.getSwapChainDepthAttachment();
-
-            // End MC's current render pass so we can bind the depth attachment as a
-            // texture.
-            // The depth image was created with VK_IMAGE_USAGE_SAMPLED_BIT so this is valid.
             Renderer.getInstance().endRenderPass();
-            ((DefaultMainPass) Renderer.getInstance().getMainPass()).rebindMainTarget();
-
+            Compat.rebindMainTarget();
             this.runComposite(renderParam, mcDepth);
         } catch (Exception e) {
-            LOGGER.error("[DH-Vulkan] Deferred composite with MC depth failed, falling back to no-depth composite", e);
-            // Fallback: composite without MC depth comparison
+            LOGGER.error("[DH-Vulkan] deferredComposite error, falling back to no-depth", e);
             try {
                 Renderer.getInstance().endRenderPass();
-                ((DefaultMainPass) Renderer.getInstance().getMainPass()).rebindMainTarget();
+                Compat.rebindMainTarget();
                 this.runComposite(renderParam, null);
             } catch (Exception e2) {
                 LOGGER.error("[DH-Vulkan] Fallback composite also failed", e2);
