@@ -1,5 +1,0 @@
-{
-    "info_git_commit": "${info_git_commit}",
-    "info_git_branch": "${info_git_branch}",
-    "info_build_source": "${info_build_source}"
-}
