@@ -15,6 +15,7 @@ import com.seibel.distanthorizons.core.logging.DhLoggerBuilder;
 import com.seibel.distanthorizons.core.render.glObject.buffer.GLVertexBuffer;
 import com.braffolk.dhvulkan.IVulkanRenderDelegate;
 import com.braffolk.dhvulkan.config.DhVulkanConfig;
+import com.braffolk.dhvulkan.compat.Compat;
 import com.braffolk.dhvulkan.duck.IVulkanVertexBuffer;
 import com.seibel.distanthorizons.core.util.RenderUtil;
 import com.seibel.distanthorizons.core.util.math.Mat4f;
@@ -23,11 +24,7 @@ import net.minecraft.client.Minecraft;
 import net.vulkanmod.vulkan.Renderer;
 import net.vulkanmod.vulkan.VRenderSystem;
 import net.vulkanmod.vulkan.pass.DefaultMainPass;
-import net.vulkanmod.vulkan.memory.MemoryTypes;
 import net.vulkanmod.vulkan.shader.PipelineState;
-import net.vulkanmod.vulkan.memory.buffer.Buffer;
-import net.vulkanmod.vulkan.memory.buffer.IndexBuffer;
-import net.vulkanmod.vulkan.memory.buffer.VertexBuffer;
 import net.vulkanmod.vulkan.texture.VTextureSelector;
 import net.vulkanmod.vulkan.texture.VulkanImage;
 
@@ -64,7 +61,7 @@ public class VulkanRenderDelegate implements IVulkanRenderDelegate {
     private DhFogPipeline fogPipeline;
 
     /** Shared index buffer for quad rendering (6 indices per quad) */
-    private IndexBuffer quadIndexBuffer;
+    private Object quadIndexBuffer;
     private int quadIndexBufferCapacity = 0;
 
     /**
@@ -72,16 +69,16 @@ public class VulkanRenderDelegate implements IVulkanRenderDelegate {
      * ByteBuffer it was created from, for invalidation when terrain is re-uploaded.
      */
     private static class CachedBuffer {
-        final VertexBuffer vkBuffer;
+        final Object vkBuffer;
         final int handleIdentity;
 
-        CachedBuffer(VertexBuffer vkBuffer, int handleIdentity) {
+        CachedBuffer(Object vkBuffer, int handleIdentity) {
             this.vkBuffer = vkBuffer;
             this.handleIdentity = handleIdentity;
         }
 
         void free() {
-            this.vkBuffer.scheduleFree();
+            Compat.scheduleFree(this.vkBuffer);
         }
     }
 
@@ -130,8 +127,8 @@ public class VulkanRenderDelegate implements IVulkanRenderDelegate {
             this.ensureQuadIndexBuffer(65536);
 
             // Initialize DH framebuffer matching MC's viewport
-            int width = Renderer.getInstance().getSwapChain().getWidth();
-            int height = Renderer.getInstance().getSwapChain().getHeight();
+            int width = Compat.getSwapChainWidth();
+            int height = Compat.getSwapChainHeight();
             this.dhFramebuffer = new DhVulkanFramebuffer();
             this.dhFramebuffer.init(width, height);
 
@@ -161,7 +158,7 @@ public class VulkanRenderDelegate implements IVulkanRenderDelegate {
         }
 
         if (this.quadIndexBuffer != null) {
-            this.quadIndexBuffer.scheduleFree();
+            Compat.scheduleFree(this.quadIndexBuffer);
         }
 
         int indexCount = quadCount * 6;
@@ -178,9 +175,8 @@ public class VulkanRenderDelegate implements IVulkanRenderDelegate {
         }
         indexData.flip();
 
-        this.quadIndexBuffer = new IndexBuffer(indexData.remaining(), MemoryTypes.HOST_MEM,
-                IndexBuffer.IndexType.UINT32);
-        this.quadIndexBuffer.copyBuffer(indexData, indexData.remaining());
+        this.quadIndexBuffer = Compat.createIndexBuffer(indexData.remaining());
+        Compat.copyBuffer(this.quadIndexBuffer, indexData, indexData.remaining());
         this.quadIndexBufferCapacity = quadCount;
 
     }
@@ -222,14 +218,9 @@ public class VulkanRenderDelegate implements IVulkanRenderDelegate {
         // Cast to GlTexture (vanilla MC class) to get the GL ID, then resolve
         // through VkGlTexture → VulkanImage (same data VulkanMod's terrain uses).
         try {
-            var lightmapView = Minecraft.getInstance().gameRenderer.lightTexture().getTextureView();
-            if (lightmapView != null) {
-                com.mojang.blaze3d.opengl.GlTexture glTex = (com.mojang.blaze3d.opengl.GlTexture) lightmapView
-                        .texture();
-                net.vulkanmod.gl.VkGlTexture vkGlTex = net.vulkanmod.gl.VkGlTexture.getTexture(glTex.glId());
-                if (vkGlTex != null && vkGlTex.getVulkanImage() != null) {
-                    VTextureSelector.setLightTexture(vkGlTex.getVulkanImage());
-                }
+            VulkanImage lightmapImage = Compat.getLightmapVulkanImage();
+            if (lightmapImage != null) {
+                VTextureSelector.setLightTexture(lightmapImage);
             }
         } catch (Exception e) {
             LOGGER.error("[DH-Vulkan] Failed to bind MC lightmap", e);
@@ -363,9 +354,9 @@ public class VulkanRenderDelegate implements IVulkanRenderDelegate {
                     return;
                 }
 
-                VertexBuffer vkBuffer = new VertexBuffer(dataSize, MemoryTypes.GPU_MEM);
+                Object vkBuffer = Compat.createGpuVertexBuffer(dataSize);
                 vertexData.position(0);
-                vkBuffer.copyBuffer(vertexData, dataSize);
+                Compat.copyBuffer(vkBuffer, vertexData, dataSize);
                 vertexData.position(0);
 
                 cached = new CachedBuffer(vkBuffer, handleId);
@@ -520,7 +511,7 @@ public class VulkanRenderDelegate implements IVulkanRenderDelegate {
         this.vulkanBufferCache.clear();
 
         if (this.quadIndexBuffer != null) {
-            this.quadIndexBuffer.scheduleFree();
+            Compat.scheduleFree(this.quadIndexBuffer);
             this.quadIndexBuffer = null;
         }
         if (this.ssaoPipeline != null) {

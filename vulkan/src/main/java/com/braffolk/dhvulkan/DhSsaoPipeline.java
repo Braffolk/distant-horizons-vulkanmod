@@ -8,6 +8,7 @@
 
 package com.braffolk.dhvulkan;
 
+import com.braffolk.dhvulkan.compat.Compat;
 import com.mojang.blaze3d.vertex.VertexFormat;
 import com.mojang.blaze3d.vertex.VertexFormatElement;
 import com.seibel.distanthorizons.core.config.Config;
@@ -17,9 +18,6 @@ import net.vulkanmod.vulkan.Renderer;
 import net.vulkanmod.vulkan.VRenderSystem;
 import net.vulkanmod.vulkan.framebuffer.Framebuffer;
 import net.vulkanmod.vulkan.framebuffer.RenderPass;
-import net.vulkanmod.vulkan.memory.MemoryTypes;
-
-import net.vulkanmod.vulkan.memory.buffer.VertexBuffer;
 import net.vulkanmod.vulkan.shader.GraphicsPipeline;
 import net.vulkanmod.vulkan.shader.Pipeline;
 import net.vulkanmod.vulkan.shader.PipelineState;
@@ -76,11 +74,11 @@ public class DhSsaoPipeline {
     /** Fullscreen quad vertex format: vec2 position */
     private static final VertexFormat QUAD_FORMAT;
     static {
-        VertexFormatElement position = new VertexFormatElement(0, 0,
+        VertexFormatElement position = Compat.vertexFormatElement(0, 0,
                 VertexFormatElement.Type.FLOAT, VertexFormatElement.Usage.POSITION, 2);
-        QUAD_FORMAT = VertexFormat.builder()
-                .add("Position", position)
-                .build();
+        QUAD_FORMAT = Compat.buildVertexFormat(
+                new String[] { "Position" },
+                new VertexFormatElement[] { position });
     }
 
     // Pipelines
@@ -96,7 +94,7 @@ public class DhSsaoPipeline {
     private RenderPass applyRenderPass;
 
     // Shared fullscreen quad buffers
-    private VertexBuffer quadVertexBuffer;
+    private Object quadVertexBuffer;
 
     // Uniform buffers for pass 1 (occlusion computation)
     private final Map<String, MappedBuffer> pass1Uniforms = new HashMap<>();
@@ -147,8 +145,8 @@ public class DhSsaoPipeline {
         vertexData.putFloat(0);
         vertexData.flip();
 
-        this.quadVertexBuffer = new VertexBuffer(vertexData.remaining(), MemoryTypes.GPU_MEM);
-        this.quadVertexBuffer.copyBuffer(vertexData, vertexData.remaining());
+        this.quadVertexBuffer = Compat.createGpuVertexBuffer(vertexData.remaining());
+        Compat.copyBuffer(this.quadVertexBuffer, vertexData, vertexData.remaining());
     }
 
     // ========================== //
@@ -297,11 +295,11 @@ public class DhSsaoPipeline {
         PipelineState.blendInfo.enabled = false;
 
         // Begin SSAO render pass (renders into intermediate R16F texture)
-        Renderer.getInstance().beginRenderPass(this.ssaoRenderPass, this.ssaoFramebuffer);
+        Compat.beginRenderPass(this.ssaoRenderPass, this.ssaoFramebuffer);
 
         Renderer.getInstance().bindGraphicsPipeline(this.ssaoComputePipeline);
         Renderer.getInstance().uploadAndBindUBOs(this.ssaoComputePipeline);
-        Renderer.getDrawer().draw(this.quadVertexBuffer, 3);
+        Compat.draw(this.quadVertexBuffer, 3);
 
         // End SSAO render pass — transitions SSAO texture to SHADER_READ_ONLY
         Renderer.getInstance().endRenderPass();
@@ -342,11 +340,11 @@ public class DhSsaoPipeline {
             this.applyRenderPass = applyRpBuilder.build();
         }
 
-        Renderer.getInstance().beginRenderPass(this.applyRenderPass, dhFramebuffer.getFramebuffer());
+        Compat.beginRenderPass(this.applyRenderPass, dhFramebuffer.getFramebuffer());
 
         Renderer.getInstance().bindGraphicsPipeline(this.ssaoApplyPipeline);
         Renderer.getInstance().uploadAndBindUBOs(this.ssaoApplyPipeline);
-        Renderer.getDrawer().draw(this.quadVertexBuffer, 3);
+        Compat.draw(this.quadVertexBuffer, 3);
 
         Renderer.getInstance().endRenderPass();
 
@@ -363,8 +361,8 @@ public class DhSsaoPipeline {
     // ========== //
 
     private void onResize() {
-        int newWidth = Renderer.getInstance().getSwapChain().getWidth();
-        int newHeight = Renderer.getInstance().getSwapChain().getHeight();
+        int newWidth = Compat.getSwapChainWidth();
+        int newHeight = Compat.getSwapChainHeight();
 
         if (newWidth == 0 || newHeight == 0) {
             return; // Minimized window
@@ -404,7 +402,7 @@ public class DhSsaoPipeline {
 
     public void cleanup() {
         if (this.quadVertexBuffer != null) {
-            this.quadVertexBuffer.scheduleFree();
+            Compat.scheduleFree(this.quadVertexBuffer);
             this.quadVertexBuffer = null;
         }
 
@@ -448,11 +446,9 @@ public class DhSsaoPipeline {
 
     private void addUniform(AlignedStruct.Builder builder, Map<String, MappedBuffer> uniforms,
             String type, String name, int count, int byteSize) {
-        Uniform.Info info = Uniform.createUniformInfo(type, name, count);
         MappedBuffer mb = new MappedBuffer(byteSize);
         uniforms.put(name, mb);
-        info.setBufferSupplier(() -> mb);
-        builder.addUniformInfo(info);
+        Compat.addUniformWithBuffer(builder, type, name, count, () -> mb);
     }
 
     private void setUniformMat4(Map<String, MappedBuffer> uniforms, String name, Mat4f matrix) {

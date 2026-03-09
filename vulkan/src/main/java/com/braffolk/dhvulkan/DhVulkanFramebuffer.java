@@ -7,6 +7,7 @@
 
 package com.braffolk.dhvulkan;
 
+import com.braffolk.dhvulkan.compat.Compat;
 import com.seibel.distanthorizons.core.logging.DhLogger;
 import com.seibel.distanthorizons.core.logging.DhLoggerBuilder;
 import net.vulkanmod.vulkan.Renderer;
@@ -101,8 +102,8 @@ public class DhVulkanFramebuffer {
      * dimensions.
      */
     private void onResize() {
-        int newWidth = Renderer.getInstance().getSwapChain().getWidth();
-        int newHeight = Renderer.getInstance().getSwapChain().getHeight();
+        int newWidth = Compat.getSwapChainWidth();
+        int newHeight = Compat.getSwapChainHeight();
 
         if (newWidth == 0 || newHeight == 0) {
             return; // Minimized window
@@ -130,7 +131,7 @@ public class DhVulkanFramebuffer {
      * Must be called after ending/leaving MC's render pass.
      */
     public void beginRenderPass() {
-        Renderer.getInstance().beginRenderPass(this.renderPass, this.framebuffer);
+        Compat.beginRenderPass(this.renderPass, this.framebuffer);
     }
 
     public Framebuffer getFramebuffer() {

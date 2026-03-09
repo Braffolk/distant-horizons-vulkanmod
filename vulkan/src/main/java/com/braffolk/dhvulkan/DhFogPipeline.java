@@ -8,6 +8,7 @@
 
 package com.braffolk.dhvulkan;
 
+import com.braffolk.dhvulkan.compat.Compat;
 import com.mojang.blaze3d.vertex.VertexFormat;
 import com.mojang.blaze3d.vertex.VertexFormatElement;
 import com.seibel.distanthorizons.core.config.Config;
@@ -23,9 +24,6 @@ import net.vulkanmod.vulkan.Renderer;
 import net.vulkanmod.vulkan.VRenderSystem;
 import net.vulkanmod.vulkan.framebuffer.Framebuffer;
 import net.vulkanmod.vulkan.framebuffer.RenderPass;
-import net.vulkanmod.vulkan.memory.MemoryTypes;
-
-import net.vulkanmod.vulkan.memory.buffer.VertexBuffer;
 import net.vulkanmod.vulkan.shader.GraphicsPipeline;
 import net.vulkanmod.vulkan.shader.Pipeline;
 import net.vulkanmod.vulkan.shader.PipelineState;
@@ -89,11 +87,11 @@ public class DhFogPipeline {
     /** Fullscreen quad vertex format: vec2 position */
     private static final VertexFormat QUAD_FORMAT;
     static {
-        VertexFormatElement position = new VertexFormatElement(0, 0,
+        VertexFormatElement position = Compat.vertexFormatElement(0, 0,
                 VertexFormatElement.Type.FLOAT, VertexFormatElement.Usage.POSITION, 2);
-        QUAD_FORMAT = VertexFormat.builder()
-                .add("Position", position)
-                .build();
+        QUAD_FORMAT = Compat.buildVertexFormat(
+                new String[] { "Position" },
+                new VertexFormatElement[] { position });
     }
 
     // Pipelines
@@ -108,7 +106,7 @@ public class DhFogPipeline {
     private RenderPass applyRenderPass;
 
     // Shared fullscreen quad buffers
-    private VertexBuffer quadVertexBuffer;
+    private Object quadVertexBuffer;
 
     // Uniform buffers
     private final Map<String, MappedBuffer> pass1Uniforms = new HashMap<>();
@@ -152,8 +150,8 @@ public class DhFogPipeline {
         vertexData.putFloat(0);
         vertexData.flip();
 
-        this.quadVertexBuffer = new VertexBuffer(vertexData.remaining(), MemoryTypes.GPU_MEM);
-        this.quadVertexBuffer.copyBuffer(vertexData, vertexData.remaining());
+        this.quadVertexBuffer = Compat.createGpuVertexBuffer(vertexData.remaining());
+        Compat.copyBuffer(this.quadVertexBuffer, vertexData, vertexData.remaining());
     }
 
     // ========================== //
@@ -379,10 +377,10 @@ public class DhFogPipeline {
         PipelineState.blendInfo.enabled = false;
 
         // Render pass 1: compute fog into intermediate RGBA16F texture
-        Renderer.getInstance().beginRenderPass(this.fogRenderPass, this.fogFramebuffer);
+        Compat.beginRenderPass(this.fogRenderPass, this.fogFramebuffer);
         Renderer.getInstance().bindGraphicsPipeline(this.fogComputePipeline);
         Renderer.getInstance().uploadAndBindUBOs(this.fogComputePipeline);
-        Renderer.getDrawer().draw(this.quadVertexBuffer, 3);
+        Compat.draw(this.quadVertexBuffer, 3);
         Renderer.getInstance().endRenderPass();
 
         // ====================== //
@@ -415,10 +413,10 @@ public class DhFogPipeline {
             this.applyRenderPass = applyRpBuilder.build();
         }
 
-        Renderer.getInstance().beginRenderPass(this.applyRenderPass, dhFramebuffer.getFramebuffer());
+        Compat.beginRenderPass(this.applyRenderPass, dhFramebuffer.getFramebuffer());
         Renderer.getInstance().bindGraphicsPipeline(this.fogApplyPipeline);
         Renderer.getInstance().uploadAndBindUBOs(this.fogApplyPipeline);
-        Renderer.getDrawer().draw(this.quadVertexBuffer, 3);
+        Compat.draw(this.quadVertexBuffer, 3);
         Renderer.getInstance().endRenderPass();
 
         // Restore state
@@ -434,8 +432,8 @@ public class DhFogPipeline {
     // ========== //
 
     private void onResize() {
-        int newWidth = Renderer.getInstance().getSwapChain().getWidth();
-        int newHeight = Renderer.getInstance().getSwapChain().getHeight();
+        int newWidth = Compat.getSwapChainWidth();
+        int newHeight = Compat.getSwapChainHeight();
 
         if (newWidth == 0 || newHeight == 0)
             return;
@@ -469,7 +467,7 @@ public class DhFogPipeline {
 
     public void cleanup() {
         if (this.quadVertexBuffer != null) {
-            this.quadVertexBuffer.scheduleFree();
+            Compat.scheduleFree(this.quadVertexBuffer);
             this.quadVertexBuffer = null;
         }
 
@@ -512,11 +510,9 @@ public class DhFogPipeline {
 
     private void addUniform(AlignedStruct.Builder builder, Map<String, MappedBuffer> uniforms,
             String type, String name, int count, int byteSize) {
-        Uniform.Info info = Uniform.createUniformInfo(type, name, count);
         MappedBuffer mb = new MappedBuffer(byteSize);
         uniforms.put(name, mb);
-        info.setBufferSupplier(() -> mb);
-        builder.addUniformInfo(info);
+        Compat.addUniformWithBuffer(builder, type, name, count, () -> mb);
     }
 
     private void setUniformMat4(Map<String, MappedBuffer> uniforms, String name, Mat4f matrix) {

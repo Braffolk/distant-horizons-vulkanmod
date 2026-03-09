@@ -7,15 +7,13 @@
 
 package com.braffolk.dhvulkan;
 
+import com.braffolk.dhvulkan.compat.Compat;
 import com.mojang.blaze3d.vertex.VertexFormat;
 import com.mojang.blaze3d.vertex.VertexFormatElement;
 import com.seibel.distanthorizons.core.logging.DhLogger;
 import com.seibel.distanthorizons.core.logging.DhLoggerBuilder;
 import net.vulkanmod.vulkan.Renderer;
 import net.vulkanmod.vulkan.VRenderSystem;
-import net.vulkanmod.vulkan.memory.MemoryTypes;
-
-import net.vulkanmod.vulkan.memory.buffer.VertexBuffer;
 import net.vulkanmod.vulkan.shader.GraphicsPipeline;
 import net.vulkanmod.vulkan.shader.Pipeline;
 import net.vulkanmod.vulkan.shader.PipelineState;
@@ -62,7 +60,7 @@ public class DhCompositePipeline {
     static final int DEBUG_FOG_TEXTURE_SLOT = 6;
 
     private GraphicsPipeline compositePipeline;
-    private VertexBuffer quadVertexBuffer;
+    private Object quadVertexBuffer;
 
     private boolean initialized = false;
 
@@ -75,11 +73,11 @@ public class DhCompositePipeline {
      */
     private static final VertexFormat QUAD_FORMAT;
     static {
-        VertexFormatElement position = new VertexFormatElement(0, 0,
+        VertexFormatElement position = Compat.vertexFormatElement(0, 0,
                 VertexFormatElement.Type.FLOAT, VertexFormatElement.Usage.POSITION, 2);
-        QUAD_FORMAT = VertexFormat.builder()
-                .add("Position", position)
-                .build();
+        QUAD_FORMAT = Compat.buildVertexFormat(
+                new String[] { "Position" },
+                new VertexFormatElement[] { position });
     }
 
     public void init() {
@@ -111,8 +109,8 @@ public class DhCompositePipeline {
         vertexData.putFloat(3.0f); // far top (clipped)
         vertexData.flip();
 
-        this.quadVertexBuffer = new VertexBuffer(vertexData.remaining(), MemoryTypes.GPU_MEM);
-        this.quadVertexBuffer.copyBuffer(vertexData, vertexData.remaining());
+        this.quadVertexBuffer = Compat.createGpuVertexBuffer(vertexData.remaining());
+        Compat.copyBuffer(this.quadVertexBuffer, vertexData, vertexData.remaining());
 
         // No index buffer needed for 3-vertex draw
     }
@@ -134,15 +132,11 @@ public class DhCompositePipeline {
         AlignedStruct.Builder uboBuilder = new AlignedStruct.Builder();
 
         this.invProjBuf = new MappedBuffer(64);
-        Uniform.Info invProjInfo = Uniform.createUniformInfo("matrix4x4", "uInvProj", 1);
-        invProjInfo.setBufferSupplier(() -> this.invProjBuf);
-        uboBuilder.addUniformInfo(invProjInfo);
+        Compat.addUniformWithBuffer(uboBuilder, "matrix4x4", "uInvProj", 1, () -> this.invProjBuf);
 
         this.debugModeBuf = new MappedBuffer(4);
         this.debugModeBuf.putInt(0, 0);
-        Uniform.Info debugModeInfo = Uniform.createUniformInfo("int", "uDebugMode", 1);
-        debugModeInfo.setBufferSupplier(() -> this.debugModeBuf);
-        uboBuilder.addUniformInfo(debugModeInfo);
+        Compat.addUniformWithBuffer(uboBuilder, "int", "uDebugMode", 1, () -> this.debugModeBuf);
 
         UBO mainUbo = uboBuilder.buildUBO(0, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT);
         ubos.add(mainUbo);
@@ -221,7 +215,7 @@ public class DhCompositePipeline {
         // Bind pipeline and draw
         Renderer.getInstance().bindGraphicsPipeline(this.compositePipeline);
         Renderer.getInstance().uploadAndBindUBOs(this.compositePipeline);
-        Renderer.getDrawer().draw(this.quadVertexBuffer, 3);
+        Compat.draw(this.quadVertexBuffer, 3);
 
         // Restore state
         VRenderSystem.cull = prevCull;
@@ -237,7 +231,7 @@ public class DhCompositePipeline {
 
     public void cleanup() {
         if (this.quadVertexBuffer != null) {
-            this.quadVertexBuffer.scheduleFree();
+            Compat.scheduleFree(this.quadVertexBuffer);
             this.quadVertexBuffer = null;
         }
 

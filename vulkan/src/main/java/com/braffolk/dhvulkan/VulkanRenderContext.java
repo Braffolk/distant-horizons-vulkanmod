@@ -7,6 +7,7 @@
 
 package com.braffolk.dhvulkan;
 
+import com.braffolk.dhvulkan.compat.Compat;
 import com.mojang.blaze3d.vertex.VertexFormat;
 import com.mojang.blaze3d.vertex.VertexFormatElement;
 import com.seibel.distanthorizons.core.logging.DhLogger;
@@ -16,10 +17,6 @@ import com.seibel.distanthorizons.core.util.math.Mat4f;
 import com.seibel.distanthorizons.core.util.math.Vec3f;
 import net.vulkanmod.vulkan.Drawer;
 import net.vulkanmod.vulkan.Renderer;
-import net.vulkanmod.vulkan.memory.MemoryTypes;
-import net.vulkanmod.vulkan.memory.buffer.Buffer;
-import net.vulkanmod.vulkan.memory.buffer.IndexBuffer;
-import net.vulkanmod.vulkan.memory.buffer.VertexBuffer;
 import net.vulkanmod.vulkan.shader.GraphicsPipeline;
 import net.vulkanmod.vulkan.shader.Pipeline;
 import net.vulkanmod.vulkan.shader.SPIRVUtils;
@@ -121,19 +118,16 @@ public class VulkanRenderContext {
      */
     private static final VertexFormat DH_TERRAIN_FORMAT;
     static {
-        // VertexFormatElement(id, index, type, usage, count)
-        VertexFormatElement position = new VertexFormatElement(0, 0,
+        VertexFormatElement position = Compat.vertexFormatElement(0, 0,
                 VertexFormatElement.Type.SHORT, VertexFormatElement.Usage.POSITION, 4);
-        VertexFormatElement color = new VertexFormatElement(1, 0,
+        VertexFormatElement color = Compat.vertexFormatElement(1, 0,
                 VertexFormatElement.Type.UBYTE, VertexFormatElement.Usage.COLOR, 4);
-        VertexFormatElement material = new VertexFormatElement(2, 0,
+        VertexFormatElement material = Compat.vertexFormatElement(2, 0,
                 VertexFormatElement.Type.INT, VertexFormatElement.Usage.GENERIC, 1);
 
-        DH_TERRAIN_FORMAT = VertexFormat.builder()
-                .add("Position", position)
-                .add("Color", color)
-                .add("Material", material)
-                .build();
+        DH_TERRAIN_FORMAT = Compat.buildVertexFormat(
+                new String[] { "Position", "Color", "Material" },
+                new VertexFormatElement[] { position, color, material });
     }
 
     // ======================//
@@ -192,16 +186,12 @@ public class VulkanRenderContext {
      * frame.
      */
     private void addDhUniform(AlignedStruct.Builder builder, String type, String name, int count, int byteSize) {
-        Uniform.Info info = Uniform.createUniformInfo(type, name, count);
-
         // Create a persistent MappedBuffer for this uniform
         MappedBuffer mb = new MappedBuffer(byteSize);
         this.uniformBuffers.put(name, mb);
 
-        // Set the supplier — the Uniform will read from this buffer on UBO.update()
-        info.setBufferSupplier(() -> mb);
-
-        builder.addUniformInfo(info);
+        // Use Compat to handle VM version differences in uniform setup
+        Compat.addUniformWithBuffer(builder, type, name, count, () -> mb);
     }
 
     // ===================//
@@ -290,8 +280,8 @@ public class VulkanRenderContext {
         Renderer.getInstance().uploadAndBindUBOs(this.terrainPipeline);
     }
 
-    public void drawIndexed(Buffer vertexBuffer, IndexBuffer indexBuffer, int indexCount) {
-        Renderer.getInstance().getDrawer().drawIndexed(vertexBuffer, indexBuffer, indexCount);
+    public void drawIndexed(Object vertexBuffer, Object indexBuffer, int indexCount) {
+        Compat.drawIndexed(vertexBuffer, indexBuffer, indexCount);
     }
 
     public GraphicsPipeline getTerrainPipeline() {
@@ -302,12 +292,12 @@ public class VulkanRenderContext {
     // buffer management //
     // ======================//
 
-    public static VertexBuffer createVertexBuffer(int sizeBytes) {
-        return new VertexBuffer(sizeBytes, MemoryTypes.HOST_MEM);
+    public static Object createVertexBuffer(int sizeBytes) {
+        return Compat.createVertexBuffer(sizeBytes);
     }
 
-    public static IndexBuffer createIndexBuffer(int sizeBytes) {
-        return new IndexBuffer(sizeBytes, MemoryTypes.HOST_MEM, IndexBuffer.IndexType.UINT32);
+    public static Object createIndexBuffer(int sizeBytes) {
+        return Compat.createIndexBuffer(sizeBytes);
     }
 
     // =========//
