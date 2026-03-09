@@ -42,7 +42,7 @@ layout(set = 0, binding = 1) uniform sampler2D uLightMap;
 void main()
 {
     // Pass raw position to fragment shader (for noise quantization)
-    vPos = vPosition;
+    vPos = vec4(vPosition);
 
     // Cast to unsigned for bitwise metadata extraction
     uvec4 uPos = uvec4(vPosition);

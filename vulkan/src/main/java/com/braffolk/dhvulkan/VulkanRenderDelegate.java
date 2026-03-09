@@ -286,14 +286,15 @@ public class VulkanRenderDelegate implements IVulkanRenderDelegate {
                 Config.Client.Advanced.Graphics.Quality.ditherDhFade.get());
 
         // Noise
-        this.renderContext.setUniformBool("uNoiseEnabled",
-                Config.Client.Advanced.Graphics.NoiseTexture.enableNoiseTexture.get());
-        this.renderContext.setUniformInt("uNoiseSteps",
-                Config.Client.Advanced.Graphics.NoiseTexture.noiseSteps.get());
-        this.renderContext.setUniformFloat("uNoiseIntensity",
-                Config.Client.Advanced.Graphics.NoiseTexture.noiseIntensity.get().floatValue());
-        this.renderContext.setUniformInt("uNoiseDropoff",
-                Config.Client.Advanced.Graphics.NoiseTexture.noiseDropoff.get());
+        boolean noiseEnabled = Config.Client.Advanced.Graphics.NoiseTexture.enableNoiseTexture.get();
+        int noiseSteps = Config.Client.Advanced.Graphics.NoiseTexture.noiseSteps.get();
+        float noiseIntensity = Config.Client.Advanced.Graphics.NoiseTexture.noiseIntensity.get().floatValue();
+        int noiseDropoff = Config.Client.Advanced.Graphics.NoiseTexture.noiseDropoff.get();
+
+        this.renderContext.setUniformBool("uNoiseEnabled", noiseEnabled);
+        this.renderContext.setUniformInt("uNoiseSteps", noiseSteps);
+        this.renderContext.setUniformFloat("uNoiseIntensity", noiseIntensity);
+        this.renderContext.setUniformInt("uNoiseDropoff", noiseDropoff);
 
         // Debug
         this.renderContext.setUniformBool("uIsWhiteWorld",
