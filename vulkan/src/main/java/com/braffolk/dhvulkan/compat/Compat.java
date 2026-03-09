@@ -84,8 +84,26 @@ public final class Compat {
         Renderer.getInstance().getDrawer().drawIndexed(
                 (Buffer) vertexBuffer, (IndexBuffer) indexBuffer, indexCount);
         #else
-        Renderer.getInstance().getDrawer().drawIndexed(
-                (VertexBuffer) vertexBuffer, (IndexBuffer) indexBuffer, indexCount);
+        // VM 0.4.2 Drawer.drawIndexed() hardcodes VK_INDEX_TYPE_UINT16 (= 0),
+        // but DH uses UINT32 indices. Issue raw Vulkan commands with UINT32.
+        org.lwjgl.vulkan.VkCommandBuffer cmd = Renderer.getCommandBuffer();
+        VertexBuffer vb = (VertexBuffer) vertexBuffer;
+        IndexBuffer ib = (IndexBuffer) indexBuffer;
+
+        // Bind vertex buffer
+        long pBuf = org.lwjgl.system.MemoryUtil.nmemAllocChecked(8);
+        long pOff = org.lwjgl.system.MemoryUtil.nmemAllocChecked(8);
+        org.lwjgl.system.MemoryUtil.memPutLong(pBuf, vb.getId());
+        org.lwjgl.system.MemoryUtil.memPutLong(pOff, vb.getOffset());
+        org.lwjgl.vulkan.VK10.nvkCmdBindVertexBuffers(cmd, 0, 1, pBuf, pOff);
+        org.lwjgl.system.MemoryUtil.nmemFree(pBuf);
+        org.lwjgl.system.MemoryUtil.nmemFree(pOff);
+
+        // Bind index buffer with VK_INDEX_TYPE_UINT32 = 1
+        org.lwjgl.vulkan.VK10.vkCmdBindIndexBuffer(cmd, ib.getId(), ib.getOffset(), 1);
+
+        // Draw
+        org.lwjgl.vulkan.VK10.vkCmdDrawIndexed(cmd, indexCount, 1, 0, 0, 0);
         #endif
     }
 
