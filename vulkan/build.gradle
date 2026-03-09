@@ -2,9 +2,24 @@ plugins {
     id "fabric-loom" version "1.10-SNAPSHOT"
 }
 
+version = rootProject.mod_version
+archivesBaseName = "DistantHorizons-VulkanMod-fabric"
+
+jar {
+    archiveFileName = "${archivesBaseName}-${version}-mc${rootProject.minecraft_version}.jar"
+}
+
 remapJar {
     inputFile = jar.archiveFile
+    archiveFileName = "DistantHorizons-VulkanMod-fabric-${version}-mc${rootProject.minecraft_version}.jar"
     dependsOn jar
+}
+
+processResources {
+    inputs.property "version", project.version
+    filesMatching("fabric.mod.json") {
+        expand "version": project.version
+    }
 }
 
 dependencies {

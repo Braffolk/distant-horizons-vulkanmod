@@ -1,12 +1,18 @@
 {
     "schemaVersion": 1,
     "id": "dh-vulkanmod",
-    "version": "1.0.0",
+    "version": "${version}",
     "name": "Distant Horizons — VulkanMod Extension",
     "description": "Adds native Vulkan rendering to Distant Horizons via VulkanMod. Replaces DH's OpenGL pipeline with a Vulkan backend for SSAO, fog, depth compositing, and LOD rendering.",
     "authors": [
         "Braffolk"
     ],
+    "contact": {
+        "homepage": "https://www.curseforge.com/minecraft/mc-mods/distant-horizons-vulkanmod",
+        "sources": "https://github.com/Braffolk/distant-horizons-vulkanmod",
+        "issues": "https://github.com/Braffolk/distant-horizons-vulkanmod/issues",
+        "discord": "https://discord.gg/xAB8G4cENx"
+    },
     "license": "LGPL-3.0",
     "icon": "assets/dh-vulkanmod/icon.png",
     "environment": "client",
@@ -21,7 +27,7 @@
     "depends": {
         "fabricloader": ">=0.17.0",
         "minecraft": "1.21.11",
-        "distanthorizons": "*",
+        "distanthorizons": ">=2.4.0",
         "vulkanmod": "*"
     }
 }
