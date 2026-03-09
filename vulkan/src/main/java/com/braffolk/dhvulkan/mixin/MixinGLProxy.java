@@ -47,6 +47,23 @@ public class MixinGLProxy {
                 uploadField.setAccessible(true);
                 uploadField.set(instance, EDhApiGpuUploadMethod.DATA); // most basic, no special GL features needed
 
+                // Initialize renderThreadRunnableQueue — DH 2.4.0 has this as an instance
+                // field; without it, runRenderThreadTasks() NPEs.
+                // Older/newer versions may use a static field or different name, so we
+                // try both and silently skip if not found.
+                for (String queueFieldName : new String[] { "renderThreadRunnableQueue",
+                        "RENDER_THREAD_RUNNABLE_QUEUE" }) {
+                    try {
+                        java.lang.reflect.Field queueField = GLProxy.class.getDeclaredField(queueFieldName);
+                        queueField.setAccessible(true);
+                        if (queueField.get(instance) == null) {
+                            queueField.set(instance, new java.util.concurrent.ConcurrentLinkedQueue<>());
+                        }
+                    } catch (NoSuchFieldException ignored) {
+                        // Field doesn't exist in this DH version — fine
+                    }
+                }
+
                 dhvulkan$dummyCreated = true;
                 GLProxy.LOGGER.info("[DH-VulkanMod] Created dummy GLProxy (VulkanMod active, no GL context).");
             } catch (Exception e) {

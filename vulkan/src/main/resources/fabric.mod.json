@@ -27,7 +27,7 @@
     "depends": {
         "fabricloader": ">=0.17.0",
         "minecraft": "1.21.11",
-        "distanthorizons": ">=2.4.0",
+        "distanthorizons": ">=2.4.0-",
         "vulkanmod": "*"
     }
 }
