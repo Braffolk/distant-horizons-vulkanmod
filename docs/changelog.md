@@ -1,16 +1,13 @@
-## TODO TITLE
+## v2.4.0-2.4.6+vm.4
 
-First release as a standalone Fabric extension mod (`dh-vulkanmod`). Works alongside unmodified Distant Horizons 2.4.5+.
+First release as a standalone Fabric extension. Works alongside unmodified Distant Horizons 2.4.0+.
 
-### Architecture
+### Added
 
+- Supports MC 1.20.6 (VulkanMod 0.4.2) and MC 1.21.11 (VulkanMod 0.6.1) from a single codebase
 - Ported Vulkan rendering backend from a DH source fork to a mixin-based extension mod
-- All DH interception via mixins — no DH source modifications required
+- All DH interception via mixins, no DH source modifications required
 - Standalone jar installable alongside any compatible DH release
-
-### Critical Fix: Missing LOD Faces
-
-- **Fixed** east/west-facing LOD faces not rendering. The initial approach intercepted vertex data too deep in DH's GL call stack (`GLBuffer.uploadBuffer()`), which was fragile and version-dependent. Replaced with `MixinLodBufferContainer` that intercepts `uploadBuffersDirect()` at the same level the fork operated at — grabbing raw ByteBuffers directly from the quad builder and bypassing the entire GL upload pipeline.
 
 ### Included Features (from fork)
 
@@ -22,7 +19,10 @@ First release as a standalone Fabric extension mod (`dh-vulkanmod`). Works along
 - Lightmap integration via VulkanMod's GL emulation
 - Deterministic GPU memory management with buffer cache
 
----
+### Technical Details
+
+- MC 1.20.6 compatibility required resolving mixin conflicts (`DhVulkanMixinPlugin`), preventing GL context poisoning (`MixinLightMapWrapper`), bypassing VM 0.4.2's hardcoded UINT16 index type, wiring custom uniform suppliers, and normalizing config value scaling.
+- All version-specific code centralized in `Compat.java` using Manifold preprocessor directives.
 
 ## v2.4.6+vm.3
 

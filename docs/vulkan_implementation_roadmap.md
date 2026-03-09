@@ -1,17 +1,21 @@
 # Distant Horizons → VulkanMod: Implementation Roadmap
 
-Status as of 2026-03-08: **Phases 1-7 + extension mod port complete.** LODs render with correct colors, depth, lightmap, transparency, compositing, SSAO, fog, and noise via a standalone extension mod (mixin-based, no DH source modifications).
+Status as of 2026-03-09: **Phases 1-7, extension mod port, and multi-version support complete.** LODs render with correct colors, depth, lightmap, transparency, compositing, SSAO, fog, noise, and earth curvature via an extension mod (mixin-based, no DH source modifications). Supports MC 1.20.6 (VulkanMod 0.4.2) and MC 1.21.11 (VulkanMod 0.6.1) from a single codebase.
 
 ## Architecture Overview
 
-The Vulkan backend is implemented as a **standalone Fabric mod** (`dh-vulkanmod`) in the `vulkan/` subproject. It uses **mixins** to intercept DH's rendering pipeline without modifying DH's source code. This allows it to work as a drop-in extension alongside unmodified DH releases.
+The Vulkan backend is implemented as a **Fabric extension mod** (`dh-vulkanmod`) in the `vulkan/` subproject. It requires Distant Horizons to be installed and uses **mixins** to intercept DH's rendering pipeline without modifying DH's source code. All version-specific API differences are centralized in `Compat.java` using Manifold preprocessor directives.
 
 Core files under `vulkan/src/main/java/com/braffolk/dhvulkan/`:
 - **`VulkanRenderContext.java`** — Pipeline creation, UBO management, shader conversion, draw calls
 - **`VulkanRenderDelegate.java`** — `IVulkanRenderDelegate` impl, per-frame uniform fill, VBO cache
 - **`DhVulkanFramebuffer.java`** — DH-owned Vulkan framebuffer with color+depth, auto-resize
 - **`DhCompositePipeline.java`** — Fullscreen triangle composite with depth bias
+- **`DhSsaoPipeline.java`** — 2-pass SSAO post-process
+- **`DhFogPipeline.java`** — 2-pass fog post-process (distance + height)
 - **`IVulkanRenderDelegate.java`** — Interface for the Vulkan delegate
+- **`DhVulkanMixinPlugin.java`** — IMixinConfigPlugin for resolving mixin conflicts between DH and VulkanMod
+- **`compat/Compat.java`** — Single source of truth for all version-specific API differences
 
 Mixins under `vulkan/src/main/java/com/braffolk/dhvulkan/mixin/`:
 - **`MixinLodBufferContainer`** — Intercepts `uploadBuffersDirect()` to store raw vertex data directly
@@ -21,6 +25,7 @@ Mixins under `vulkan/src/main/java/com/braffolk/dhvulkan/mixin/`:
 - **`MixinGLBuffer`** — Cancels GL buffer operations (bind, create, upload, destroy)
 - **`MixinGLVertexBuffer`** — Duck interface for storing Vulkan buffer handles on VBOs
 - **`MixinGLState`** — Cancels GL state machine operations
+- **`MixinLightMapWrapper`** — Cancels raw GL calls in DH's LightMapWrapper (prevents crashes in Vulkan context)
 
 Vulkan shaders under `vulkan/src/main/resources/shaders/vulkan/`:
 - **`dh_apply.vert`** / **`dh_apply.frag`** — Composite shaders
@@ -101,7 +106,7 @@ Vulkan shaders under `vulkan/src/main/resources/shaders/vulkan/`:
 - [x] **SSAO** — Vulkan-native 2-pass post-process, see details below
 - [x] **Noise texture** — integrated into terrain fragment shader (`flat_shaded.frag`): procedural per-block dithering via `uNoiseEnabled`, `uNoiseSteps`, `uNoiseIntensity`, `uNoiseDropoff` uniforms populated from config
 - [x] **Fog** — Vulkan-native 2-pass post-process via `DhFogPipeline.java`, see details below
-- [ ] **Earth curvature** — vertex shader curves terrain based on `uEarthRadius` — verify float precision with large world coordinates
+- [x] **Earth curvature** — vertex shader curves terrain based on `uEarthRadius`
 - [ ] **Wireframe debug** — needs `VK_POLYGON_MODE_LINE` pipeline variant
 - [ ] **Cloud rendering** — DH renders vanilla-style clouds to LOD distance (GL-only, needs investigation)
 
@@ -187,6 +192,37 @@ Vulkan shaders under `vulkan/src/main/resources/shaders/vulkan/`:
 
 ---
 
+## Phase 11: Multi-Version Support ✅ COMPLETE
+
+**Goal:** Support MC 1.20.6 (VulkanMod 0.4.2) alongside MC 1.21.11 (VulkanMod 0.6.1) from one codebase.
+
+### Key Differences Between VM 0.4.2 and VM 0.6.1
+
+| Area | VM 0.6.1 (MC 1.21.11) | VM 0.4.2 (MC 1.20.6) |
+|------|----------------------|----------------------|
+| Buffer imports | `net.vulkanmod.vulkan.memory.buffer.*` | `net.vulkanmod.vulkan.memory.*` |
+| IndexBuffer | Constructor takes `IndexType.UINT32` | No IndexType param |
+| Drawer.drawIndexed | Supports UINT32 | Hardcodes UINT16 |
+| Buffer.scheduleFree | `scheduleFree()` | `freeBuffer()` |
+| Uniform suppliers | `Info.setBufferSupplier()` at construction | Only resolves built-in MC names; custom uniforms need manual wiring |
+| VertexFormatElement | `new VFE(id, index, Type, Usage, count)` | `new VFE(index, Type, Usage, count)` |
+| VertexFormat | `VertexFormat.builder().add().build()` | `new VertexFormat(ImmutableMap)` |
+| SwapChain access | `Renderer.getInstance().getSwapChain()` | `Vulkan.getSwapChain()` |
+| beginRenderPass | `Renderer.getInstance().beginRenderPass()` | Requires reflection to access `currentCmdBuffer` |
+| GlTexture lightmap | `GlTexture` → `VkGlTexture` bridge exists | No GL texture bridge (lightmap unavailable) |
+| Noise intensity config | Pre-scaled 0–1 float | Unscaled integer (needs `* 0.01`) |
+| Mixin conflicts | None | DH's `MixinTextureUtil` conflicts with VM's `MTextureUtil` |
+| GL context | Partial GL emulation | No GL context — raw GL calls crash |
+
+### Implementation
+- All version differences handled in `Compat.java` via `#if MC_VER >= MC_1_21_1` / `#else` Manifold directives
+- `DhVulkanMixinPlugin` (IMixinConfigPlugin) strips conflicting DH mixins on MC 1.20.6
+- `MixinLightMapWrapper` cancels raw GL calls that would crash in VM 0.4.2's Vulkan-only context
+- `Compat.drawIndexed()` bypasses VM 0.4.2's Drawer to issue raw Vulkan commands with `VK_INDEX_TYPE_UINT32`
+- `Compat.setUniformSuppliers()` manually wires DH's `MappedBuffer` suppliers into VM 0.4.2's `Uniform` subclasses
+
+---
+
 ## Phase 10: Extension Mod Port ✅ COMPLETE
 
 **Goal:** Port the Vulkan backend from a DH source fork to a standalone Fabric extension mod that works alongside unmodified DH releases.
@@ -219,12 +255,17 @@ The fix: **`MixinLodBufferContainer`** intercepts `uploadBuffersDirect()` at HEA
 
 | File | Purpose |
 |------|---------|
+| `compat/Compat.java` | Single source of truth for all version-specific API differences |
 | `VulkanRenderContext.java` | Pipeline, UBOs, shader conversion, draw API |
 | `VulkanRenderDelegate.java` | Per-frame uniforms, VBO cache, draw dispatch, render pass switching |
 | `DhVulkanFramebuffer.java` | DH-owned Vulkan framebuffer (color + depth) |
 | `DhCompositePipeline.java` | Fullscreen triangle composite pipeline |
+| `DhSsaoPipeline.java` | 2-pass SSAO post-process |
+| `DhFogPipeline.java` | 2-pass fog post-process |
+| `DhVulkanMixinPlugin.java` | IMixinConfigPlugin for mixin conflict resolution |
 | `MixinLodBufferContainer.java` | Intercepts buffer upload, stores raw vertex data |
 | `MixinLodRenderer.java` | Redirects LodRenderer to Vulkan delegate |
+| `MixinLightMapWrapper.java` | Cancels raw GL calls in DH's lightmap code |
 | `dh_apply.vert` / `dh_apply.frag` | Vulkan composite shaders |
 | `VertexFormats.java` (DH) | DH's custom vertex format definition (16 bytes) |
 | `PipelineState.java` (VulkanMod) | Render state (cull, blend, depth) |

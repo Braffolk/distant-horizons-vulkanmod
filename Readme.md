@@ -1,11 +1,13 @@
-# Distant Horizons — VulkanMod Port
+# Distant Horizons — VulkanMod Extension
 
-A fork of [Distant Horizons](https://gitlab.com/distant-horizons-team/distant-horizons) with native **Vulkan rendering** via [VulkanMod](https://github.com/xCollateral/VulkanMod).
+A Fabric extension mod that adds native **Vulkan rendering** to [Distant Horizons](https://gitlab.com/distant-horizons-team/distant-horizons) via [VulkanMod](https://github.com/xCollateral/VulkanMod).
 
 LODs are rendered using VulkanMod's Vulkan pipeline instead of OpenGL, enabling Distant Horizons to work on systems and configurations running VulkanMod.
 
+> **This is not a standalone mod.** You must have both Distant Horizons and VulkanMod installed. Versions v2.4.6+vm.3 and earlier were standalone forks of DH; 2.4.0-2.4.6+vm.4 is a separate extension mod that runs alongside unmodified DH. Tested for Minecraft versions 1.20.6 and 1.21.11.
+
 ![Distant Horizons running on VulkanMod](docs/dh-vulkanmod.jpg)
-*Distant Horizons LODs rendered via VulkanMod's Vulkan backend (MC 1.21.11)*
+*Distant Horizons LODs rendered via VulkanMod's Vulkan backend*
 
 ## Status
 
@@ -18,10 +20,10 @@ LODs are rendered using VulkanMod's Vulkan pipeline instead of OpenGL, enabling 
 - Distance and height fog (all falloff types and mixing modes)
 - Noise / dithering on LODs
 - Fade / clip distance transitions
+- Earth curvature rendering
 
 ### ⚠️ Not Yet Implemented
 - **Shader pack support** — VulkanMod does not support shader packs (Iris/OptiFine)
-- **Earth curvature rendering**
 - **Wireframe debug mode**
 - **Cloud rendering** to LOD distance
 
@@ -29,26 +31,30 @@ See [docs/vulkan_implementation_roadmap.md](docs/vulkan_implementation_roadmap.m
 
 ## Requirements
 
-- **Minecraft:** 1.21.11
+- **Minecraft:** 1.20.6 or 1.21.11
 - **Mod loader:** Fabric
-- **VulkanMod** must be installed
-- **DH base version:** 2.4.6
+- **VulkanMod** must be installed (0.4.2 for MC 1.20.6, 0.6.1 for MC 1.21.11)
+- **Distant Horizons** 2.4.5+ must be installed
 
 > This is not the official Distant Horizons mod. For the original, see the [GitLab](https://gitlab.com/distant-horizons-team/distant-horizons) or [CurseForge](https://www.curseforge.com/minecraft/mc-mods/distant-horizons) pages.
 
 ## Building
 
 ```bash
-./gradlew :fabric:build -PmcVer="1.21.11"
+# MC 1.21.11
+./gradlew :vulkan:build -PmcVer="1.21.11"
+
+# MC 1.20.6
+./gradlew :vulkan:build -PmcVer="1.20.6"
 ```
 
-The compiled jar will be in `fabric/build/libs/`.
+The compiled jar will be in `vulkan/build/libs/`.
 
 ## Source Code Setup
 
 ### Prerequisites
 
-* JDK 17 or newer — https://www.oracle.com/java/technologies/downloads/
+* JDK 21 or newer — https://www.oracle.com/java/technologies/downloads/
 * Git — https://git-scm.com/
 
 ### IntelliJ IDEA
@@ -60,9 +66,7 @@ The compiled jar will be in `fabric/build/libs/`.
 
 ```bash
 ./gradlew --refresh-dependencies   # refresh dependencies
-./gradlew clean                    # delete compiled code
 ./gradlew genSources               # generate MC source for browsing
-./gradlew fabric:runClient         # run Fabric client (debugging)
 ```
 
 > Source code uses Mojang mappings & [Parchment](https://parchmentmc.org/) mappings.
