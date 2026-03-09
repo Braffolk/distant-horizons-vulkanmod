@@ -225,6 +225,7 @@ public class DhFogPipeline {
         addUniform(uboBuilder, this.pass1Uniforms, "float", "uCameraBlockYPos", 1, 4);
 
         UBO mainUbo = uboBuilder.buildUBO(0, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT);
+        Compat.setUniformSuppliers(mainUbo, this.pass1Uniforms);
         ubos.add(mainUbo);
 
         List<ImageDescriptor> imageDescriptors = new ArrayList<>();
@@ -250,6 +251,7 @@ public class DhFogPipeline {
         addUniform(uboBuilder, this.pass2Uniforms, "float", "gViewSize", 2, 8);
 
         UBO mainUbo = uboBuilder.buildUBO(0, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT);
+        Compat.setUniformSuppliers(mainUbo, this.pass2Uniforms);
         ubos.add(mainUbo);
 
         List<ImageDescriptor> imageDescriptors = new ArrayList<>();

@@ -195,6 +195,7 @@ public class DhSsaoPipeline {
         addUniform(uboBuilder, this.pass1Uniforms, "float", "uFadeDistanceInBlocks", 1, 4);
 
         UBO mainUbo = uboBuilder.buildUBO(0, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT);
+        Compat.setUniformSuppliers(mainUbo, this.pass1Uniforms);
         ubos.add(mainUbo);
 
         // Image descriptor: DH depth at binding 1
@@ -227,6 +228,7 @@ public class DhSsaoPipeline {
         addUniform(uboBuilder, this.pass2Uniforms, "int", "uDebugMode", 1, 4);
 
         UBO mainUbo = uboBuilder.buildUBO(0, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT);
+        Compat.setUniformSuppliers(mainUbo, this.pass2Uniforms);
         ubos.add(mainUbo);
 
         // Image descriptors: raw SSAO at binding 1, DH depth at binding 2

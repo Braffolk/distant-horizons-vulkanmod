@@ -10,7 +10,8 @@
         "MixinGLVertexBuffer",
         "MixinLodRenderer",
         "MixinLodBufferContainer",
-        "MixinLevelRenderer"
+        "MixinLevelRenderer",
+        "MixinLightMapWrapper"
     ],
     "injectors": {
         "defaultRequire": 1

@@ -190,6 +190,25 @@ public final class Compat {
         #endif
     }
 
+    /**
+     * On VM 0.4.2, Uniform.setSupplier() in the constructor only resolves MC's
+     * built-in uniforms (ModelViewMat etc). Custom DH uniforms have values=null.
+     * Call this AFTER buildUBO() to set suppliers on each Uniform.
+     * On VM 0.6.1, this is a no-op (Info.setBufferSupplier handles it).
+     */
+    public static void setUniformSuppliers(
+            net.vulkanmod.vulkan.shader.descriptor.UBO ubo,
+            java.util.Map<String, net.vulkanmod.vulkan.util.MappedBuffer> bufferMap) {
+        #if MC_VER < MC_1_21_1
+        for (net.vulkanmod.vulkan.shader.layout.Uniform uniform : ubo.getUniforms()) {
+            net.vulkanmod.vulkan.util.MappedBuffer mb = bufferMap.get(uniform.getName());
+            if (mb != null) {
+                uniform.setSupplier(() -> mb);
+            }
+        }
+        #endif
+    }
+
     // ========================= //
     // GlTexture / Lightmap //
     // ========================= //

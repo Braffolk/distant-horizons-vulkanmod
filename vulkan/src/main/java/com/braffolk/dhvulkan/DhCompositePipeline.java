@@ -139,6 +139,9 @@ public class DhCompositePipeline {
         Compat.addUniformWithBuffer(uboBuilder, "int", "uDebugMode", 1, () -> this.debugModeBuf);
 
         UBO mainUbo = uboBuilder.buildUBO(0, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT);
+        Compat.setUniformSuppliers(mainUbo, java.util.Map.of(
+                "uInvProj", this.invProjBuf,
+                "uDebugMode", this.debugModeBuf));
         ubos.add(mainUbo);
 
         // Image descriptors — DH color/depth + SSAO/fog debug textures

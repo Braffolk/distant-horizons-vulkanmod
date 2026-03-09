@@ -168,6 +168,10 @@ public class VulkanRenderContext {
         addDhUniform(uboBuilder, "int", "uNoiseDropoff", 1, 4);
 
         UBO mainUbo = uboBuilder.buildUBO(0, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT);
+        // VM 0.4.2: uniforms' setSupplier() auto-lookup only finds MC's built-in
+        // uniforms (ModelViewMat etc). Set suppliers for our custom DH uniforms.
+        // No-op on VM 0.6.1 where Info.setBufferSupplier() handles it.
+        Compat.setUniformSuppliers(mainUbo, this.uniformBuffers);
         ubos.add(mainUbo);
 
         // Binding 1: LightMap sampler
