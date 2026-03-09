@@ -80,9 +80,9 @@ public class DhFogPipeline {
     private static final int VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL = 5;
 
     // VTextureSelector slots — offset from SSAO (5-7) to avoid collision
-    private static final int FOG_DEPTH_TEXTURE_SLOT = 8;
-    private static final int FOG_COLOR_TEXTURE_SLOT = 9;
-    private static final int FOG_APPLY_DEPTH_TEXTURE_SLOT = 10;
+    private static final int FOG_DEPTH_TEXTURE_SLOT = 5;
+    private static final int FOG_COLOR_TEXTURE_SLOT = 6;
+    private static final int FOG_APPLY_DEPTH_TEXTURE_SLOT = 7;
 
     /** Fullscreen quad vertex format: vec2 position */
     private static final VertexFormat QUAD_FORMAT;

@@ -286,10 +286,6 @@ public class VulkanRenderDelegate implements IVulkanRenderDelegate {
             overdraw = Math.max(0.05f, Math.min(overdrawConfig, 1.0f));
         }
         float clipDist = renderDistChunks * 16.0f * overdraw;
-        if (this.debugFrameCount >= 60 && this.debugFrameCount <= 62) {
-            LOGGER.info("[DH-Vulkan] clipDist={}, renderDistChunks={}, overdrawConfig={}, overdraw={}",
-                    clipDist, renderDistChunks, overdrawConfig, overdraw);
-        }
         this.renderContext.setUniformFloat("uClipDistance", clipDist);
 
         // Dither
@@ -471,23 +467,28 @@ public class VulkanRenderDelegate implements IVulkanRenderDelegate {
             }
         }
 
-        // Composite routing based on vanillaFadeMode:
-        // NONE: composite now (before MC terrain) — fast, visible border at clip
-        // distance
-        // SINGLE_PASS / DOUBLE_PASS: defer to deferredComposite() (after MC terrain)
-        // where we can compare against MC's depth buffer for per-pixel correct overlap
+        // Composite routing:
+        // On 1.21.11+: NONE composites here, SINGLE/DOUBLE defer to deferredComposite()
+        //              with MC depth comparison for per-pixel correct overlap.
+        // On 1.20.6:   All modes composite here (clip distance handles overlap).
+        //              deferredComposite MixinLevelRenderer injection unreliable on older VM.
+        #if MC_VER >= MC_1_21_1
         com.seibel.distanthorizons.api.enums.config.EDhApiMcRenderingFadeMode fadeMode = Config.Client.Advanced.Graphics.Quality.vanillaFadeMode
                 .get();
+        #endif
 
         Renderer.getInstance().endRenderPass();
         ((DefaultMainPass) Renderer.getInstance().getMainPass()).rebindMainTarget();
 
+        #if MC_VER >= MC_1_21_1
         if (fadeMode == com.seibel.distanthorizons.api.enums.config.EDhApiMcRenderingFadeMode.NONE) {
-            // NONE mode: composite immediately without MC depth comparison.
-            // MC terrain renders after this and overwrites via depth test.
             this.runComposite(renderParam, null);
         }
         // else: SINGLE_PASS / DOUBLE_PASS — deferredComposite() will handle it
+        #else
+        // 1.20.6: always composite here, MC terrain renders after and overwrites via depth test
+        this.runComposite(renderParam, null);
+        #endif
 
         // Restore VulkanMod render state (so MC can render normally after this)
         VRenderSystem.cull = this.savedCullState;
