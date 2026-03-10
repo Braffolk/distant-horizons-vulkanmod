@@ -39,16 +39,22 @@ vec3 reconstructNormal(vec2 uv, float depth) {
 void main() {
     float dhDepth = texture(gDhDepthTexture, TexCoord).r;
 
+    // MC depth visualization — must render EVERYWHERE on screen, not just on LODs
+    if (uDebugMode == 6) {
+        float mcDepth = texture(gMcDepthTexture, TexCoord).r;
+        // Exaggerate differences: pow makes near-1.0 values more visible
+        float vis = 1.0 - pow(mcDepth, 256.0);
+        fragColor = vec4(vis, vis, vis, 1.0);
+        gl_FragDepth = 0.0; // always on top
+        return;
+    }
+
     // Nothing drawn by DH here
     if (dhDepth >= 1.0) {
         discard;
     }
 
     // MC depth comparison: if MC rendered terrain at this pixel, discard the LOD.
-    // We check if mcDepth < 0.9999 rather than comparing DH vs MC depth values
-    // directly, because DH and MC use different projection matrices (different
-    // near/far planes), making their raw depth values non-comparable.
-    // Where MC rendered nothing (sky, unloaded chunks), depth stays at 1.0.
     if (uUseMcDepth != 0) {
         float mcDepth = texture(gMcDepthTexture, TexCoord).r;
         if (mcDepth < 0.9999) {
@@ -64,7 +70,6 @@ void main() {
         // Depth visualization: reconstruct view-space Z, map to grayscale
         vec3 viewPos = reconstructViewPos(TexCoord, dhDepth);
         float viewDist = length(viewPos);
-        // Map to visible range: 0-2000 blocks → 0-1
         float vis = 1.0 - clamp(viewDist / 2000.0, 0.0, 1.0);
         fragColor = vec4(vis, vis, vis, 1.0);
     }
@@ -86,13 +91,6 @@ void main() {
     else if (uDebugMode == 5) {
         // Reconstructed normals from depth
         fragColor = vec4(reconstructNormal(TexCoord, dhDepth), 1.0);
-    }
-    else if (uDebugMode == 6) {
-        // MC depth visualization (debug) — linearized for visibility
-        float mcDepth = texture(gMcDepthTexture, TexCoord).r;
-        // Exaggerate differences: pow makes near-1.0 values more visible
-        float vis = 1.0 - pow(mcDepth, 256.0);
-        fragColor = vec4(vis, vis, vis, 1.0);
     }
     else {
         fragColor = texture(gDhColorTexture, TexCoord);

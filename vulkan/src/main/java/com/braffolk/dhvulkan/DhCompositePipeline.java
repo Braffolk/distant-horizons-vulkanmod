@@ -205,7 +205,13 @@ public class DhCompositePipeline {
         VulkanImage fallback = VTextureSelector.getWhiteTexture();
         VTextureSelector.bindTexture(DEBUG_SSAO_TEXTURE_SLOT, ssaoTexture != null ? ssaoTexture : fallback);
         VTextureSelector.bindTexture(DEBUG_FOG_TEXTURE_SLOT, fogTexture != null ? fogTexture : fallback);
-        VTextureSelector.bindTexture(MC_DEPTH_TEXTURE_SLOT, mcDepthTexture != null ? mcDepthTexture : fallback);
+        // MC depth needs a depth-only image view on combined D+S formats (NVIDIA
+        // Windows)
+        if (mcDepthTexture != null) {
+            Compat.prepareMcDepthForSampling(MC_DEPTH_TEXTURE_SLOT, mcDepthTexture);
+        } else {
+            VTextureSelector.bindTexture(MC_DEPTH_TEXTURE_SLOT, fallback);
+        }
 
         // Set pipeline state for composite: premultiplied alpha blend, no cull, depth
         // write
@@ -239,6 +245,9 @@ public class DhCompositePipeline {
         Renderer.getInstance().bindGraphicsPipeline(this.compositePipeline);
         Renderer.getInstance().uploadAndBindUBOs(this.compositePipeline);
         Compat.draw(this.quadVertexBuffer, 3);
+
+        // Restore depth-only view swap (if any)
+        Compat.restoreMcDepthView();
 
         // Restore state
         VRenderSystem.cull = prevCull;

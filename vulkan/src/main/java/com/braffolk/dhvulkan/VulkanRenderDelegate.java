@@ -62,6 +62,9 @@ public class VulkanRenderDelegate implements IVulkanRenderDelegate {
     /** Fog pipeline — computes and applies distance/height fog (Phase 7) */
     private DhFogPipeline fogPipeline;
 
+    /** Depth reader — copies MC depth to R32F for sampling on NVIDIA (Phase 8) */
+    private DhDepthReaderPipeline depthReaderPipeline;
+
     /** Shared index buffer for quad rendering (6 indices per quad) */
     private Object quadIndexBuffer;
     private int quadIndexBufferCapacity = 0;
@@ -140,6 +143,18 @@ public class VulkanRenderDelegate implements IVulkanRenderDelegate {
             this.compositePipeline = new DhCompositePipeline();
             this.compositePipeline.init();
 
+            LOGGER.info("[DH-Vulkan] Init: creating SSAO pipeline...");
+            this.ssaoPipeline = new DhSsaoPipeline();
+            this.ssaoPipeline.init(width, height);
+
+            LOGGER.info("[DH-Vulkan] Init: creating Fog pipeline...");
+            this.fogPipeline = new DhFogPipeline();
+            this.fogPipeline.init(width, height);
+
+            LOGGER.info("[DH-Vulkan] Init: creating Depth Reader pipeline...");
+            this.depthReaderPipeline = new DhDepthReaderPipeline();
+            this.depthReaderPipeline.init(width, height);
+
             this.initialized = true;
             LOGGER.info("[DH-Vulkan] Init complete. All resources created.");
         } catch (Exception e) {
@@ -181,6 +196,9 @@ public class VulkanRenderDelegate implements IVulkanRenderDelegate {
     public void beginFrame() {
         this.drawCount = 0;
         this.frameReady = false;
+
+        // Hot-reload config (allows changing vulkanRenderMode mid-game)
+        DhVulkanConfig.reload();
 
         if (this.initFailed)
             return;
@@ -434,12 +452,18 @@ public class VulkanRenderDelegate implements IVulkanRenderDelegate {
             com.seibel.distanthorizons.api.enums.config.EDhApiMcRenderingFadeMode fadeMode =
                     Config.Client.Advanced.Graphics.Quality.vanillaFadeMode.get();
             if (fadeMode == com.seibel.distanthorizons.api.enums.config.EDhApiMcRenderingFadeMode.NONE) {
-                this.runComposite(renderParam, null);
+                // Pass MC depth for debug mode 6 visualization even in NONE mode
+                VulkanImage debugMcDepth = DhVulkanConfig.get().vulkanRenderMode == 6
+                        ? Compat.getSwapChainDepthAttachment() : null;
+                this.runComposite(renderParam, debugMcDepth);
             }
             // else: SINGLE_PASS / DOUBLE_PASS — deferredComposite() will handle it
             #else
             // VM 0.4.2: always composite here — clip distance handles terrain overlap
-            this.runComposite(renderParam, null);
+            // Pass MC depth for debug mode 6 visualization
+            VulkanImage debugMcDepth = DhVulkanConfig.get().vulkanRenderMode == 6
+                    ? Compat.getSwapChainDepthAttachment() : null;
+            this.runComposite(renderParam, debugMcDepth);
             #endif
 
             // Restore MC render state
@@ -473,8 +497,20 @@ public class VulkanRenderDelegate implements IVulkanRenderDelegate {
         try {
             VulkanImage mcDepth = Compat.getSwapChainDepthAttachment();
             Renderer.getInstance().endRenderPass();
+
+            // Read MC depth into a sampleable R32F texture.
+            // MC depth is NOT an active attachment here (between endRenderPass
+            // and rebindMainTarget), so it's safe to sample.
+            // We can't use vkCmdCopyImage because the swapchain depth lacks
+            // TRANSFER_SRC_BIT, and we can't sample it after rebindMainTarget
+            // because it becomes an active attachment (NVIDIA returns garbage).
+            VulkanImage mcDepthR32F = null;
+            if (this.depthReaderPipeline != null) {
+                mcDepthR32F = this.depthReaderPipeline.readDepth(mcDepth);
+            }
+
             Compat.rebindMainTarget();
-            this.runComposite(renderParam, mcDepth);
+            this.runComposite(renderParam, mcDepthR32F);
         } catch (Exception e) {
             LOGGER.error("[DH-Vulkan] deferredComposite error, falling back to no-depth", e);
             try {
@@ -495,7 +531,7 @@ public class VulkanRenderDelegate implements IVulkanRenderDelegate {
      */
     private void runComposite(DhApiRenderParam renderParam, VulkanImage mcDepthTexture) {
         if (this.compositePipeline != null && this.dhFramebuffer != null) {
-            int debugMode = DhVulkanConfig.get().vulkanDebugMode ? 1 : 0;
+            int debugMode = DhVulkanConfig.get().vulkanRenderMode;
             VulkanImage ssaoTex = this.ssaoPipeline != null ? this.ssaoPipeline.getIntermediateTexture() : null;
             VulkanImage fogTex = this.fogPipeline != null ? this.fogPipeline.getIntermediateTexture() : null;
 

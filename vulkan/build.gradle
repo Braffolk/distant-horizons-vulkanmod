@@ -43,8 +43,9 @@ dependencies {
         officialMojangMappings()
         parchment("org.parchmentmc.data:parchment-${rootProject.parchment_version}@zip")
     }
-    // Fabric loader
+    // Fabric loader + API
     modImplementation "net.fabricmc:fabric-loader:${rootProject.fabric_loader_version}"
+    modImplementation "net.fabricmc.fabric-api:fabric-api:${rootProject.fabric_api_version}"
 
     // Distant Horizons — compile against the unmodified jar
     modCompileOnly files(dhJar.first())

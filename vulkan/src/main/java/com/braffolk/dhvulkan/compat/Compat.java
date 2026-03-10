@@ -323,6 +323,200 @@ public final class Compat {
         #endif
     }
 
+    // ========================= //
+    // Depth-only sampling //
+    // ========================= //
+
+    /** Cached depth-only image view for D24S8 / D32S8 formats */
+    private static long depthOnlyView = 0;
+    private static long lastDepthImageId = 0;
+    /** Saved original view for restore after draw */
+    private static long savedOriginalView = 0;
+    private static VulkanImage savedDepthImage = null;
+
+    /**
+     * Prepare MC's depth texture for sampling by setting the depth-only
+     * image view on combined D+S formats and binding to the given slot.
+     * <p>
+     * IMPORTANT: Does NOT restore the original view — you MUST call
+     * {@link #restoreMcDepthView()} after the draw completes.
+     * This is necessary because VTextureSelector.bindTexture only records
+     * the image reference; the actual descriptor is written later during
+     * uploadAndBindUBOs, which reads mainImageView at that point.
+     */
+    public static void prepareMcDepthForSampling(int slot, VulkanImage depthImage) {
+        int VK_IMAGE_ASPECT_STENCIL_BIT = 4;
+        int VK_IMAGE_ASPECT_DEPTH_BIT = 2;
+
+        if ((depthImage.aspect & VK_IMAGE_ASPECT_STENCIL_BIT) != 0) {
+            try {
+                java.lang.reflect.Field idField = VulkanImage.class.getDeclaredField("id");
+                idField.setAccessible(true);
+                long imageId = (long) idField.get(depthImage);
+
+                if (imageId != lastDepthImageId || depthOnlyView == 0) {
+                    if (depthOnlyView != 0) {
+                        org.lwjgl.vulkan.VK10.vkDestroyImageView(
+                                net.vulkanmod.vulkan.Vulkan.getVkDevice(), depthOnlyView, null);
+                    }
+                    depthOnlyView = VulkanImage.createImageView(
+                            imageId, depthImage.format,
+                            VK_IMAGE_ASPECT_DEPTH_BIT,
+                            0 /* VK_IMAGE_VIEW_TYPE_2D */, depthImage.mipLevels);
+                    lastDepthImageId = imageId;
+                    LOGGER.info("[DH-Vulkan] Created depth-only view for D+S format={} (view={})",
+                            depthImage.format, depthOnlyView);
+                }
+
+                java.lang.reflect.Field viewField = VulkanImage.class.getDeclaredField("mainImageView");
+                viewField.setAccessible(true);
+                savedOriginalView = (long) viewField.get(depthImage);
+                savedDepthImage = depthImage;
+                viewField.setLong(depthImage, depthOnlyView);
+
+                VTextureSelector.bindTexture(slot, depthImage);
+                // DO NOT restore here — descriptor set write happens later
+            } catch (Exception e) {
+                LOGGER.error("[DH-Vulkan] Failed to create depth-only view, binding as-is", e);
+                savedDepthImage = null;
+                VTextureSelector.bindTexture(slot, depthImage);
+            }
+        } else {
+            savedDepthImage = null;
+            VTextureSelector.bindTexture(slot, depthImage);
+        }
+    }
+
+    /**
+     * Restore the original mainImageView on the depth image after draw.
+     * Must be called after the draw that samples MC depth completes.
+     */
+    public static void restoreMcDepthView() {
+        if (savedDepthImage != null && savedOriginalView != 0) {
+            try {
+                java.lang.reflect.Field viewField = VulkanImage.class.getDeclaredField("mainImageView");
+                viewField.setAccessible(true);
+                viewField.setLong(savedDepthImage, savedOriginalView);
+            } catch (Exception e) {
+                LOGGER.error("[DH-Vulkan] Failed to restore MC depth view", e);
+            }
+            savedDepthImage = null;
+            savedOriginalView = 0;
+        }
+    }
+
+    /**
+     * Convenience: prepare, bind, and restore in one call.
+     * Use when the full bind→upload→draw cycle happens within the caller.
+     * 
+     * @deprecated Use {@link #prepareMcDepthForSampling} +
+     *             {@link #restoreMcDepthView} instead
+     */
+    public static void bindMcDepthForSampling(int slot, VulkanImage depthImage) {
+        prepareMcDepthForSampling(slot, depthImage);
+        // Note: caller must call restoreMcDepthView() after draw
+    }
+
+    // ========================= //
+    // MC depth copy for deferred //
+    // ========================= //
+
+    /** Persistent depth copy image — recreated on resize */
+    private static VulkanImage mcDepthCopyImage = null;
+    private static int mcDepthCopyWidth = 0;
+    private static int mcDepthCopyHeight = 0;
+
+    /**
+     * Copy MC's swapchain depth to a separate image for sampling.
+     * <p>
+     * Must be called AFTER endRenderPass() (so the depth is not an active
+     * attachment) and BEFORE rebindMainTarget() (which re-attaches it).
+     * The returned image is safe to sample during the composite pass because
+     * it is NOT bound as an attachment.
+     * <p>
+     * The copy image is persistent and only recreated on resize.
+     */
+    public static VulkanImage copyMcDepthForSampling(VulkanImage srcDepth) {
+        try {
+            // Recreate copy image if dimensions changed
+            if (mcDepthCopyImage == null
+                    || mcDepthCopyWidth != srcDepth.width
+                    || mcDepthCopyHeight != srcDepth.height) {
+                if (mcDepthCopyImage != null) {
+                    mcDepthCopyImage.free();
+                }
+                // Create with TRANSFER_DST (receive copy) + SAMPLED (sample in shader)
+                int copyUsage = 0x04 /* VK_IMAGE_USAGE_SAMPLED_BIT */
+                        | 0x08 /* VK_IMAGE_USAGE_TRANSFER_DST_BIT */;
+                mcDepthCopyImage = VulkanImage.createDepthImage(
+                        srcDepth.format, srcDepth.width, srcDepth.height,
+                        copyUsage, false, true);
+                mcDepthCopyWidth = srcDepth.width;
+                mcDepthCopyHeight = srcDepth.height;
+                LOGGER.info("[DH-Vulkan] Created MC depth copy image: {}x{} format={}",
+                        srcDepth.width, srcDepth.height, srcDepth.format);
+            }
+
+            // Get the current command buffer from Renderer
+            java.lang.reflect.Field cmdField = Renderer.class.getDeclaredField("currentCmdBuffer");
+            cmdField.setAccessible(true);
+            org.lwjgl.vulkan.VkCommandBuffer cmdBuffer = (org.lwjgl.vulkan.VkCommandBuffer) cmdField
+                    .get(Renderer.getInstance());
+
+            try (org.lwjgl.system.MemoryStack stack = org.lwjgl.system.MemoryStack.stackPush()) {
+                // Transition src depth to TRANSFER_SRC
+                srcDepth.transitionImageLayout(stack, cmdBuffer,
+                        org.lwjgl.vulkan.VK10.VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+
+                // Transition copy to TRANSFER_DST
+                mcDepthCopyImage.transitionImageLayout(stack, cmdBuffer,
+                        org.lwjgl.vulkan.VK10.VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+
+                // Copy depth
+                java.lang.reflect.Field idField = VulkanImage.class.getDeclaredField("id");
+                idField.setAccessible(true);
+                long srcId = (long) idField.get(srcDepth);
+                long dstId = (long) idField.get(mcDepthCopyImage);
+
+                org.lwjgl.vulkan.VkImageCopy.Buffer copyRegion = org.lwjgl.vulkan.VkImageCopy.calloc(1, stack);
+                copyRegion.get(0)
+                        .srcSubresource(s -> s
+                                .aspectMask(srcDepth.aspect)
+                                .mipLevel(0).baseArrayLayer(0).layerCount(1))
+                        .srcOffset(o -> o.set(0, 0, 0))
+                        .dstSubresource(s -> s
+                                .aspectMask(srcDepth.aspect)
+                                .mipLevel(0).baseArrayLayer(0).layerCount(1))
+                        .dstOffset(o -> o.set(0, 0, 0))
+                        .extent(e -> e.set(srcDepth.width, srcDepth.height, 1));
+
+                org.lwjgl.vulkan.VK10.vkCmdCopyImage(cmdBuffer,
+                        srcId, org.lwjgl.vulkan.VK10.VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                        dstId, org.lwjgl.vulkan.VK10.VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                        copyRegion);
+
+                // Transition copy to SHADER_READ_ONLY for sampling
+                mcDepthCopyImage.transitionImageLayout(stack, cmdBuffer,
+                        org.lwjgl.vulkan.VK10.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+            }
+
+            return mcDepthCopyImage;
+        } catch (Exception e) {
+            LOGGER.error("[DH-Vulkan] Failed to copy MC depth", e);
+            return srcDepth; // fallback to original (may not work on NVIDIA)
+        }
+    }
+
+    /** Clean up the persistent depth copy image */
+    public static void cleanupDepthCopy() {
+        if (mcDepthCopyImage != null) {
+            mcDepthCopyImage.free();
+            mcDepthCopyImage = null;
+        }
+        mcDepthCopyWidth = 0;
+        mcDepthCopyHeight = 0;
+    }
+
     private static final com.seibel.distanthorizons.core.logging.DhLogger LOGGER = new com.seibel.distanthorizons.core.logging.DhLoggerBuilder()
             .build();
 

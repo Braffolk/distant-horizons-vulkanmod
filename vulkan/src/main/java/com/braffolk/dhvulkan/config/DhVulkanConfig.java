@@ -21,8 +21,12 @@ public class DhVulkanConfig {
 
     // ---- Config Fields ----
 
-    /** Enable verbose Vulkan debug logging */
-    public boolean vulkanDebugMode = false;
+    /**
+     * Debug render mode for the composite shader.
+     * 0=normal, 1=DH depth, 2=SSAO, 3=fog alpha, 4=fog color, 5=normals, 6=MC depth
+     * Hot-reloadable: edit dh-vulkanmod.json while the game is running.
+     */
+    public int vulkanRenderMode = 0;
 
     // ---- Load / Save ----
 
@@ -31,6 +35,11 @@ public class DhVulkanConfig {
             INSTANCE = load();
         }
         return INSTANCE;
+    }
+
+    /** Re-read config from disk. Call once per frame for hot-reload. */
+    public static void reload() {
+        INSTANCE = load();
     }
 
     private static DhVulkanConfig load() {
