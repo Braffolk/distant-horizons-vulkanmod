@@ -70,6 +70,7 @@ public class DhCompositePipeline {
 
     // Persistent uniform buffers
     private MappedBuffer invProjBuf;
+    private MappedBuffer mcProjBuf;
     private MappedBuffer debugModeBuf;
     private MappedBuffer useMcDepthBuf;
 
@@ -140,6 +141,9 @@ public class DhCompositePipeline {
         this.invProjBuf = new MappedBuffer(64);
         Compat.addUniformWithBuffer(uboBuilder, "matrix4x4", "uInvProj", 1, () -> this.invProjBuf);
 
+        this.mcProjBuf = new MappedBuffer(64);
+        Compat.addUniformWithBuffer(uboBuilder, "matrix4x4", "uMcProj", 1, () -> this.mcProjBuf);
+
         this.debugModeBuf = new MappedBuffer(4);
         this.debugModeBuf.putInt(0, 0);
         Compat.addUniformWithBuffer(uboBuilder, "int", "uDebugMode", 1, () -> this.debugModeBuf);
@@ -151,6 +155,7 @@ public class DhCompositePipeline {
         UBO mainUbo = uboBuilder.buildUBO(0, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT);
         Compat.setUniformSuppliers(mainUbo, java.util.Map.of(
                 "uInvProj", this.invProjBuf,
+                "uMcProj", this.mcProjBuf,
                 "uDebugMode", this.debugModeBuf,
                 "uUseMcDepth", this.useMcDepthBuf));
         ubos.add(mainUbo);
@@ -181,7 +186,7 @@ public class DhCompositePipeline {
     public void render(VulkanImage dhColorTexture, VulkanImage dhDepthTexture,
             VulkanImage ssaoTexture, VulkanImage fogTexture,
             VulkanImage mcDepthTexture,
-            int debugMode, float[] invProjMatrix) {
+            int debugMode, float[] invProjMatrix, float[] mcProjMatrix) {
         if (!this.initialized) {
             return;
         }
@@ -192,6 +197,11 @@ public class DhCompositePipeline {
         if (invProjMatrix != null && invProjMatrix.length == 16) {
             for (int i = 0; i < 16; i++) {
                 this.invProjBuf.putFloat(i * 4, invProjMatrix[i]);
+            }
+        }
+        if (mcProjMatrix != null && mcProjMatrix.length == 16) {
+            for (int i = 0; i < 16; i++) {
+                this.mcProjBuf.putFloat(i * 4, mcProjMatrix[i]);
             }
         }
 

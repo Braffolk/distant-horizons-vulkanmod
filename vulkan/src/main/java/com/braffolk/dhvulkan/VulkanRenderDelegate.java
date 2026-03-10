@@ -46,6 +46,7 @@ public class VulkanRenderDelegate implements IVulkanRenderDelegate {
     private final Mat4f tempCombinedMatrix = new Mat4f();
     private final Mat4f tempInvProj = new Mat4f();
     private final float[] tempInvProjArray = new float[16];
+    private final float[] tempMcProjArray = new float[16];
 
     private final VulkanRenderContext renderContext;
     private boolean initialized = false;
@@ -270,7 +271,11 @@ public class VulkanRenderDelegate implements IVulkanRenderDelegate {
         // ===== STAGE 3: SET UNIFORMS =====
         // Just writes values to mapped buffers. NO Vulkan calls.
 
-        this.tempCombinedMatrix.set(renderParameters.mcProjectionMatrix);
+        // Use DH's projection matrix for terrain rendering — it extends the near
+        // clip plane when the camera is far above max world height, preventing
+        // z-fighting artifacts. The composite shader remaps DH depth back to
+        // MC-compatible depth for correct occlusion (see remapDepthDhToMc).
+        this.tempCombinedMatrix.set(renderParameters.dhProjectionMatrix);
         this.tempCombinedMatrix.multiply(renderParameters.dhModelViewMatrix);
         this.renderContext.setUniformMat4("uCombinedMatrix", this.tempCombinedMatrix);
         this.renderContext.setUniformFloat("uWorldYOffset", (float) renderParameters.worldYOffset);
@@ -430,7 +435,7 @@ public class VulkanRenderDelegate implements IVulkanRenderDelegate {
             // SSAO post-process (between LOD render and composite)
             if (this.ssaoPipeline != null && Config.Client.Advanced.Graphics.Ssao.enableSsao.get()) {
                 try {
-                    this.tempCombinedMatrix.set(renderParam.mcProjectionMatrix);
+                    this.tempCombinedMatrix.set(renderParam.dhProjectionMatrix);
                     this.ssaoPipeline.render(this.dhFramebuffer, this.tempCombinedMatrix);
                 } catch (Exception e) {
                     LOGGER.error("[DH-Vulkan] SSAO render failed", e);
@@ -441,7 +446,7 @@ public class VulkanRenderDelegate implements IVulkanRenderDelegate {
             if (this.fogPipeline != null && Config.Client.Advanced.Graphics.Fog.enableDhFog.get()) {
                 try {
                     this.tempCombinedMatrix.set(renderParam.dhModelViewMatrix);
-                    this.tempInvProj.set(renderParam.mcProjectionMatrix);
+                    this.tempInvProj.set(renderParam.dhProjectionMatrix);
                     this.fogPipeline.render(this.dhFramebuffer,
                             this.tempCombinedMatrix,
                             this.tempInvProj,
@@ -538,7 +543,9 @@ public class VulkanRenderDelegate implements IVulkanRenderDelegate {
             VulkanImage ssaoTex = this.ssaoPipeline != null ? this.ssaoPipeline.getIntermediateTexture() : null;
             VulkanImage fogTex = this.fogPipeline != null ? this.fogPipeline.getIntermediateTexture() : null;
 
-            this.tempInvProj.set(renderParam.mcProjectionMatrix);
+            // uInvProj = inverse of DH's projection (for view-space reconstruction from DH
+            // depth)
+            this.tempInvProj.set(renderParam.dhProjectionMatrix);
             this.tempInvProj.invert();
             this.tempInvProjArray[0] = tempInvProj.m00;
             this.tempInvProjArray[1] = tempInvProj.m10;
@@ -557,12 +564,30 @@ public class VulkanRenderDelegate implements IVulkanRenderDelegate {
             this.tempInvProjArray[14] = tempInvProj.m23;
             this.tempInvProjArray[15] = tempInvProj.m33;
 
+            // uMcProj = MC's projection (for remapping DH depth to MC-compatible depth)
+            this.tempMcProjArray[0] = renderParam.mcProjectionMatrix.m00;
+            this.tempMcProjArray[1] = renderParam.mcProjectionMatrix.m10;
+            this.tempMcProjArray[2] = renderParam.mcProjectionMatrix.m20;
+            this.tempMcProjArray[3] = renderParam.mcProjectionMatrix.m30;
+            this.tempMcProjArray[4] = renderParam.mcProjectionMatrix.m01;
+            this.tempMcProjArray[5] = renderParam.mcProjectionMatrix.m11;
+            this.tempMcProjArray[6] = renderParam.mcProjectionMatrix.m21;
+            this.tempMcProjArray[7] = renderParam.mcProjectionMatrix.m31;
+            this.tempMcProjArray[8] = renderParam.mcProjectionMatrix.m02;
+            this.tempMcProjArray[9] = renderParam.mcProjectionMatrix.m12;
+            this.tempMcProjArray[10] = renderParam.mcProjectionMatrix.m22;
+            this.tempMcProjArray[11] = renderParam.mcProjectionMatrix.m32;
+            this.tempMcProjArray[12] = renderParam.mcProjectionMatrix.m03;
+            this.tempMcProjArray[13] = renderParam.mcProjectionMatrix.m13;
+            this.tempMcProjArray[14] = renderParam.mcProjectionMatrix.m23;
+            this.tempMcProjArray[15] = renderParam.mcProjectionMatrix.m33;
+
             this.compositePipeline.render(
                     this.dhFramebuffer.getFramebuffer().getColorAttachment(),
                     this.dhFramebuffer.getFramebuffer().getDepthAttachment(),
                     ssaoTex, fogTex,
                     mcDepthTexture,
-                    debugMode, this.tempInvProjArray);
+                    debugMode, this.tempInvProjArray, this.tempMcProjArray);
         }
     }
 

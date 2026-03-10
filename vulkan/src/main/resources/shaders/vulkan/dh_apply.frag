@@ -5,7 +5,8 @@ layout(location = 0) out vec4 fragColor;
 
 // UBO at binding 0
 layout(std140, binding = 0) uniform CompositeUBO {
-    mat4 uInvProj;    // inverse projection matrix for depth reconstruction
+    mat4 uInvProj;    // inverse of DH's projection matrix (for view-space reconstruction)
+    mat4 uMcProj;     // MC's projection matrix (for remapping DH depth → MC depth)
     int uDebugMode;   // 0=off, 1=depth, 2=ssao, 3=fog_alpha, 4=fog_color, 5=normals, 6=mc_depth
     int uUseMcDepth;  // 0=no MC depth comparison, 1=discard where MC terrain is closer
 };
@@ -17,13 +18,28 @@ layout(set = 0, binding = 4) uniform sampler2D gFogTexture;
 layout(set = 0, binding = 5) uniform sampler2D gMcDepthTexture;
 
 /**
- * Reconstruct view-space position from depth using inverse projection.
- * Same approach as the SSAO shader — proven to work.
+ * Reconstruct view-space position from DH depth using DH's inverse projection.
  */
 vec3 reconstructViewPos(vec2 uv, float depth) {
     vec3 clipPos = vec3(uv, depth) * 2.0 - 1.0;
     vec4 viewPos = uInvProj * vec4(clipPos, 1.0);
     return viewPos.xyz / viewPos.w;
+}
+
+/**
+ * Remap DH depth to MC-compatible depth.
+ * DH renders with dhProjectionMatrix (extended near/far clip planes).
+ * MC uses its own projection. To write gl_FragDepth that is comparable
+ * to MC's depth buffer, we unproject DH depth → view space → reproject
+ * with MC's projection.
+ */
+float remapDepthDhToMc(vec2 uv, float dhDepth) {
+    // Unproject from DH clip space to view space
+    vec4 viewPos = uInvProj * vec4(vec3(uv, dhDepth) * 2.0 - 1.0, 1.0);
+    viewPos /= viewPos.w;
+    // Reproject to MC clip space
+    vec4 mcClip = uMcProj * viewPos;
+    return (mcClip.z / mcClip.w) * 0.5 + 0.5;
 }
 
 /**
@@ -96,6 +112,8 @@ void main() {
         fragColor = texture(gDhColorTexture, TexCoord);
     }
 
-    // Bias DH depth behind MC terrain to prevent Z-fighting.
-    gl_FragDepth = min(dhDepth + 0.001, 1.0);
+    // Remap DH depth to MC-compatible depth for correct occlusion against MC terrain.
+    // DH uses dhProjectionMatrix with extended near/far clip planes.
+    float mcCompatibleDepth = remapDepthDhToMc(TexCoord, dhDepth);
+    gl_FragDepth = min(mcCompatibleDepth + 0.001, 1.0);
 }

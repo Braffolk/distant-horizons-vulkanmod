@@ -86,6 +86,11 @@ void main() {
             ao = textureLod(gSSAOMap, TexCoord, 0).r;
         }
 
+        // Fade out SSAO after 1600 blocks (not visible at that distance, saves perf)
+        float linearDist = linearizeDepth(fragmentDepth);
+        float distanceFade = smoothstep(1600.0, 2400.0, linearDist);
+        ao = mix(ao, 1.0, distanceFade);
+
         if (uDebugMode != 0) {
             // Debug: red = heavily occluded, green = no occlusion
             float occlusion = 1.0 - ao;
