@@ -1,0 +1,64 @@
+plugins {
+    id "dev.architectury.loom" version "1.13-SNAPSHOT"
+    id "systems.manifold.manifold-gradle-plugin" version "0.0.2-alpha"
+}
+
+version = rootProject.mod_version
+archivesBaseName = "DistantHorizons-VulkanMod-fabric"
+
+jar {
+    archiveFileName = "${archivesBaseName}-${version}-mc${rootProject.minecraft_version}.jar"
+}
+
+remapJar {
+    inputFile = jar.archiveFile
+    archiveFileName = "DistantHorizons-VulkanMod-fabric-${version}-mc${rootProject.minecraft_version}.jar"
+    dependsOn jar
+}
+
+processResources {
+    def vmMinVersion = rootProject.minecraft_version.startsWith("1.20") ? ">=0.4.2" : ">=0.6.0"
+    inputs.property "version", project.version
+    inputs.property "minecraft_version", rootProject.minecraft_version
+    inputs.property "vulkanmod_min_version", vmMinVersion
+    filesMatching("fabric.mod.json") {
+        expand "version": project.version, "minecraft_version": rootProject.minecraft_version, "vulkanmod_min_version": vmMinVersion
+    }
+}
+
+// Manifold preprocessor version
+manifold {
+    manifoldVersion = "2025.1.31"
+}
+
+// Resolve DH and VulkanMod jars dynamically based on MC version
+def mcVer = rootProject.minecraft_version
+def dhJar = fileTree("${rootDir}/jars").matching { include "DistantHorizons-*-${mcVer}-*.jar" }.files
+def vmJar = fileTree("${rootDir}/jars").matching { include "VulkanMod_${mcVer}-*.jar" }.files
+
+if (dhJar.isEmpty()) throw new GradleException("No DH jar found for MC ${mcVer} in jars/")
+if (vmJar.isEmpty()) throw new GradleException("No VulkanMod jar found for MC ${mcVer} in jars/")
+
+dependencies {
+    minecraft "com.mojang:minecraft:${mcVer}"
+    mappings loom.layered() {
+        officialMojangMappings()
+        parchment("org.parchmentmc.data:parchment-${rootProject.parchment_version}@zip")
+    }
+    // Fabric loader + API
+    modImplementation "net.fabricmc:fabric-loader:${rootProject.fabric_loader_version}"
+    modImplementation "net.fabricmc.fabric-api:fabric-api:${rootProject.fabric_api_version}"
+
+    // Distant Horizons — compile against the unmodified jar
+    modCompileOnly files(dhJar.first())
+
+    // VulkanMod — compile against the jar
+    modCompileOnly files(vmJar.first())
+
+    // LWJGL vulkan types (VkCommandBuffer, MemoryStack) surfaced by VulkanMod's API
+    compileOnly "org.lwjgl:lwjgl:${rootProject.lwjgl_version}"
+    compileOnly "org.lwjgl:lwjgl-vulkan:${rootProject.lwjgl_version}"
+
+    // Manifold preprocessor
+    annotationProcessor("systems.manifold:manifold-preprocessor:2025.1.31")
+}

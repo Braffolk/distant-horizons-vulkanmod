@@ -1,3 +1,51 @@
+## v2.4.0-2.4.6+vm.4
+
+First release as a standalone Fabric extension. Works alongside unmodified Distant Horizons 2.4.0+.
+
+### Added
+
+- Supports MC 1.20.6 (VulkanMod 0.4.2) and MC 1.21.11 (VulkanMod 0.6.1) from a single codebase
+- Ported Vulkan rendering backend from a DH source fork to a mixin-based extension mod
+- All DH interception via mixins, no DH source modifications required
+- Standalone jar installable alongside any compatible DH release
+
+### Included Features (from fork)
+
+- Native Vulkan LOD rendering via VulkanMod
+- DH-owned framebuffer with composite pipeline
+- SSAO post-processing (2-pass, configurable)
+- Fog post-processing (distance + height fog)
+- Noise/dithering on LOD terrain
+- Lightmap integration via VulkanMod's GL emulation
+- Deterministic GPU memory management with buffer cache
+
+### MC Depth Comparison
+
+- Full per-pixel MC depth comparison: LODs are hidden wherever Minecraft terrain has rendered, using MC's actual depth buffer values instead of a fixed clip distance.
+- Shader-based depth reader pipeline (`DhDepthReaderPipeline`) copies MC's swapchain depth into a sampleable R32F texture. This works on all platforms, including NVIDIA Windows where the swapchain depth can't be directly sampled as a texture.
+- MC depth debug visualization (mode 6) shows the actual depth buffer values, useful for diagnosing depth-related rendering issues (debug modes can be enabled via /dh-debug num).
+
+### Overdraw Prevention
+
+- LOD overdraw prevention matches original DH behavior: LODs within MC's render distance are clipped based on the `overdrawPrevention` config setting.
+- Hardware `gl_ClipDistance` clips LOD geometry in the vertex shader, less fragment shader cost for clipped geometry.
+- Dithered fade transition in the fragment shader provides a smooth visual boundary between MC terrain and LODs when dithering is enabled.
+
+### Fade Mode Support
+
+- Respects DH's `vanillaFadeMode` setting (NONE / SINGLE_PASS / DOUBLE_PASS):
+  - **NONE**: LODs composite immediately with optional MC depth for debug mode.
+  - **SINGLE/DOUBLE**: LODs composite first without MC depth, then `deferredComposite` adds MC depth occlusion after terrain renders.
+- Unified rendering path for both MC versions — no version-specific branching in the composite logic.
+
+### Technical Details
+
+- MC 1.20.6 compatibility required resolving mixin conflicts (`DhVulkanMixinPlugin`), preventing GL context poisoning (`MixinLightMapWrapper`), bypassing VM 0.4.2's hardcoded UINT16 index type, wiring custom uniform suppliers, and normalizing config value scaling.
+- All version-specific code centralized in `Compat.java` using Manifold preprocessor directives.
+
+
+
+
 ## v2.4.6+vm.3
 
 ### Rendering Fixes
