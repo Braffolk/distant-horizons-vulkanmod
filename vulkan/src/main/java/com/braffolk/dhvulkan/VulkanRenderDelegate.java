@@ -40,6 +40,12 @@ import java.util.concurrent.ConcurrentHashMap;
  */
 public class VulkanRenderDelegate implements IVulkanRenderDelegate {
     private static final DhLogger LOGGER = new DhLoggerBuilder().build();
+    private static final Vec3f VEC3F_ZERO = new Vec3f(0, 0, 0);
+
+    // Pre-allocated reusable objects to avoid per-frame heap allocations
+    private final Mat4f tempCombinedMatrix = new Mat4f();
+    private final Mat4f tempInvProj = new Mat4f();
+    private final float[] tempInvProjArray = new float[16];
 
     private final VulkanRenderContext renderContext;
     private boolean initialized = false;
@@ -264,9 +270,9 @@ public class VulkanRenderDelegate implements IVulkanRenderDelegate {
         // ===== STAGE 3: SET UNIFORMS =====
         // Just writes values to mapped buffers. NO Vulkan calls.
 
-        Mat4f combinedMatrix = new Mat4f(renderParameters.mcProjectionMatrix);
-        combinedMatrix.multiply(renderParameters.dhModelViewMatrix);
-        this.renderContext.setUniformMat4("uCombinedMatrix", combinedMatrix);
+        this.tempCombinedMatrix.set(renderParameters.mcProjectionMatrix);
+        this.tempCombinedMatrix.multiply(renderParameters.dhModelViewMatrix);
+        this.renderContext.setUniformMat4("uCombinedMatrix", this.tempCombinedMatrix);
         this.renderContext.setUniformFloat("uWorldYOffset", (float) renderParameters.worldYOffset);
         this.renderContext.setUniformFloat("uMircoOffset", 0.01f);
 
@@ -304,7 +310,7 @@ public class VulkanRenderDelegate implements IVulkanRenderDelegate {
                 Config.Client.Advanced.Graphics.NoiseTexture.noiseDropoff.get());
         this.renderContext.setUniformBool("uIsWhiteWorld",
                 Config.Client.Advanced.Debugging.enableWhiteWorld.get());
-        this.renderContext.setUniformVec3f("uModelOffset", new Vec3f(0, 0, 0));
+        this.renderContext.setUniformVec3f("uModelOffset", VEC3F_ZERO);
 
         // Upload UBOs after setting all uniforms
         this.renderContext.uploadAndBindUBOs();
@@ -424,8 +430,8 @@ public class VulkanRenderDelegate implements IVulkanRenderDelegate {
             // SSAO post-process (between LOD render and composite)
             if (this.ssaoPipeline != null && Config.Client.Advanced.Graphics.Ssao.enableSsao.get()) {
                 try {
-                    this.ssaoPipeline.render(this.dhFramebuffer,
-                            new Mat4f(renderParam.mcProjectionMatrix));
+                    this.tempCombinedMatrix.set(renderParam.mcProjectionMatrix);
+                    this.ssaoPipeline.render(this.dhFramebuffer, this.tempCombinedMatrix);
                 } catch (Exception e) {
                     LOGGER.error("[DH-Vulkan] SSAO render failed", e);
                 }
@@ -434,9 +440,11 @@ public class VulkanRenderDelegate implements IVulkanRenderDelegate {
             // Fog post-process (after SSAO, before composite)
             if (this.fogPipeline != null && Config.Client.Advanced.Graphics.Fog.enableDhFog.get()) {
                 try {
+                    this.tempCombinedMatrix.set(renderParam.dhModelViewMatrix);
+                    this.tempInvProj.set(renderParam.mcProjectionMatrix);
                     this.fogPipeline.render(this.dhFramebuffer,
-                            new Mat4f(renderParam.dhModelViewMatrix),
-                            new Mat4f(renderParam.mcProjectionMatrix),
+                            this.tempCombinedMatrix,
+                            this.tempInvProj,
                             renderParam.partialTicks);
                 } catch (Exception e) {
                     LOGGER.error("[DH-Vulkan] Fog render failed", e);
@@ -530,21 +538,31 @@ public class VulkanRenderDelegate implements IVulkanRenderDelegate {
             VulkanImage ssaoTex = this.ssaoPipeline != null ? this.ssaoPipeline.getIntermediateTexture() : null;
             VulkanImage fogTex = this.fogPipeline != null ? this.fogPipeline.getIntermediateTexture() : null;
 
-            Mat4f invProj = new Mat4f(renderParam.mcProjectionMatrix);
-            invProj.invert();
-            float[] invProjArray = new float[] {
-                    invProj.m00, invProj.m10, invProj.m20, invProj.m30,
-                    invProj.m01, invProj.m11, invProj.m21, invProj.m31,
-                    invProj.m02, invProj.m12, invProj.m22, invProj.m32,
-                    invProj.m03, invProj.m13, invProj.m23, invProj.m33
-            };
+            this.tempInvProj.set(renderParam.mcProjectionMatrix);
+            this.tempInvProj.invert();
+            this.tempInvProjArray[0] = tempInvProj.m00;
+            this.tempInvProjArray[1] = tempInvProj.m10;
+            this.tempInvProjArray[2] = tempInvProj.m20;
+            this.tempInvProjArray[3] = tempInvProj.m30;
+            this.tempInvProjArray[4] = tempInvProj.m01;
+            this.tempInvProjArray[5] = tempInvProj.m11;
+            this.tempInvProjArray[6] = tempInvProj.m21;
+            this.tempInvProjArray[7] = tempInvProj.m31;
+            this.tempInvProjArray[8] = tempInvProj.m02;
+            this.tempInvProjArray[9] = tempInvProj.m12;
+            this.tempInvProjArray[10] = tempInvProj.m22;
+            this.tempInvProjArray[11] = tempInvProj.m32;
+            this.tempInvProjArray[12] = tempInvProj.m03;
+            this.tempInvProjArray[13] = tempInvProj.m13;
+            this.tempInvProjArray[14] = tempInvProj.m23;
+            this.tempInvProjArray[15] = tempInvProj.m33;
 
             this.compositePipeline.render(
                     this.dhFramebuffer.getFramebuffer().getColorAttachment(),
                     this.dhFramebuffer.getFramebuffer().getDepthAttachment(),
                     ssaoTex, fogTex,
                     mcDepthTexture,
-                    debugMode, invProjArray);
+                    debugMode, this.tempInvProjArray);
         }
     }
 

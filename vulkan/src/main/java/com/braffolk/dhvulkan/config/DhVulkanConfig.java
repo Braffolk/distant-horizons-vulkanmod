@@ -37,8 +37,14 @@ public class DhVulkanConfig {
         return INSTANCE;
     }
 
-    /** Re-read config from disk. Call once per frame for hot-reload. */
+    private static long lastReloadTime = 0;
+
+    /** Re-read config from disk, throttled to once per second. */
     public static void reload() {
+        long now = System.currentTimeMillis();
+        if (now - lastReloadTime < 1000)
+            return;
+        lastReloadTime = now;
         INSTANCE = load();
     }
 
