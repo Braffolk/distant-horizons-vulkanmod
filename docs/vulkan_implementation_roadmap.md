@@ -1,6 +1,6 @@
 # Distant Horizons → VulkanMod: Implementation Roadmap
 
-Status as of 2026-03-09: **Phases 1-7, extension mod port, and multi-version support complete.** LODs render with correct colors, depth, lightmap, transparency, compositing, SSAO, fog, noise, and earth curvature via an extension mod (mixin-based, no DH source modifications). Supports MC 1.20.6 (VulkanMod 0.4.2) and MC 1.21.11 (VulkanMod 0.6.1) from a single codebase.
+Status as of 2026-03-10: **Phases 1-7, extension mod port, multi-version support, and MC depth comparison complete.** LODs render with correct colors, depth, lightmap, transparency, compositing, SSAO, fog, noise, earth curvature, overdraw prevention, and MC depth occlusion via an extension mod (mixin-based, no DH source modifications). Supports MC 1.20.6 (VulkanMod 0.4.2) and MC 1.21.11 (VulkanMod 0.6.1) from a single codebase.
 
 ## Architecture Overview
 
@@ -13,6 +13,7 @@ Core files under `vulkan/src/main/java/com/braffolk/dhvulkan/`:
 - **`DhCompositePipeline.java`** — Fullscreen triangle composite with depth bias
 - **`DhSsaoPipeline.java`** — 2-pass SSAO post-process
 - **`DhFogPipeline.java`** — 2-pass fog post-process (distance + height)
+- **`DhDepthReaderPipeline.java`** — Copies MC depth to sampleable R32F texture (required on NVIDIA Windows)
 - **`IVulkanRenderDelegate.java`** — Interface for the Vulkan delegate
 - **`DhVulkanMixinPlugin.java`** — IMixinConfigPlugin for resolving mixin conflicts between DH and VulkanMod
 - **`compat/Compat.java`** — Single source of truth for all version-specific API differences
@@ -28,9 +29,11 @@ Mixins under `vulkan/src/main/java/com/braffolk/dhvulkan/mixin/`:
 - **`MixinLightMapWrapper`** — Cancels raw GL calls in DH's LightMapWrapper (prevents crashes in Vulkan context)
 
 Vulkan shaders under `vulkan/src/main/resources/shaders/vulkan/`:
+- **`dh_terrain.vert`** / **`dh_terrain.frag`** — Terrain rendering shaders (with `gl_ClipDistance` overdraw)
 - **`dh_apply.vert`** / **`dh_apply.frag`** — Composite shaders
 - **`dh_ssao.vert`** / **`dh_ssao.frag`** / **`dh_ssao_apply.frag`** — SSAO shaders
 - **`dh_fog.frag`** / **`dh_fog_apply.frag`** — Fog shaders
+- **`dh_depth_read.frag`** — MC depth reader (copies depth to R32F)
 
 ---
 
@@ -83,22 +86,17 @@ Vulkan shaders under `vulkan/src/main/resources/shaders/vulkan/`:
 - [x] **Composite pipeline** (`DhCompositePipeline.java`) — fullscreen triangle (via `gl_VertexIndex`) with depth writes via `gl_FragDepth`
 - [x] **Composite shaders** (`dh_apply.vert`, `dh_apply.frag`) — Vulkan GLSL 450, Y-flip for framebuffer coords
 - [x] **Depth bias** (+0.0001 in composite shader) — LODs always slightly behind MC terrain, no z-fighting
-- [x] **`uClipDistance`** — uses `RenderUtil.getNearClipPlaneInBlocks()` to prevent double-rendering of transparent blocks (water, leaves) in near zone
+- [x] **`uClipDistance`** — overdraw prevention via `gl_ClipDistance[0]` (hardware vertex-level clipping) + fragment shader dithered fade
 - [x] **Window resize** — auto-recreate framebuffer via `Renderer.addOnResizeCallback()`
 - [x] **Back-face culling** enabled — ~50% fragment reduction, +50fps on M1 Max (170fps vs 120fps)
 - [x] **Explicit depth test** — `depthTest=true`, `depthFun=GL_LEQUAL` ensures Early-Z hardware is active
 - [x] **Removed `polygonOffset`** — no longer needed with own framebuffer + depth bias
 
 ### Caveats & future considerations
-- **Transparent block overlap**: `uClipDistance` handles near-zone transparency (water, leaves, glass). Without it, LODs composite before MC's translucent pass, causing double-rendering. The ideal per-pixel MC depth check is not possible in Vulkan without copying MC's depth buffer to a separate texture first (can't sample an attachment while it's in the active render pass). This is a potential future improvement.
+- **Transparent block overlap**: Per-pixel MC depth comparison is now implemented (see MC Depth Comparison below). The `deferredComposite` path copies MC's depth to an R32F texture for sampling.
 - **Vulkan constants inlined**: `DhVulkanFramebuffer.java` and `DhCompositePipeline.java` inline Vulkan VK10 constants as `static final int` because `org.lwjgl.vulkan` is not on the fabric module's compile classpath.
 - **VRenderSystem uses GL constants**: All `depthFun` and similar values must use GL constants (e.g., `GL_LEQUAL=515`, `GL_ALWAYS=519`), not raw Vulkan values. VulkanMod converts them internally via `PipelineState.DepthState.glToVulkan()`.
 - **Dummy UBO at binding 0**: VulkanMod's pipeline system requires at least one UBO. The composite pipeline uses a 4-byte dummy.
-
-### What Phase 6 unlocks
-- SSAO (can sample DH's depth texture)
-- Fog (can compute distance from DH depth)
-- Proper transparent LOD rendering via separate passes
 
 ---
 
@@ -161,6 +159,38 @@ Vulkan shaders under `vulkan/src/main/resources/shaders/vulkan/`:
 
 ---
 
+## MC Depth Comparison ✅ COMPLETE
+
+**Goal:** Per-pixel depth comparison between MC terrain and DH LODs, so LODs are hidden wherever MC has rendered.
+
+### Implementation
+- **`DhDepthReaderPipeline.java`** — Renders MC's swapchain depth into a sampleable R32F color texture via a separate render pass. Required because Vulkan can't sample a depth attachment while it's bound to the active render pass.
+- **`dh_depth_read.frag`** — Simple passthrough shader that samples the depth texture and writes to `gl_FragDepth` / color output.
+- **`deferredComposite()`** in `VulkanRenderDelegate` — Called from `MixinLevelRenderer` after MC terrain renders. Reads MC depth via the depth reader, then composites DH's framebuffer with per-pixel depth comparison.
+- Works on all platforms: macOS (MoltenVK), Windows (NVIDIA, AMD), Linux.
+
+### Fade Mode Support
+- Respects DH's `vanillaFadeMode` setting:
+  - **NONE**: Composites in `endFrame()` immediately (no deferred pass). MC depth available for debug mode 6 only.
+  - **SINGLE/DOUBLE**: `endFrame()` composites without MC depth, then `deferredComposite()` re-composites with MC depth from the depth reader.
+- Unified rendering path — no version-specific branching.
+
+### Overdraw Prevention (Hybrid Approach)
+- **Vertex shader**: `gl_ClipDistance[0] = length(vertexWorldPos.xz) - uClipDistance` — hardware clips LOD geometry within MC's render distance. Zero fragment shader cost for clipped geometry.
+- **Fragment shader**: Dithered fade via `smoothstep(uClipDistance, uClipDistance * 1.5, viewDist)` + Bayer matrix noise — smooth visual transition when dithering is enabled.
+- `uClipDistance` computed from `renderDistChunks * 16 * overdraw`, matching original DH's distribution.
+
+> [!IMPORTANT]
+> **Do NOT modify the projection matrix for overdraw clipping.** An earlier attempt used `Mat4f.setClipPlanes()` to push the near clip plane to the overdraw distance. This broke depth ordering — LODs rendered in front of MC terrain because the different near/far clip planes produced incompatible depth buffer values. The `gl_ClipDistance` approach clips without affecting depth values.
+
+> [!WARNING]
+> **VM 0.4.2 descriptor caching issue.** On VulkanMod 0.4.2, texture descriptors bound to `VTextureSelector` slots persist across pipeline binds. If `endFrame()` binds a white fallback texture to slot 4 (for null MC depth), that fallback descriptor persists into `deferredComposite()`'s composite call, overriding the real MC depth texture. Fix: `endFrame()` skips compositing entirely for debug mode 6 when `deferredComposite` will run.
+
+> [!NOTE]
+> **Depth reader timing is critical.** `readDepth()` must be called AFTER `Renderer.endRenderPass()` (MC depth is no longer an active attachment) and BEFORE `Compat.rebindMainTarget()` (MC's render pass restarts). The `prepareMcDepthForSampling()` / `restoreMcDepthView()` split ensures depth-only image views persist through the descriptor write.
+
+---
+
 ## Known Quirks & Platform Differences
 
 > [!CAUTION]
@@ -185,10 +215,11 @@ Vulkan shaders under `vulkan/src/main/resources/shaders/vulkan/`:
 ---
 
 ## Phase 9: Edge Cases & Robustness
-- [ ] Handle renderer reset (e.g., resource pack reload, window resize)
+- [x] Handle renderer reset — `cleanup()` now resets `initFailed` flag, allowing re-initialization after settings changes. Previously, a transient init failure permanently disabled rendering with no errors.
+- [x] Config hot-reload — `DhVulkanConfig.reload()` throttled to once per second (was reading JSON from disk every frame)
+- [x] Per-frame allocation optimization — pre-allocated `Mat4f`, `float[16]`, `Vec3f` fields avoid heap allocations on the hot path
 - [ ] Handle VulkanMod not being loaded (graceful fallback to GL)
 - [ ] Thread safety: DH runs LOD generation on worker threads — Vulkan buffer uploads must happen on the render thread
-- [ ] Config hot-reload: DH allows changing settings without restart
 
 ---
 
@@ -262,11 +293,16 @@ The fix: **`MixinLodBufferContainer`** intercepts `uploadBuffersDirect()` at HEA
 | `DhCompositePipeline.java` | Fullscreen triangle composite pipeline |
 | `DhSsaoPipeline.java` | 2-pass SSAO post-process |
 | `DhFogPipeline.java` | 2-pass fog post-process |
+| `DhDepthReaderPipeline.java` | Copies MC depth to sampleable R32F texture |
 | `DhVulkanMixinPlugin.java` | IMixinConfigPlugin for mixin conflict resolution |
+| `DhVulkanConfig.java` | JSON config with throttled hot-reload |
 | `MixinLodBufferContainer.java` | Intercepts buffer upload, stores raw vertex data |
 | `MixinLodRenderer.java` | Redirects LodRenderer to Vulkan delegate |
+| `MixinLevelRenderer.java` | Triggers deferredComposite after MC terrain |
 | `MixinLightMapWrapper.java` | Cancels raw GL calls in DH's lightmap code |
+| `dh_terrain.vert` / `dh_terrain.frag` | Terrain shaders (gl_ClipDistance overdraw) |
 | `dh_apply.vert` / `dh_apply.frag` | Vulkan composite shaders |
+| `dh_depth_read.frag` | MC depth reader shader |
 | `VertexFormats.java` (DH) | DH's custom vertex format definition (16 bytes) |
 | `PipelineState.java` (VulkanMod) | Render state (cull, blend, depth) |
 

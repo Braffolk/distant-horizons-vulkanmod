@@ -33,6 +33,7 @@ import java.nio.ByteOrder;
 import java.util.Iterator;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentLinkedQueue;
 
 /**
  * Concrete implementation of {@link IVulkanRenderDelegate} that uses
@@ -46,6 +47,11 @@ public class VulkanRenderDelegate implements IVulkanRenderDelegate {
     private final Mat4f tempCombinedMatrix = new Mat4f();
     private final Mat4f tempInvProj = new Mat4f();
     private final float[] tempInvProjArray = new float[16];
+    private final float[] tempMcProjArray = new float[16];
+
+    // VBO cache pruning: amortized sweep to detect dead VBOs
+    private static final int PRUNE_BATCH_SIZE = 64; // entries checked per frame
+    private int pruneIteratorIndex = 0;
 
     private final VulkanRenderContext renderContext;
     private boolean initialized = false;
@@ -53,8 +59,6 @@ public class VulkanRenderDelegate implements IVulkanRenderDelegate {
 
     // Frame state — reset every beginFrame()
     private boolean frameReady = false;
-
-    // Debug counters
     private int drawCount = 0;
 
     /** DH-owned framebuffer — LODs render into this instead of MC's render pass */
@@ -106,6 +110,36 @@ public class VulkanRenderDelegate implements IVulkanRenderDelegate {
      */
     private final Map<Integer, CachedBuffer> vulkanBufferCache = new ConcurrentHashMap<>();
 
+    /**
+     * Pending free entry: VBO identity hash + the specific CachedBuffer
+     * that was cached at queue time. We compare-and-remove to avoid
+     * accidentally freeing a NEW entry that reused the same identity hash
+     * (which can happen after GC with System.identityHashCode).
+     */
+    private static class PendingFree {
+        final int vboId;
+        final CachedBuffer expectedEntry;
+
+        PendingFree(int vboId, CachedBuffer expectedEntry) {
+            this.vboId = vboId;
+            this.expectedEntry = expectedEntry;
+        }
+    }
+
+    /**
+     * Thread-safe queue for VBOs pending GPU buffer free.
+     * Populated from DH worker threads (destroyAsync/close).
+     * Items sit for one frame in {@link #pendingFreeBatch} before
+     * being freed, giving DH time to prepare replacement LOD data.
+     */
+    private final ConcurrentLinkedQueue<PendingFree> pendingFreeQueue = new ConcurrentLinkedQueue<>();
+
+    /**
+     * Batch from the PREVIOUS frame, ready to be freed this frame.
+     * Double-buffered with {@link #pendingFreeQueue} for N+1 delay.
+     */
+    private java.util.List<PendingFree> pendingFreeBatch = new java.util.ArrayList<>();
+
     /** Saved VRenderSystem state — restored in endFrame() */
     private boolean savedCullState;
     private boolean savedDepthMask;
@@ -137,7 +171,7 @@ public class VulkanRenderDelegate implements IVulkanRenderDelegate {
             this.renderContext.init();
 
             LOGGER.info("[DH-Vulkan] Init: creating index buffer...");
-            this.ensureQuadIndexBuffer(65536);
+            this.ensureQuadIndexBuffer(262144);
 
             LOGGER.info("[DH-Vulkan] Init: creating framebuffer...");
             int width = Compat.getSwapChainWidth();
@@ -255,11 +289,78 @@ public class VulkanRenderDelegate implements IVulkanRenderDelegate {
         Renderer.getInstance().endRenderPass();
         this.dhFramebuffer.beginRenderPass();
 
+        // N+1 frame delay for GPU buffer frees:
+        // 1. Free the PREVIOUS frame's batch (these have been waiting one frame)
+        for (PendingFree pf : this.pendingFreeBatch) {
+            // Compare-and-remove: only free if the cache still holds the
+            // EXACT same CachedBuffer that was queued. If a new VBO reused
+            // the same identityHashCode (GC collision), the entry will be
+            // a different CachedBuffer instance — leave it alone.
+            CachedBuffer current = this.vulkanBufferCache.get(pf.vboId);
+            if (current == pf.expectedEntry) {
+                this.vulkanBufferCache.remove(pf.vboId);
+                current.free();
+            }
+        }
+        this.pendingFreeBatch.clear();
+
+        // 2. Drain the queue into the batch for NEXT frame
+        PendingFree pf;
+        while ((pf = this.pendingFreeQueue.poll()) != null) {
+            this.pendingFreeBatch.add(pf);
+        }
+
+        // Amortized VBO cache pruning: check a batch of entries per frame
+        // for dead VBOs (unloaded LOD sections). Spreads the work across
+        // many frames to avoid stutters.
+        pruneDeadCacheEntries();
+
         // Bind terrain pipeline
         this.renderContext.bindTerrainPipeline();
 
-        this.drawCount = 0;
         this.frameReady = true;
+    }
+
+    /**
+     * Amortized VBO cache pruning. Checks {@link #PRUNE_BATCH_SIZE} entries per
+     * frame for dead VBOs (handle is null = VBO was destroyed by DH). Frees the
+     * GPU buffer and removes the cache entry. Full cache sweep takes
+     * ceil(cacheSize / PRUNE_BATCH_SIZE) frames.
+     * <p>
+     * TODO: Decision pending after testing Fix #6 (MixinGLBuffer.freeBuffer
+     * delegation).
+     * If Fix #6 resolves the VRAM leak completely, this method should be removed
+     * as dead code. If significant leaks remain, this should be fully implemented
+     * using WeakReference<GLVertexBuffer> to detect orphaned cache entries.
+     * See implementation_plan.md Fix #3 for details.
+     */
+    private void pruneDeadCacheEntries() {
+        if (this.vulkanBufferCache.isEmpty())
+            return;
+
+        Integer[] keys = this.vulkanBufferCache.keySet().toArray(new Integer[0]);
+        int total = keys.length;
+        if (total == 0)
+            return;
+
+        // Wrap the iterator index
+        if (this.pruneIteratorIndex >= total) {
+            this.pruneIteratorIndex = 0;
+        }
+
+        int checked = 0;
+        int pruned = 0;
+        while (checked < PRUNE_BATCH_SIZE && checked < total) {
+            int idx = (this.pruneIteratorIndex + checked) % total;
+            int vboId = keys[idx];
+            CachedBuffer cached = this.vulkanBufferCache.get(vboId);
+            if (cached != null) {
+                // Currently a no-op — relies on MixinGLBuffer calling freeBuffer()
+                // when DH destroys VBOs. See TODO above.
+            }
+            checked++;
+        }
+        this.pruneIteratorIndex += checked;
     }
 
     @Override
@@ -270,7 +371,11 @@ public class VulkanRenderDelegate implements IVulkanRenderDelegate {
         // ===== STAGE 3: SET UNIFORMS =====
         // Just writes values to mapped buffers. NO Vulkan calls.
 
-        this.tempCombinedMatrix.set(renderParameters.mcProjectionMatrix);
+        // Use DH's projection matrix for terrain rendering — it extends the near
+        // clip plane when the camera is far above max world height, preventing
+        // z-fighting artifacts. The composite shader remaps DH depth back to
+        // MC-compatible depth for correct occlusion (see remapDepthDhToMc).
+        this.tempCombinedMatrix.set(renderParameters.dhProjectionMatrix);
         this.tempCombinedMatrix.multiply(renderParameters.dhModelViewMatrix);
         this.renderContext.setUniformMat4("uCombinedMatrix", this.tempCombinedMatrix);
         this.renderContext.setUniformFloat("uWorldYOffset", (float) renderParameters.worldYOffset);
@@ -338,11 +443,24 @@ public class VulkanRenderDelegate implements IVulkanRenderDelegate {
         int vboId = System.identityHashCode(vbo);
         Object handle = ((IVulkanVertexBuffer) vbo).dhvulkan$getVulkanBufferHandle();
 
-        // VBO was destroyed
+        // VBO handle is null — either destroyed or mid-transition.
+        // Draw with stale cached buffer if available to prevent flicker
+        // during LOD detail transitions. The pending free queue will
+        // clean up the cache entry on the next frame.
         if (handle == null) {
-            CachedBuffer stale = this.vulkanBufferCache.remove(vboId);
-            if (stale != null)
-                stale.free();
+            CachedBuffer stale = this.vulkanBufferCache.get(vboId);
+            if (stale != null) {
+                try {
+                    int quadCount = indexCount / 6;
+                    if (quadCount > this.quadIndexBufferCapacity) {
+                        this.ensureQuadIndexBuffer(quadCount + 1024);
+                    }
+                    this.renderContext.drawIndexed(stale.vkBuffer, this.quadIndexBuffer, indexCount);
+                    this.drawCount++;
+                } catch (Exception e) {
+                    // Buffer may have been freed already — just skip
+                }
+            }
             return;
         }
 
@@ -384,7 +502,6 @@ public class VulkanRenderDelegate implements IVulkanRenderDelegate {
 
             // THE draw call
             this.renderContext.drawIndexed(cached.vkBuffer, this.quadIndexBuffer, indexCount);
-            this.drawCount++;
 
         } catch (Exception e) {
             LOGGER.error("[DH-Vulkan] drawBuffer error", e);
@@ -393,14 +510,30 @@ public class VulkanRenderDelegate implements IVulkanRenderDelegate {
 
     /**
      * Frees the cached Vulkan VertexBuffer for a given GLVertexBuffer.
-     * Called from LodBufferContainer.close() when DH destroys a VBO.
+     * RENDER THREAD ONLY — called from beginFrame() drain or cleanup().
      */
     @Override
     public void freeBuffer(GLVertexBuffer vbo) {
         int vboId = System.identityHashCode(vbo);
         CachedBuffer cached = this.vulkanBufferCache.remove(vboId);
-        if (cached != null)
+        if (cached != null) {
             cached.free();
+        }
+    }
+
+    /**
+     * Queue a VBO for deferred free on the render thread.
+     * Thread-safe — called from MixinGLBuffer.destroyAsync()/close()
+     * on DH worker threads. Captures the current CachedBuffer so the
+     * drain can compare-and-remove (avoids identity hash collisions).
+     */
+    @Override
+    public void queueBufferFree(GLVertexBuffer vbo) {
+        int vboId = System.identityHashCode(vbo);
+        CachedBuffer cached = this.vulkanBufferCache.get(vboId);
+        if (cached != null) {
+            this.pendingFreeQueue.add(new PendingFree(vboId, cached));
+        }
     }
 
     @Override
@@ -430,7 +563,7 @@ public class VulkanRenderDelegate implements IVulkanRenderDelegate {
             // SSAO post-process (between LOD render and composite)
             if (this.ssaoPipeline != null && Config.Client.Advanced.Graphics.Ssao.enableSsao.get()) {
                 try {
-                    this.tempCombinedMatrix.set(renderParam.mcProjectionMatrix);
+                    this.tempCombinedMatrix.set(renderParam.dhProjectionMatrix);
                     this.ssaoPipeline.render(this.dhFramebuffer, this.tempCombinedMatrix);
                 } catch (Exception e) {
                     LOGGER.error("[DH-Vulkan] SSAO render failed", e);
@@ -441,7 +574,7 @@ public class VulkanRenderDelegate implements IVulkanRenderDelegate {
             if (this.fogPipeline != null && Config.Client.Advanced.Graphics.Fog.enableDhFog.get()) {
                 try {
                     this.tempCombinedMatrix.set(renderParam.dhModelViewMatrix);
-                    this.tempInvProj.set(renderParam.mcProjectionMatrix);
+                    this.tempInvProj.set(renderParam.dhProjectionMatrix);
                     this.fogPipeline.render(this.dhFramebuffer,
                             this.tempCombinedMatrix,
                             this.tempInvProj,
@@ -538,7 +671,9 @@ public class VulkanRenderDelegate implements IVulkanRenderDelegate {
             VulkanImage ssaoTex = this.ssaoPipeline != null ? this.ssaoPipeline.getIntermediateTexture() : null;
             VulkanImage fogTex = this.fogPipeline != null ? this.fogPipeline.getIntermediateTexture() : null;
 
-            this.tempInvProj.set(renderParam.mcProjectionMatrix);
+            // uInvProj = inverse of DH's projection (for view-space reconstruction from DH
+            // depth)
+            this.tempInvProj.set(renderParam.dhProjectionMatrix);
             this.tempInvProj.invert();
             this.tempInvProjArray[0] = tempInvProj.m00;
             this.tempInvProjArray[1] = tempInvProj.m10;
@@ -557,26 +692,66 @@ public class VulkanRenderDelegate implements IVulkanRenderDelegate {
             this.tempInvProjArray[14] = tempInvProj.m23;
             this.tempInvProjArray[15] = tempInvProj.m33;
 
+            // uMcProj = MC's projection (for remapping DH depth to MC-compatible depth)
+            this.tempMcProjArray[0] = renderParam.mcProjectionMatrix.m00;
+            this.tempMcProjArray[1] = renderParam.mcProjectionMatrix.m10;
+            this.tempMcProjArray[2] = renderParam.mcProjectionMatrix.m20;
+            this.tempMcProjArray[3] = renderParam.mcProjectionMatrix.m30;
+            this.tempMcProjArray[4] = renderParam.mcProjectionMatrix.m01;
+            this.tempMcProjArray[5] = renderParam.mcProjectionMatrix.m11;
+            this.tempMcProjArray[6] = renderParam.mcProjectionMatrix.m21;
+            this.tempMcProjArray[7] = renderParam.mcProjectionMatrix.m31;
+            this.tempMcProjArray[8] = renderParam.mcProjectionMatrix.m02;
+            this.tempMcProjArray[9] = renderParam.mcProjectionMatrix.m12;
+            this.tempMcProjArray[10] = renderParam.mcProjectionMatrix.m22;
+            this.tempMcProjArray[11] = renderParam.mcProjectionMatrix.m32;
+            this.tempMcProjArray[12] = renderParam.mcProjectionMatrix.m03;
+            this.tempMcProjArray[13] = renderParam.mcProjectionMatrix.m13;
+            this.tempMcProjArray[14] = renderParam.mcProjectionMatrix.m23;
+            this.tempMcProjArray[15] = renderParam.mcProjectionMatrix.m33;
+
             this.compositePipeline.render(
                     this.dhFramebuffer.getFramebuffer().getColorAttachment(),
                     this.dhFramebuffer.getFramebuffer().getDepthAttachment(),
                     ssaoTex, fogTex,
                     mcDepthTexture,
-                    debugMode, this.tempInvProjArray);
+                    debugMode, this.tempInvProjArray, this.tempMcProjArray);
         }
     }
 
     @Override
     public void cleanup() {
+        // Wait for GPU to finish all in-flight work before freeing resources.
+        // This ensures deferred frees aren't racing with GPU reads.
+        // Only runs during server transitions (loading screen is up), so the
+        // brief GPU stall is not visible to the user.
+        try {
+            Compat.waitDeviceIdle();
+        } catch (Exception e) {
+            LOGGER.warn("[DH-Vulkan] waitDeviceIdle failed during cleanup", e);
+        }
+
+        // Drain both the pending batch and queue — no need for N+1 delay during cleanup
+        this.pendingFreeBatch.clear();
+        PendingFree pf;
+        while ((pf = this.pendingFreeQueue.poll()) != null) {
+            // These will be freed in the cache sweep below
+        }
+
         LOGGER.info("[DH-Vulkan] cleanup() called, freeing {} cached Vulkan buffers.", this.vulkanBufferCache.size());
         for (CachedBuffer cached : this.vulkanBufferCache.values()) {
             cached.free();
         }
         this.vulkanBufferCache.clear();
+        this.pruneIteratorIndex = 0;
 
         if (this.quadIndexBuffer != null) {
             Compat.scheduleFree(this.quadIndexBuffer);
             this.quadIndexBuffer = null;
+        }
+        if (this.depthReaderPipeline != null) {
+            this.depthReaderPipeline.cleanup();
+            this.depthReaderPipeline = null;
         }
         if (this.ssaoPipeline != null) {
             this.ssaoPipeline.cleanup();
@@ -595,6 +770,11 @@ public class VulkanRenderDelegate implements IVulkanRenderDelegate {
             this.dhFramebuffer = null;
         }
         this.renderContext.cleanup();
+
+        // Free static Compat resources (depth-only view, MC depth copy image)
+        // that persist across server transitions.
+        Compat.cleanupStaticResources();
+
         this.initialized = false;
         this.initFailed = false; // Allow re-initialization after cleanup
         LOGGER.info("[DH-Vulkan] VulkanRenderDelegate cleaned up.");

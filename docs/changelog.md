@@ -1,3 +1,31 @@
+## v2.4.0-2.4.6+vm.5
+
+**Major VRAM fix** — GPU memory now properly cleans up during gameplay. Previously, VRAM would grow indefinitely (easily reaching 7GB+) as you explored or left and rejoined servers. With this fix, VRAM stays stable under normal use and reliably frees up between server sessions. Additionally, rendering at extreme altitudes and high render distances is now more stable, and SSAO performance is improved at long distances.
+
+### Known Issues
+
+- Rare LOD flicker: individual LOD sections may briefly disappear for a frame when their detail level changes (e.g. flying fast towards terrain). Will be further improved in future releases.
+
+### Memory Management (Technical Details)
+
+- **Fixed primary VRAM leak**: VBO destruction (`destroyAsync`/`close`) now schedules cached GPU `VertexBuffer`s for deferred freeing via a thread-safe pending queue. Previously, GPU buffers remained cached permanently — growing proportionally to total LOD churn.
+- GPU buffer frees use an N+1 frame delay with compare-and-remove to prevent LOD transition flicker and identity hash collisions after GC.
+- Fixed static Vulkan resource leak — `depthOnlyView` and `mcDepthCopyImage` were never freed during cleanup.
+- Fixed VRAM leak in `DhDepthReaderPipeline` — cleanup and resize were completely unimplemented, leaking resources on every server join/leave cycle.
+- Fixed native memory leak in `DhCompositePipeline` — four MappedBuffers were never freed during cleanup.
+- Fixed stale resize callbacks — pipeline resize handlers now guard against firing after cleanup, preventing use-after-free across reinit cycles.
+- Added `depthReaderPipeline` to the cleanup chain.
+- Added `vkDeviceWaitIdle` at start of cleanup to ensure GPU is idle before freeing resources.
+- Pre-allocated index buffer to 256K quads (~6MB) to avoid mid-frame grow+defer cycles.
+
+### Rendering
+
+- Switched terrain, SSAO, and fog rendering to use DH's projection matrix instead of MC's, preventing rendering artifacts and NaN propagation at extreme altitudes.
+- Added depth remapping in the composite shader for correct occlusion against Minecraft terrain.
+- SSAO now fades out beyond 1,600 blocks — the occlusion shader early-outs for distant fragments, improving performance at high render distances.
+
+
+
 ## v2.4.0-2.4.6+vm.4
 
 First release as a standalone Fabric extension. Works alongside unmodified Distant Horizons 2.4.0+.

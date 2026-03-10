@@ -436,6 +436,8 @@ public class DhFogPipeline {
     // ========== //
 
     private void onResize() {
+        if (!this.initialized)
+            return;
         int newWidth = Compat.getSwapChainWidth();
         int newHeight = Compat.getSwapChainHeight();
 

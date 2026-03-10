@@ -69,6 +69,7 @@ public class DhDepthReaderPipeline {
     private Framebuffer framebuffer;
     private RenderPass renderPass;
     private Object quadVertexBuffer;
+    private net.vulkanmod.vulkan.util.MappedBuffer dummyBuf;
     private int width, height;
     private boolean initialized = false;
 
@@ -121,14 +122,14 @@ public class DhDepthReaderPipeline {
         List<UBO> ubos = new ArrayList<>();
         AlignedStruct.Builder uboBuilder = new AlignedStruct.Builder();
         // VulkanMod requires non-empty UBO — add dummy uniform
-        net.vulkanmod.vulkan.util.MappedBuffer dummyBuf = new net.vulkanmod.vulkan.util.MappedBuffer(4);
-        dummyBuf.putInt(0, 0);
-        Compat.addUniformWithBuffer(uboBuilder, "int", "uDummy", 1, () -> dummyBuf);
+        this.dummyBuf = new net.vulkanmod.vulkan.util.MappedBuffer(4);
+        this.dummyBuf.putInt(0, 0);
+        Compat.addUniformWithBuffer(uboBuilder, "int", "uDummy", 1, () -> this.dummyBuf);
         UBO mainUbo = uboBuilder.buildUBO(0, VK_SHADER_STAGE_FRAGMENT_BIT);
         // VM 0.4.2: must set suppliers after buildUBO (addUniformInfo doesn't wire
         // them)
         java.util.Map<String, net.vulkanmod.vulkan.util.MappedBuffer> bufMap = new java.util.HashMap<>();
-        bufMap.put("uDummy", dummyBuf);
+        bufMap.put("uDummy", this.dummyBuf);
         Compat.setUniformSuppliers(mainUbo, bufMap);
         ubos.add(mainUbo);
 
@@ -175,11 +176,57 @@ public class DhDepthReaderPipeline {
     }
 
     private void onResize() {
-        // Framebuffer auto-resizes via VulkanMod
+        if (!this.initialized)
+            return;
+
+        int newWidth = Compat.getSwapChainWidth();
+        int newHeight = Compat.getSwapChainHeight();
+
+        if (newWidth == 0 || newHeight == 0)
+            return;
+        if (newWidth == this.width && newHeight == this.height)
+            return;
+
+        LOGGER.info("[DH-Vulkan] Resizing DhDepthReaderPipeline: {}x{} -> {}x{}",
+                this.width, this.height, newWidth, newHeight);
+
+        // Free old framebuffer and render pass
+        if (this.renderPass != null) {
+            this.renderPass.cleanUp();
+        }
+        if (this.framebuffer != null) {
+            this.framebuffer.cleanUp();
+        }
+
+        this.width = newWidth;
+        this.height = newHeight;
+
+        createFramebuffer();
     }
 
     public void cleanup() {
-        // VulkanMod manages pipeline/framebuffer lifecycle
+        if (this.quadVertexBuffer != null) {
+            Compat.scheduleFree(this.quadVertexBuffer);
+            this.quadVertexBuffer = null;
+        }
+        if (this.pipeline != null) {
+            this.pipeline.cleanUp();
+            this.pipeline = null;
+        }
+        if (this.renderPass != null) {
+            this.renderPass.cleanUp();
+            this.renderPass = null;
+        }
+        if (this.framebuffer != null) {
+            this.framebuffer.cleanUp();
+            this.framebuffer = null;
+        }
+        if (this.dummyBuf != null) {
+            org.lwjgl.system.MemoryUtil.memFree(this.dummyBuf.buffer);
+            this.dummyBuf = null;
+        }
+        this.initialized = false;
+        LOGGER.info("[DH-Vulkan] DhDepthReaderPipeline cleaned up.");
     }
 
     private String readShaderResource(String path) {

@@ -102,6 +102,10 @@ public class DhVulkanFramebuffer {
      * dimensions.
      */
     private void onResize() {
+        // Guard against stale callbacks after cleanup
+        if (this.framebuffer == null || this.renderPass == null)
+            return;
+
         int newWidth = Compat.getSwapChainWidth();
         int newHeight = Compat.getSwapChainHeight();
 

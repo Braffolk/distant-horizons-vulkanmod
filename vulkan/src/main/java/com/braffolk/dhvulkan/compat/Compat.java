@@ -48,6 +48,16 @@ public final class Compat {
     // Buffer operations //
     // ========================= //
 
+    /**
+     * Wait for the GPU to finish all in-flight work.
+     * Must be called before freeing resources that may still be in use by
+     * a previous frame. This is expensive — only use during cleanup/reinit,
+     * never per-frame.
+     */
+    public static void waitDeviceIdle() {
+        org.lwjgl.vulkan.VK10.vkDeviceWaitIdle(net.vulkanmod.vulkan.Vulkan.getVkDevice());
+    }
+
     public static long getBufferId(Object buffer) {
         return ((Buffer) buffer).getId();
     }
@@ -515,6 +525,26 @@ public final class Compat {
         }
         mcDepthCopyWidth = 0;
         mcDepthCopyHeight = 0;
+    }
+
+    /**
+     * Free all static Vulkan resources held by Compat.
+     * Must be called during VulkanRenderDelegate.cleanup() to prevent leaks
+     * across server transitions (leave/join world cycles).
+     */
+    public static void cleanupStaticResources() {
+        // Free the depth-only image view used for combined D+S formats
+        if (depthOnlyView != 0) {
+            org.lwjgl.vulkan.VK10.vkDestroyImageView(
+                    net.vulkanmod.vulkan.Vulkan.getVkDevice(), depthOnlyView, null);
+            depthOnlyView = 0;
+        }
+        lastDepthImageId = 0;
+        savedOriginalView = 0;
+        savedDepthImage = null;
+
+        // Free the persistent MC depth copy image
+        cleanupDepthCopy();
     }
 
     private static final com.seibel.distanthorizons.core.logging.DhLogger LOGGER = new com.seibel.distanthorizons.core.logging.DhLoggerBuilder()

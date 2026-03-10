@@ -70,10 +70,18 @@ public interface IVulkanRenderDelegate {
 
     /**
      * Free the cached Vulkan buffer associated with a GLVertexBuffer.
-     * Called from LodBufferContainer.close() when DH destroys a VBO.
-     * This ensures GPU memory is freed deterministically, not relying on GC.
+     * Must be called on the RENDER THREAD only (e.g. from cleanup() or
+     * beginFrame()).
      */
     void freeBuffer(GLVertexBuffer vbo);
+
+    /**
+     * Queue a VBO for deferred GPU buffer free on the next render frame.
+     * Thread-safe — called from DH's worker threads (destroyAsync/close).
+     * The actual free happens in beginFrame() on the render thread,
+     * avoiding race conditions with drawBuffer().
+     */
+    void queueBufferFree(GLVertexBuffer vbo);
 
     /** Clean up all Vulkan resources */
     void cleanup();
