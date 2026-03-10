@@ -1,3 +1,25 @@
+## v2.4.0-2.4.6+vm.5
+
+### Memory Management
+
+- Fixed VRAM leak in `DhDepthReaderPipeline` — cleanup and resize were completely unimplemented (empty methods), leaking framebuffer, render pass, pipeline, and vertex buffer on every server join/leave cycle.
+- Fixed native memory leak in `DhCompositePipeline` — four MappedBuffers (`invProjBuf`, `mcProjBuf`, `debugModeBuf`, `useMcDepthBuf`) were never freed during cleanup.
+- Fixed stale resize callbacks — all pipeline resize handlers now guard against firing after cleanup, preventing use-after-free when callbacks stack across reinit cycles.
+- Added `depthReaderPipeline` to the cleanup chain — it was created during init but never freed during cleanup.
+- Added `vkDeviceWaitIdle` at start of cleanup to ensure the GPU is idle before scheduling resource destruction. Prevents deferred-free races during server transitions.
+- Pre-allocated index buffer to 256K quads (~6MB) to avoid mid-frame grow+defer cycles that temporarily doubled index buffer VRAM.
+
+### Rendering
+
+- Switched terrain, SSAO, and fog rendering to use DH's projection matrix (`dhProjectionMatrix`) instead of MC's. DH's projection extends the near clip plane when the camera is far above max world height, preventing far-rendering artifacts and NaN propagation through shaders on some drivers.
+- Added depth remapping in the composite shader (`remapDepthDhToMc`) to convert DH depth values back to MC-compatible depth for correct occlusion against Minecraft terrain.
+- SSAO now fades out beyond 1,600 blocks using `smoothstep`, matching DH upstream behavior. The occlusion compute shader (`dh_ssao.frag`) early-outs for distant fragments, skipping the expensive spiral sampling entirely — measurable performance improvement at high render distances.
+
+### Compatibility
+
+- VulkanMod dependency now enforces minimum version per MC version: 0.4.2 for MC 1.20.x, 0.6.0 for MC 1.21.x. Previously accepted any version (`*`).
+
+
 ## v2.4.0-2.4.6+vm.4
 
 First release as a standalone Fabric extension. Works alongside unmodified Distant Horizons 2.4.0+.

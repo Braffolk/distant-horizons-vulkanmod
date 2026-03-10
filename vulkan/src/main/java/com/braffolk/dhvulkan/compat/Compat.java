@@ -48,6 +48,16 @@ public final class Compat {
     // Buffer operations //
     // ========================= //
 
+    /**
+     * Wait for the GPU to finish all in-flight work.
+     * Must be called before freeing resources that may still be in use by
+     * a previous frame. This is expensive — only use during cleanup/reinit,
+     * never per-frame.
+     */
+    public static void waitDeviceIdle() {
+        org.lwjgl.vulkan.VK10.vkDeviceWaitIdle(net.vulkanmod.vulkan.Vulkan.getVkDevice());
+    }
+
     public static long getBufferId(Object buffer) {
         return ((Buffer) buffer).getId();
     }
