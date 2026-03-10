@@ -4,7 +4,7 @@ A Fabric extension mod that adds native **Vulkan rendering** to [Distant Horizon
 
 LODs are rendered using VulkanMod's Vulkan pipeline instead of OpenGL, enabling Distant Horizons to work on systems and configurations running VulkanMod.
 
-> **This is not a standalone mod.** You must have both Distant Horizons and VulkanMod installed. Versions v2.4.6+vm.3 and earlier were standalone forks of DH; 2.4.0-2.4.6+vm.4 is a separate extension mod that runs alongside unmodified DH. Tested for Minecraft versions 1.20.6 and 1.21.11.
+> **This is not a standalone mod.** You must have both Distant Horizons and VulkanMod installed. Versions v2.4.6+vm.3 and earlier were standalone forks of DH; Newer versions are a separate extension mod that runs alongside unmodified DH. Tested for Minecraft versions 1.20.6 and 1.21.11.
 
 ![Distant Horizons running on VulkanMod](docs/dh-vulkanmod.jpg)
 *Distant Horizons LODs rendered via VulkanMod's Vulkan backend*

@@ -1,34 +1,29 @@
-## v2.4.0-2.4.6+vm.6
-
-(current branch, in works)
-
-### Memory Management (Critical VRAM Leak Fix)
-
-- **Fixed primary VRAM leak**: VBO destruction (`destroyAsync`/`close`) now calls `freeBuffer()` on the Vulkan delegate, freeing cached GPU `VertexBuffer`s from `vulkanBufferCache`. Previously, when DH unloaded LOD sections during normal gameplay (player movement, server transitions), the native ByteBuffer was freed but the GPU buffer remained cached permanently — growing proportionally to total LOD churn. This was the root cause of VRAM reaching 7GB+ after repeated leave/join cycles.
-- Fixed static Vulkan resource leak in `Compat.java` — `depthOnlyView` (VkImageView) and `mcDepthCopyImage` (full-resolution depth copy, ~8–33MB depending on resolution) were never freed during cleanup. Added `Compat.cleanupStaticResources()` called from `VulkanRenderDelegate.cleanup()`.
-
 ## v2.4.0-2.4.6+vm.5
 
-(previous iteration)
+**Major VRAM fix** — GPU memory now properly cleans up during gameplay. Previously, VRAM would grow indefinitely (easily reaching 7GB+) as you explored or left and rejoined servers. With this fix, VRAM stays stable under normal use and reliably frees up between server sessions. Additionally, rendering at extreme altitudes and high render distances is now more stable, and SSAO performance is improved at long distances.
 
-### Memory Management
+### Known Issues
 
-- Fixed VRAM leak in `DhDepthReaderPipeline` — cleanup and resize were completely unimplemented (empty methods), leaking framebuffer, render pass, pipeline, and vertex buffer on every server join/leave cycle.
-- Fixed native memory leak in `DhCompositePipeline` — four MappedBuffers (`invProjBuf`, `mcProjBuf`, `debugModeBuf`, `useMcDepthBuf`) were never freed during cleanup.
-- Fixed stale resize callbacks — all pipeline resize handlers now guard against firing after cleanup, preventing use-after-free when callbacks stack across reinit cycles.
-- Added `depthReaderPipeline` to the cleanup chain — it was created during init but never freed during cleanup.
-- Added `vkDeviceWaitIdle` at start of cleanup to ensure the GPU is idle before scheduling resource destruction. Prevents deferred-free races during server transitions.
-- Pre-allocated index buffer to 256K quads (~6MB) to avoid mid-frame grow+defer cycles that temporarily doubled index buffer VRAM.
+- Rare LOD flicker: individual LOD sections may briefly disappear for a frame when their detail level changes (e.g. flying fast towards terrain). Will be further improved in future releases.
+
+### Memory Management (Technical Details)
+
+- **Fixed primary VRAM leak**: VBO destruction (`destroyAsync`/`close`) now schedules cached GPU `VertexBuffer`s for deferred freeing via a thread-safe pending queue. Previously, GPU buffers remained cached permanently — growing proportionally to total LOD churn.
+- GPU buffer frees use an N+1 frame delay with compare-and-remove to prevent LOD transition flicker and identity hash collisions after GC.
+- Fixed static Vulkan resource leak — `depthOnlyView` and `mcDepthCopyImage` were never freed during cleanup.
+- Fixed VRAM leak in `DhDepthReaderPipeline` — cleanup and resize were completely unimplemented, leaking resources on every server join/leave cycle.
+- Fixed native memory leak in `DhCompositePipeline` — four MappedBuffers were never freed during cleanup.
+- Fixed stale resize callbacks — pipeline resize handlers now guard against firing after cleanup, preventing use-after-free across reinit cycles.
+- Added `depthReaderPipeline` to the cleanup chain.
+- Added `vkDeviceWaitIdle` at start of cleanup to ensure GPU is idle before freeing resources.
+- Pre-allocated index buffer to 256K quads (~6MB) to avoid mid-frame grow+defer cycles.
 
 ### Rendering
 
-- Switched terrain, SSAO, and fog rendering to use DH's projection matrix (`dhProjectionMatrix`) instead of MC's. DH's projection extends the near clip plane when the camera is far above max world height, preventing far-rendering artifacts and NaN propagation through shaders on some drivers.
-- Added depth remapping in the composite shader (`remapDepthDhToMc`) to convert DH depth values back to MC-compatible depth for correct occlusion against Minecraft terrain.
-- SSAO now fades out beyond 1,600 blocks using `smoothstep`, matching DH upstream behavior. The occlusion compute shader (`dh_ssao.frag`) early-outs for distant fragments, skipping the expensive spiral sampling entirely — measurable performance improvement at high render distances.
+- Switched terrain, SSAO, and fog rendering to use DH's projection matrix instead of MC's, preventing rendering artifacts and NaN propagation at extreme altitudes.
+- Added depth remapping in the composite shader for correct occlusion against Minecraft terrain.
+- SSAO now fades out beyond 1,600 blocks — the occlusion shader early-outs for distant fragments, improving performance at high render distances.
 
-### Compatibility
-
-- VulkanMod dependency now enforces minimum version per MC version: 0.4.2 for MC 1.20.x, 0.6.0 for MC 1.21.x. Previously accepted any version (`*`).
 
 
 ## v2.4.0-2.4.6+vm.4
