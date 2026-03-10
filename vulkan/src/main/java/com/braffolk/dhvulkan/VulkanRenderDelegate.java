@@ -596,6 +596,7 @@ public class VulkanRenderDelegate implements IVulkanRenderDelegate {
         }
         this.renderContext.cleanup();
         this.initialized = false;
+        this.initFailed = false; // Allow re-initialization after cleanup
         LOGGER.info("[DH-Vulkan] VulkanRenderDelegate cleaned up.");
     }
 
