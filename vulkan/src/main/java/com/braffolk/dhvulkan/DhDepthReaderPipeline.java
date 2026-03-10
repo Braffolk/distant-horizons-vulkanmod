@@ -53,8 +53,8 @@ public class DhDepthReaderPipeline {
     private static final int VK_ATTACHMENT_STORE_OP_STORE = 0;
     private static final int VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL = 5;
 
-    // Use a high texture slot to avoid conflicts
-    private static final int MC_DEPTH_READ_SLOT = 8;
+    // Reuse composite's DH color slot (3) — not active during depth reader's pass
+    private static final int MC_DEPTH_READ_SLOT = 3;
 
     private static final VertexFormat QUAD_FORMAT;
     static {
@@ -125,6 +125,11 @@ public class DhDepthReaderPipeline {
         dummyBuf.putInt(0, 0);
         Compat.addUniformWithBuffer(uboBuilder, "int", "uDummy", 1, () -> dummyBuf);
         UBO mainUbo = uboBuilder.buildUBO(0, VK_SHADER_STAGE_FRAGMENT_BIT);
+        // VM 0.4.2: must set suppliers after buildUBO (addUniformInfo doesn't wire
+        // them)
+        java.util.Map<String, net.vulkanmod.vulkan.util.MappedBuffer> bufMap = new java.util.HashMap<>();
+        bufMap.put("uDummy", dummyBuf);
+        Compat.setUniformSuppliers(mainUbo, bufMap);
         ubos.add(mainUbo);
 
         List<ImageDescriptor> imageDescriptors = new ArrayList<>();

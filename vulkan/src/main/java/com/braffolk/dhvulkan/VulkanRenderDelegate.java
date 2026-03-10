@@ -447,24 +447,24 @@ public class VulkanRenderDelegate implements IVulkanRenderDelegate {
             Renderer.getInstance().endRenderPass();
             Compat.rebindMainTarget();
 
-            #if MC_VER >= MC_1_21_1
-            // VM 0.6.1+: check fade mode for deferred vs immediate composite
-            com.seibel.distanthorizons.api.enums.config.EDhApiMcRenderingFadeMode fadeMode =
-                    Config.Client.Advanced.Graphics.Quality.vanillaFadeMode.get();
+            // Check fade mode: NONE = composite immediately (no deferred pass),
+            // SINGLE/DOUBLE = draw LODs now without MC depth, let deferredComposite
+            // add MC depth occlusion via depth reader pipeline.
+            com.seibel.distanthorizons.api.enums.config.EDhApiMcRenderingFadeMode fadeMode = Config.Client.Advanced.Graphics.Quality.vanillaFadeMode
+                    .get();
             if (fadeMode == com.seibel.distanthorizons.api.enums.config.EDhApiMcRenderingFadeMode.NONE) {
-                // Pass MC depth for debug mode 6 visualization even in NONE mode
+                // NONE: only composite, no deferred pass. Pass MC depth for debug mode 6.
                 VulkanImage debugMcDepth = DhVulkanConfig.get().vulkanRenderMode == 6
-                        ? Compat.getSwapChainDepthAttachment() : null;
+                        ? Compat.getSwapChainDepthAttachment()
+                        : null;
                 this.runComposite(renderParam, debugMcDepth);
+            } else if (DhVulkanConfig.get().vulkanRenderMode != 6) {
+                // SINGLE/DOUBLE normal mode: draw LODs without MC depth comparison.
+                // deferredComposite() will re-composite with MC depth from depth reader.
+                this.runComposite(renderParam, null);
             }
-            // else: SINGLE_PASS / DOUBLE_PASS — deferredComposite() will handle it
-            #else
-            // VM 0.4.2: always composite here — clip distance handles terrain overlap
-            // Pass MC depth for debug mode 6 visualization
-            VulkanImage debugMcDepth = DhVulkanConfig.get().vulkanRenderMode == 6
-                    ? Compat.getSwapChainDepthAttachment() : null;
-            this.runComposite(renderParam, debugMcDepth);
-            #endif
+            // Mode 6 + SINGLE/DOUBLE: skip endFrame composite entirely —
+            // deferredComposite alone renders MC depth debug via depth reader.
 
             // Restore MC render state
             VRenderSystem.cull = this.savedCullState;
@@ -499,11 +499,6 @@ public class VulkanRenderDelegate implements IVulkanRenderDelegate {
             Renderer.getInstance().endRenderPass();
 
             // Read MC depth into a sampleable R32F texture.
-            // MC depth is NOT an active attachment here (between endRenderPass
-            // and rebindMainTarget), so it's safe to sample.
-            // We can't use vkCmdCopyImage because the swapchain depth lacks
-            // TRANSFER_SRC_BIT, and we can't sample it after rebindMainTarget
-            // because it becomes an active attachment (NVIDIA returns garbage).
             VulkanImage mcDepthR32F = null;
             if (this.depthReaderPipeline != null) {
                 mcDepthR32F = this.depthReaderPipeline.readDepth(mcDepth);
