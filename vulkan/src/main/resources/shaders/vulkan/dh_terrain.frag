@@ -117,13 +117,6 @@ void main()
             discard;
         }
     }
-    else
-    {
-        if (viewDist < uClipDistance && uClipDistance > 0.0)
-        {
-            discard;
-        }
-    }
 
     // Apply noise
     if (uNoiseEnabled != 0)
