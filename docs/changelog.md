@@ -1,4 +1,15 @@
+## v2.4.0-2.4.6+vm.6
+
+(current branch, in works)
+
+### Memory Management (Critical VRAM Leak Fix)
+
+- **Fixed primary VRAM leak**: VBO destruction (`destroyAsync`/`close`) now calls `freeBuffer()` on the Vulkan delegate, freeing cached GPU `VertexBuffer`s from `vulkanBufferCache`. Previously, when DH unloaded LOD sections during normal gameplay (player movement, server transitions), the native ByteBuffer was freed but the GPU buffer remained cached permanently — growing proportionally to total LOD churn. This was the root cause of VRAM reaching 7GB+ after repeated leave/join cycles.
+- Fixed static Vulkan resource leak in `Compat.java` — `depthOnlyView` (VkImageView) and `mcDepthCopyImage` (full-resolution depth copy, ~8–33MB depending on resolution) were never freed during cleanup. Added `Compat.cleanupStaticResources()` called from `VulkanRenderDelegate.cleanup()`.
+
 ## v2.4.0-2.4.6+vm.5
+
+(previous iteration)
 
 ### Memory Management
 

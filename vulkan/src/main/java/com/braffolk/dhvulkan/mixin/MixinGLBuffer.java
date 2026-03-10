@@ -1,10 +1,15 @@
 package com.braffolk.dhvulkan.mixin;
 
+import com.braffolk.dhvulkan.IVulkanRenderDelegate;
 import com.braffolk.dhvulkan.duck.IVulkanGLProxy;
+import com.braffolk.dhvulkan.duck.IVulkanLodRenderer;
 import com.braffolk.dhvulkan.duck.IVulkanVertexBuffer;
 import com.seibel.distanthorizons.core.render.glObject.buffer.GLBuffer;
+import com.seibel.distanthorizons.core.render.glObject.buffer.GLVertexBuffer;
+import com.seibel.distanthorizons.core.render.renderer.LodRenderer;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Shadow;
+import org.spongepowered.asm.mixin.Unique;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
@@ -64,6 +69,10 @@ public abstract class MixinGLBuffer {
     @Inject(method = "destroyAsync", at = @At("HEAD"), cancellable = true)
     private void dhvulkan$virtualDestroy(CallbackInfo ci) {
         if (IVulkanGLProxy.isVulkanModActive()) {
+            // Free the cached Vulkan GPU buffer from the delegate's cache.
+            // Without this, the GPU buffer leaks forever when DH unloads LOD sections.
+            dhvulkan$freeVulkanCacheEntry();
+
             if (this instanceof IVulkanVertexBuffer) {
                 IVulkanVertexBuffer vkBuf = (IVulkanVertexBuffer) this;
                 Object handle = vkBuf.dhvulkan$getVulkanBufferHandle();
@@ -81,6 +90,9 @@ public abstract class MixinGLBuffer {
     @Inject(method = "close", at = @At("HEAD"), cancellable = true)
     private void dhvulkan$skipClose(CallbackInfo ci) {
         if (IVulkanGLProxy.isVulkanModActive()) {
+            // Free the cached Vulkan GPU buffer from the delegate's cache.
+            dhvulkan$freeVulkanCacheEntry();
+
             if (this instanceof IVulkanVertexBuffer) {
                 IVulkanVertexBuffer vkBuf = (IVulkanVertexBuffer) this;
                 Object handle = vkBuf.dhvulkan$getVulkanBufferHandle();
@@ -92,6 +104,29 @@ public abstract class MixinGLBuffer {
             }
             this.size = 0;
             ci.cancel();
+        }
+    }
+
+    /**
+     * Queue this VBO for deferred GPU buffer free on the render thread.
+     * Called from destroyAsync()/close() on DH worker threads.
+     * The actual cache removal and scheduleFree happen in beginFrame()
+     * on the render thread, preventing race conditions with drawBuffer().
+     */
+    @Unique
+    private void dhvulkan$freeVulkanCacheEntry() {
+        if (!((Object) this instanceof GLVertexBuffer)) {
+            return;
+        }
+        try {
+            IVulkanLodRenderer lodRenderer = (IVulkanLodRenderer) LodRenderer.INSTANCE;
+            IVulkanRenderDelegate delegate = lodRenderer.dhvulkan$getVulkanDelegate();
+            if (delegate != null) {
+                delegate.queueBufferFree((GLVertexBuffer) (Object) this);
+            }
+        } catch (Exception e) {
+            // Silently ignore — delegate may not be wired yet during early init,
+            // or LodRenderer.INSTANCE may be null during shutdown.
         }
     }
 }
