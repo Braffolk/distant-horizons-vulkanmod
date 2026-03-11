@@ -134,8 +134,27 @@ public class DhVulkanMixinPlugin implements IMixinConfigPlugin {
 
     @Override
     public boolean shouldApplyMixin(String targetClassName, String mixinClassName) {
+        // Skip dh24-specific mixins when DH 3.0 is present
+        if (mixinClassName.contains(".dh24.")) {
+            if (isDh3Present == null) {
+                try {
+                    Class.forName(
+                        "com.seibel.distanthorizons.core.wrapperInterfaces.render.AbstractDhRenderApiDefinition"
+                    );
+                    isDh3Present = true;
+                } catch (ClassNotFoundException e) {
+                    isDh3Present = false;
+                }
+            }
+            if (isDh3Present) {
+                System.out.println("[DH-VulkanMod] Skipping DH 2.4 mixin (DH 3.0 detected): " + mixinClassName);
+                return false;
+            }
+        }
         return true;
     }
+
+    private static Boolean isDh3Present = null;
 
     @Override
     public void acceptTargets(Set<String> myTargets, Set<String> otherTargets) {

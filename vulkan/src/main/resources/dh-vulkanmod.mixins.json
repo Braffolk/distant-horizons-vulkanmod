@@ -1,17 +1,17 @@
 {
     "required": true,
-    "package": "com.braffolk.dhvulkan",
+    "package": "com.braffolk.dhvulkan.mixin",
     "compatibilityLevel": "JAVA_21",
     "plugin": "com.braffolk.dhvulkan.DhVulkanMixinPlugin",
     "client": [
-        "dh24.mixin.MixinGLProxy",
-        "dh24.mixin.MixinGLState",
-        "dh24.mixin.MixinGLBuffer",
-        "dh24.mixin.MixinGLVertexBuffer",
-        "dh24.mixin.MixinLodRenderer",
-        "dh24.mixin.MixinLodBufferContainer",
-        "shared.mixin.MixinLevelRenderer",
-        "shared.mixin.MixinLightMapWrapper"
+        "dh24.MixinGLProxy",
+        "dh24.MixinGLState",
+        "dh24.MixinGLBuffer",
+        "dh24.MixinGLVertexBuffer",
+        "dh24.MixinLodRenderer",
+        "dh24.MixinLodBufferContainer",
+        "shared.MixinLevelRenderer",
+        "shared.MixinLightMapWrapper"
     ],
     "injectors": {
         "defaultRequire": 1

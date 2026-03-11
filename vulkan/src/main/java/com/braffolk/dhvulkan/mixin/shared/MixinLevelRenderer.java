@@ -1,4 +1,4 @@
-package com.braffolk.dhvulkan.shared.mixin;
+package com.braffolk.dhvulkan.mixin.shared;
 
 import com.braffolk.dhvulkan.compat.Compat;
 import com.braffolk.dhvulkan.DhVulkanModEntrypoint;

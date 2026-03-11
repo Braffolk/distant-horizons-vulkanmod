@@ -1,4 +1,4 @@
-package com.braffolk.dhvulkan.dh24.mixin;
+package com.braffolk.dhvulkan.mixin.dh24;
 
 import com.braffolk.dhvulkan.compat.Compat;
 import com.seibel.distanthorizons.api.enums.config.EDhApiGpuUploadMethod;
