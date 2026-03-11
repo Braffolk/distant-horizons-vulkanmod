@@ -1,6 +1,6 @@
 # Distant Horizons → VulkanMod: Implementation Roadmap
 
-Status as of 2026-03-10: **Phases 1-7, extension mod port, multi-version support, and MC depth comparison complete.** LODs render with correct colors, depth, lightmap, transparency, compositing, SSAO, fog, noise, earth curvature, overdraw prevention, and MC depth occlusion via an extension mod (mixin-based, no DH source modifications). Supports MC 1.20.6 (VulkanMod 0.4.2) and MC 1.21.11 (VulkanMod 0.6.1) from a single codebase.
+Status as of 2026-03-11: **Phases 1-7, extension mod port, multi-version support, and MC depth comparison complete.** Phase 8 (DH 3.0 API integration) is planned. LODs render with correct colors, depth, lightmap, transparency, compositing, SSAO, fog, noise, earth curvature, overdraw prevention, and MC depth occlusion via an extension mod (mixin-based, no DH source modifications). Supports MC 1.20.6 (VulkanMod 0.4.2) and MC 1.21.11 (VulkanMod 0.6.1) from a single codebase.
 
 ## Architecture Overview
 
@@ -279,6 +279,49 @@ The fix: **`MixinLodBufferContainer`** intercepts `uploadBuffersDirect()` at HEA
 - Duck interfaces (`IVulkanVertexBuffer`) are the clean way to add fields to DH classes via mixin
 - DH's `GLProxy.queueRunningOnRenderThread()` works correctly even with a dummy GLProxy
 - Terrain shaders (`standard.vert`, `flat_shaded.frag`) load from DH's jar at runtime — no need to bundle
+
+---
+
+## Phase 8: DH 3.0 Rendering API Integration -- PLANNED
+
+DH 3.0 introduces `AbstractDhRenderApiDefinition`, a pluggable rendering backend with injectable singletons for all render passes (`IDhMetaRenderer`, `IDhTerrainRenderer`, `IDhSsaoRenderer`, `IDhFogRenderer`, `IDhFarFadeRenderer`) and factory methods (`IVertexBufferWrapper`, `ILodContainerUniformBufferWrapper`). This eliminates 6 of our 8 current mixins.
+
+Instead of intercepting DH's GL pipeline via mixins, we register a `VkDhRenderApiDefinition` that provides Vulkan implementations of each renderer interface. DH calls our code directly.
+
+Still needed: `MixinLightMapWrapper` (DH's `MixinLightTexture` calls GL-dependent `uploadLightmap()` every frame from outside the rendering API), `MixinLevelRenderer` (post-MC-terrain composite timing), and a small `MixinDependencySetup` to register our API definition.
+
+### Architecture: Three-Layer Design
+
+```
+dhvulkan/
+├── core/             # Vulkan engine, DH-agnostic, zero DH imports
+│   ├── VulkanBackend       -- central rendering interface
+│   ├── VulkanRenderEngine  -- refactored from VulkanRenderDelegate
+│   ├── pipeline/           -- SSAO, fog, composite, depth reader
+│   └── data/               -- RenderUniforms, VkVertexData
+├── dh24/             # DH 2.4.x integration, all 8 current mixins + adapter
+│   ├── mixin/              -- MixinLodRenderer, MixinGLProxy, etc.
+│   ├── duck/               -- IVulkanVertexBuffer, etc.
+│   └── Dh24RenderDelegate  -- translates DH 2.4 types to core types
+├── api/              # DH 3.0 integration, API impls + 2-3 mixins
+│   ├── VkDhRenderApiDefinition
+│   ├── renderer/           -- VkMetaRenderer, VkTerrainRenderer, etc.
+│   ├── VkVertexBufferWrapper
+│   └── mixin/              -- MixinDependencySetup, MixinLightMapWrapper, MixinLevelRenderer
+├── bridge/           # Version detection + integration interface
+│   ├── DhIntegration       -- interface both paths implement
+│   └── DhVersionDetector   -- runtime class presence check
+└── compat/           # MC version compat (existing)
+```
+
+Nothing in `core/`, `api/`, `bridge/`, or `compat/` imports from `dh24/`. Dropping DH 2.4 support = delete `dh24/` + edit 2 files (`dh-vulkanmod.mixins.json`, `DhVulkanModEntrypoint.java`).
+
+`DhVersionDetector` checks for `AbstractDhRenderApiDefinition` class presence at runtime. `DhVulkanMixinPlugin.shouldApplyMixin()` conditionally loads only the appropriate mixin set.
+
+### Migration
+
+1. **Phase 8a**: Refactor core. Extract `VulkanBackend` interface from `VulkanRenderDelegate`, move pipelines to `core/pipeline/`, create `RenderUniforms`/`VkVertexData`. No behavior change. Move current mixins to `dh24/`. Verify existing DH 2.4 functionality.
+2. **Phase 8b**: Add DH 3.0 path. Implement `VkDhRenderApiDefinition` + renderer impls + `VkVertexBufferWrapper`. Add `MixinDependencySetup`. Wire conditional loading. Test with DH 3.0.
 
 ---
 
