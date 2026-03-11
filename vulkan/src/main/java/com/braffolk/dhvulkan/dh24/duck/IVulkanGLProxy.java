@@ -1,4 +1,4 @@
-package com.braffolk.dhvulkan.duck;
+package com.braffolk.dhvulkan.dh24.duck;
 
 /**
  * Duck interface for {@code GLProxy}. Implemented via Mixin to expose

@@ -1,6 +1,6 @@
-package com.braffolk.dhvulkan.mixin;
+package com.braffolk.dhvulkan.dh24.mixin;
 
-import com.braffolk.dhvulkan.duck.IVulkanGLProxy;
+import com.braffolk.dhvulkan.compat.Compat;
 import com.seibel.distanthorizons.core.render.glObject.GLState;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.injection.At;
@@ -18,14 +18,14 @@ public class MixinGLState {
 
     @Inject(method = "saveState", at = @At("HEAD"), cancellable = true)
     private void dhvulkan$skipSaveState(CallbackInfo ci) {
-        if (IVulkanGLProxy.isVulkanModActive()) {
+        if (Compat.isVulkanModActive()) {
             ci.cancel();
         }
     }
 
     @Inject(method = "close", at = @At("HEAD"), cancellable = true)
     private void dhvulkan$skipClose(CallbackInfo ci) {
-        if (IVulkanGLProxy.isVulkanModActive()) {
+        if (Compat.isVulkanModActive()) {
             ci.cancel();
         }
     }

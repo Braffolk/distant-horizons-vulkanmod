@@ -1,6 +1,6 @@
-package com.braffolk.dhvulkan.mixin;
+package com.braffolk.dhvulkan.shared.mixin;
 
-import com.braffolk.dhvulkan.duck.IVulkanGLProxy;
+import com.braffolk.dhvulkan.compat.Compat;
 import com.mojang.blaze3d.platform.NativeImage;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.injection.At;
@@ -24,28 +24,28 @@ public class MixinLightMapWrapper {
 
     @Inject(method = "uploadLightmap", at = @At("HEAD"), cancellable = true)
     private void dhvulkan$skipUploadLightmap(NativeImage nativeImage, CallbackInfo ci) {
-        if (IVulkanGLProxy.isVulkanModActive()) {
+        if (Compat.isVulkanModActive()) {
             ci.cancel();
         }
     }
 
     @Inject(method = "createLightmap", at = @At("HEAD"), cancellable = true)
     private void dhvulkan$skipCreateLightmap(NativeImage nativeImage, CallbackInfo ci) {
-        if (IVulkanGLProxy.isVulkanModActive()) {
+        if (Compat.isVulkanModActive()) {
             ci.cancel();
         }
     }
 
     @Inject(method = "bind", at = @At("HEAD"), cancellable = true)
     private void dhvulkan$skipBind(CallbackInfo ci) {
-        if (IVulkanGLProxy.isVulkanModActive()) {
+        if (Compat.isVulkanModActive()) {
             ci.cancel();
         }
     }
 
     @Inject(method = "unbind", at = @At("HEAD"), cancellable = true)
     private void dhvulkan$skipUnbind(CallbackInfo ci) {
-        if (IVulkanGLProxy.isVulkanModActive()) {
+        if (Compat.isVulkanModActive()) {
             ci.cancel();
         }
     }

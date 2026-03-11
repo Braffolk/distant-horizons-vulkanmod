@@ -1,9 +1,9 @@
-package com.braffolk.dhvulkan.mixin;
+package com.braffolk.dhvulkan.dh24.mixin;
 
-import com.braffolk.dhvulkan.IVulkanRenderDelegate;
-import com.braffolk.dhvulkan.duck.IVulkanGLProxy;
-import com.braffolk.dhvulkan.duck.IVulkanLodRenderer;
-import com.braffolk.dhvulkan.duck.IVulkanVertexBuffer;
+import com.braffolk.dhvulkan.dh24.IVulkanRenderDelegate;
+import com.braffolk.dhvulkan.compat.Compat;
+import com.braffolk.dhvulkan.dh24.duck.IVulkanLodRenderer;
+import com.braffolk.dhvulkan.dh24.duck.IVulkanVertexBuffer;
 import com.seibel.distanthorizons.core.render.glObject.buffer.GLBuffer;
 import com.seibel.distanthorizons.core.render.glObject.buffer.GLVertexBuffer;
 import com.seibel.distanthorizons.core.render.renderer.LodRenderer;
@@ -36,21 +36,21 @@ public abstract class MixinGLBuffer {
 
     @Inject(method = "create", at = @At("HEAD"), cancellable = true)
     private void dhvulkan$skipCreate(boolean asBufferStorage, CallbackInfo ci) {
-        if (IVulkanGLProxy.isVulkanModActive()) {
+        if (Compat.isVulkanModActive()) {
             ci.cancel();
         }
     }
 
     @Inject(method = "bind", at = @At("HEAD"), cancellable = true)
     private void dhvulkan$skipBind(CallbackInfo ci) {
-        if (IVulkanGLProxy.isVulkanModActive()) {
+        if (Compat.isVulkanModActive()) {
             ci.cancel();
         }
     }
 
     @Inject(method = "unbind", at = @At("HEAD"), cancellable = true)
     private void dhvulkan$skipUnbind(CallbackInfo ci) {
-        if (IVulkanGLProxy.isVulkanModActive()) {
+        if (Compat.isVulkanModActive()) {
             ci.cancel();
         }
     }
@@ -58,7 +58,7 @@ public abstract class MixinGLBuffer {
     @Inject(method = "uploadBuffer", at = @At("HEAD"), cancellable = true)
     private void dhvulkan$skipGLUpload(ByteBuffer bb, EDhApiGpuUploadMethod uploadMethod,
             int maxExpansionSize, int bufferHint, CallbackInfo ci) {
-        if (IVulkanGLProxy.isVulkanModActive()) {
+        if (Compat.isVulkanModActive()) {
             // Data is handled by MixinLodBufferContainer at a higher level.
             // Just prevent the GL upload from running.
             this.size = bb.remaining();
@@ -68,7 +68,7 @@ public abstract class MixinGLBuffer {
 
     @Inject(method = "destroyAsync", at = @At("HEAD"), cancellable = true)
     private void dhvulkan$virtualDestroy(CallbackInfo ci) {
-        if (IVulkanGLProxy.isVulkanModActive()) {
+        if (Compat.isVulkanModActive()) {
             // Free the cached Vulkan GPU buffer from the delegate's cache.
             // Without this, the GPU buffer leaks forever when DH unloads LOD sections.
             dhvulkan$freeVulkanCacheEntry();
@@ -89,7 +89,7 @@ public abstract class MixinGLBuffer {
 
     @Inject(method = "close", at = @At("HEAD"), cancellable = true)
     private void dhvulkan$skipClose(CallbackInfo ci) {
-        if (IVulkanGLProxy.isVulkanModActive()) {
+        if (Compat.isVulkanModActive()) {
             // Free the cached Vulkan GPU buffer from the delegate's cache.
             dhvulkan$freeVulkanCacheEntry();
 

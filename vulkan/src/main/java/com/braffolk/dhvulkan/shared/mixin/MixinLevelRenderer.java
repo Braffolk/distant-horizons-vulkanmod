@@ -1,8 +1,7 @@
-package com.braffolk.dhvulkan.mixin;
+package com.braffolk.dhvulkan.shared.mixin;
 
-import com.braffolk.dhvulkan.duck.IVulkanGLProxy;
-import com.braffolk.dhvulkan.duck.IVulkanLodRenderer;
-import com.seibel.distanthorizons.core.render.renderer.LodRenderer;
+import com.braffolk.dhvulkan.compat.Compat;
+import com.braffolk.dhvulkan.DhVulkanModEntrypoint;
 import net.minecraft.client.renderer.LevelRenderer;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.injection.At;
@@ -14,19 +13,18 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
  * after MC finishes rendering all terrain layers.
  *
  * This hook fires at the end of {@code renderLevel()} so that LODs are
- * composited
- * onto MC's render target with correct depth testing (MC terrain overwrites
- * LODs).
+ * composited onto MC's render target with correct depth testing.
+ *
+ * Shared between DH 2.4 and DH 3.0 paths.
  */
 @Mixin(LevelRenderer.class)
 public class MixinLevelRenderer {
 
     @Inject(method = "renderLevel", at = @At("RETURN"))
     private void dhvulkan$compositeAfterMcRender(CallbackInfo ci) {
-        if (!IVulkanGLProxy.isVulkanModActive())
+        if (!Compat.isVulkanModActive())
             return;
 
-        IVulkanLodRenderer lodRenderer = (IVulkanLodRenderer) LodRenderer.INSTANCE;
-        lodRenderer.dhvulkan$compositeVulkanFrame();
+        DhVulkanModEntrypoint.deferredComposite();
     }
 }

@@ -1,8 +1,8 @@
-package com.braffolk.dhvulkan.mixin;
+package com.braffolk.dhvulkan.dh24.mixin;
 
-import com.braffolk.dhvulkan.IVulkanRenderDelegate;
-import com.braffolk.dhvulkan.duck.IVulkanGLProxy;
-import com.braffolk.dhvulkan.duck.IVulkanLodRenderer;
+import com.braffolk.dhvulkan.dh24.IVulkanRenderDelegate;
+import com.braffolk.dhvulkan.compat.Compat;
+import com.braffolk.dhvulkan.dh24.duck.IVulkanLodRenderer;
 import com.seibel.distanthorizons.api.methods.events.sharedParameterObjects.DhApiRenderParam;
 import com.seibel.distanthorizons.core.dataObjects.render.bufferBuilding.LodBufferContainer;
 import com.seibel.distanthorizons.core.render.RenderBufferHandler;
@@ -76,7 +76,7 @@ public class MixinLodRenderer implements IVulkanLodRenderer {
      */
     @Inject(method = "createRenderObjects", at = @At("HEAD"), cancellable = true)
     private void dhvulkan$skipGLRenderObjectCreation(CallbackInfoReturnable<Boolean> cir) {
-        if (IVulkanGLProxy.isVulkanModActive()) {
+        if (Compat.isVulkanModActive()) {
             LodRenderer.LOGGER.info("[DH-VulkanMod] Skipping GL render object creation (VulkanMod active)");
             cir.setReturnValue(true); // signal success to caller
         }
@@ -91,7 +91,7 @@ public class MixinLodRenderer implements IVulkanLodRenderer {
     @Inject(method = "renderLodPass(Lcom/seibel/distanthorizons/core/render/renderer/RenderParams;Lcom/seibel/distanthorizons/core/wrapperInterfaces/minecraft/IProfilerWrapper;Z)V", at = @At("HEAD"), cancellable = true)
     private void dhvulkan$vulkanRenderPass(RenderParams renderParams, IProfilerWrapper profiler,
             boolean runningDeferredPass, CallbackInfo ci) {
-        if (!IVulkanGLProxy.isVulkanModActive()) {
+        if (!Compat.isVulkanModActive()) {
             return;
         }
 

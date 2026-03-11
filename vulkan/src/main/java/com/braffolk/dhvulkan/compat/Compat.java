@@ -25,7 +25,27 @@ import java.nio.ByteBuffer;
 public final class Compat {
 
     // ========================= //
-    // Buffer factories //
+    // VulkanMod detection       //
+    // ========================= //
+
+    private static final boolean VULKANMOD_ACTIVE = detectVulkanMod();
+
+    private static boolean detectVulkanMod() {
+        try {
+            Class.forName("net.vulkanmod.vulkan.Renderer");
+            return true;
+        } catch (ClassNotFoundException e) {
+            return false;
+        }
+    }
+
+    /** @return true if VulkanMod is loaded (no GL context available) */
+    public static boolean isVulkanModActive() {
+        return VULKANMOD_ACTIVE;
+    }
+
+    // ========================= //
+    // Buffer factories          //
     // ========================= //
 
     public static Object createVertexBuffer(int sizeBytes) {

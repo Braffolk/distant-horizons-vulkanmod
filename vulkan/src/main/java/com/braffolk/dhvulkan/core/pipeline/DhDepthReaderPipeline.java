@@ -8,7 +8,7 @@
  *    TRANSFER_SRC for vkCmdCopyImage.
  */
 
-package com.braffolk.dhvulkan;
+package com.braffolk.dhvulkan.core.pipeline;
 
 import com.braffolk.dhvulkan.compat.Compat;
 import com.mojang.blaze3d.vertex.VertexFormat;

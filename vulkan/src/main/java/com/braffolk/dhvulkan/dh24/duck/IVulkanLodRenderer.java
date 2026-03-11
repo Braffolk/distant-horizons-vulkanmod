@@ -1,6 +1,6 @@
-package com.braffolk.dhvulkan.duck;
+package com.braffolk.dhvulkan.dh24.duck;
 
-import com.braffolk.dhvulkan.IVulkanRenderDelegate;
+import com.braffolk.dhvulkan.dh24.IVulkanRenderDelegate;
 import com.seibel.distanthorizons.api.methods.events.sharedParameterObjects.DhApiRenderParam;
 
 /**

@@ -3,7 +3,7 @@
  *    licensed under the GNU LGPL v3 License.
  */
 
-package com.braffolk.dhvulkan;
+package com.braffolk.dhvulkan.dh24;
 
 import com.seibel.distanthorizons.api.methods.events.sharedParameterObjects.DhApiRenderParam;
 import com.seibel.distanthorizons.core.render.glObject.buffer.GLVertexBuffer;

@@ -1,7 +1,7 @@
-package com.braffolk.dhvulkan.mixin;
+package com.braffolk.dhvulkan.dh24.mixin;
 
-import com.braffolk.dhvulkan.duck.IVulkanGLProxy;
-import com.braffolk.dhvulkan.duck.IVulkanVertexBuffer;
+import com.braffolk.dhvulkan.compat.Compat;
+import com.braffolk.dhvulkan.dh24.duck.IVulkanVertexBuffer;
 import com.seibel.distanthorizons.api.enums.config.EDhApiGpuUploadMethod;
 import com.seibel.distanthorizons.core.dataObjects.render.bufferBuilding.LodBufferContainer;
 import com.seibel.distanthorizons.core.render.glObject.buffer.GLVertexBuffer;
@@ -31,7 +31,7 @@ public class MixinLodBufferContainer {
             EDhApiGpuUploadMethod uploadMethod,
             CallbackInfo ci) {
 
-        if (!IVulkanGLProxy.isVulkanModActive()) {
+        if (!Compat.isVulkanModActive()) {
             return; // let the original GL path run
         }
 

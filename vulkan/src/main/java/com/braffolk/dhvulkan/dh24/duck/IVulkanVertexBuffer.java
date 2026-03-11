@@ -1,4 +1,4 @@
-package com.braffolk.dhvulkan.duck;
+package com.braffolk.dhvulkan.dh24.duck;
 
 import java.nio.ByteBuffer;
 

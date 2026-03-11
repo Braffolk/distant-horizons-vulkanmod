@@ -5,7 +5,7 @@
  *    VulkanMod integration for native Vulkan rendering backend.
  */
 
-package com.braffolk.dhvulkan;
+package com.braffolk.dhvulkan.core;
 
 import com.braffolk.dhvulkan.compat.Compat;
 import com.mojang.blaze3d.vertex.VertexFormat;
@@ -86,7 +86,7 @@ public class VulkanRenderContext {
     }
 
     public static boolean isActive() {
-        return com.braffolk.dhvulkan.duck.IVulkanGLProxy.isVulkanModActive();
+        return com.braffolk.dhvulkan.compat.Compat.isVulkanModActive();
     }
 
     // ================//
