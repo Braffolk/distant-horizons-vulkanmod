@@ -10,6 +10,7 @@
         "dh24.MixinGLVertexBuffer",
         "dh24.MixinLodRenderer",
         "dh24.MixinLodBufferContainer",
+        "dh3.MixinDependencySetup",
         "shared.MixinLevelRenderer",
         "shared.MixinLightMapWrapper"
     ],

@@ -75,10 +75,9 @@ public class DhVulkanModEntrypoint implements ClientModInitializer {
 
         switch (dhVersion) {
             case DH_3_0:
-                // TODO: Phase 8b -- ApiDhIntegration
-                LOGGER.warn("[DH-VulkanMod] DH 3.0 detected but API integration not yet implemented. Falling back to DH 2.4 path.");
-                activeIntegration = new Dh24Integration();
-                activeIntegration.initialize(backend);
+                com.braffolk.dhvulkan.api.ApiDhIntegration apiIntegration = new com.braffolk.dhvulkan.api.ApiDhIntegration();
+                apiIntegration.initialize(backend);
+                activeIntegration = apiIntegration;
                 break;
             case DH_2_4:
             default:
@@ -107,8 +106,9 @@ public class DhVulkanModEntrypoint implements ClientModInitializer {
     public static void deferredComposite() {
         if (activeIntegration instanceof Dh24Integration) {
             ((Dh24Integration) activeIntegration).deferredComposite();
+        } else if (activeIntegration instanceof com.braffolk.dhvulkan.api.ApiDhIntegration) {
+            ((com.braffolk.dhvulkan.api.ApiDhIntegration) activeIntegration).deferredComposite();
         }
-        // TODO: Phase 8b — ApiDhIntegration.deferredComposite()
     }
 
     /** Get the active integration (for mixins that need it) */

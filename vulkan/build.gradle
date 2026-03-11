@@ -49,8 +49,8 @@ dependencies {
     modImplementation "net.fabricmc:fabric-loader:${rootProject.fabric_loader_version}"
     modImplementation "net.fabricmc.fabric-api:fabric-api:${rootProject.fabric_api_version}"
 
-    // Distant Horizons — compile against the unmodified jar
-    modCompileOnly files(dhJar.first())
+    // Distant Horizons — compile against all matched jars (DH 2.4 + DH 3.0)
+    dhJar.each { modCompileOnly files(it) }
 
     // VulkanMod — compile against the jar
     modCompileOnly files(vmJar.first())
