@@ -13,6 +13,7 @@ import com.braffolk.dhvulkan.core.DhVulkanFramebuffer;
 import com.braffolk.dhvulkan.compat.Compat;
 import com.mojang.blaze3d.vertex.VertexFormat;
 import com.mojang.blaze3d.vertex.VertexFormatElement;
+import com.braffolk.dhvulkan.core.DhConfigHelper;
 import com.seibel.distanthorizons.core.config.Config;
 import com.seibel.distanthorizons.core.dependencyInjection.SingletonInjector;
 import com.seibel.distanthorizons.core.util.LodUtil;
@@ -306,7 +307,7 @@ public class DhFogPipeline {
                 fogColor.getBlue() / 255.0f, fogColor.getAlpha() / 255.0f);
 
         // Fog scales
-        int lodDrawDistance = Config.Client.Advanced.Graphics.Quality.lodChunkRenderDistanceRadius.get()
+        int lodDrawDistance = DhConfigHelper.lodChunkRenderDistanceRadius()
                 * LodUtil.CHUNK_WIDTH;
         setUniformFloat(this.pass1Uniforms, "uFogScale", 1.0f / lodDrawDistance);
         setUniformFloat(this.pass1Uniforms, "uFogVerticalScale", 1.0f / MC.getWrappedClientLevel().getMaxHeight());
@@ -315,11 +316,11 @@ public class DhFogPipeline {
                 Config.Client.Advanced.Graphics.Fog.farFogFalloff.get().value);
 
         // Far fog config
-        float farFogStart = Config.Client.Advanced.Graphics.Fog.farFogStart.get().floatValue();
-        float farFogEnd = Config.Client.Advanced.Graphics.Fog.farFogEnd.get().floatValue();
-        float farFogMin = Config.Client.Advanced.Graphics.Fog.farFogMin.get().floatValue();
-        float farFogMax = Config.Client.Advanced.Graphics.Fog.farFogMax.get().floatValue();
-        float farFogDensity = Config.Client.Advanced.Graphics.Fog.farFogDensity.get().floatValue();
+        float farFogStart = DhConfigHelper.farFogStart();
+        float farFogEnd = DhConfigHelper.farFogEnd();
+        float farFogMin = DhConfigHelper.farFogMin();
+        float farFogMax = DhConfigHelper.farFogMax();
+        float farFogDensity = DhConfigHelper.farFogDensity();
 
         // Override fog if underwater
         if (MC_RENDER.isFogStateSpecial()) {
@@ -342,11 +343,11 @@ public class DhFogPipeline {
         EDhApiHeightFogDirection heightFogDirection = Config.Client.Advanced.Graphics.Fog.HeightFog.heightFogDirection
                 .get();
 
-        float heightFogStart = Config.Client.Advanced.Graphics.Fog.HeightFog.heightFogStart.get().floatValue();
-        float heightFogEnd = Config.Client.Advanced.Graphics.Fog.HeightFog.heightFogEnd.get().floatValue();
-        float heightFogMin = Config.Client.Advanced.Graphics.Fog.HeightFog.heightFogMin.get().floatValue();
-        float heightFogMax = Config.Client.Advanced.Graphics.Fog.HeightFog.heightFogMax.get().floatValue();
-        float heightFogDensity = Config.Client.Advanced.Graphics.Fog.HeightFog.heightFogDensity.get().floatValue();
+        float heightFogStart = DhConfigHelper.heightFogStart();
+        float heightFogEnd = DhConfigHelper.heightFogEnd();
+        float heightFogMin = DhConfigHelper.heightFogMin();
+        float heightFogMax = DhConfigHelper.heightFogMax();
+        float heightFogDensity = DhConfigHelper.heightFogDensity();
 
         setUniformFloat(this.pass1Uniforms, "uHeightFogStart", heightFogStart);
         setUniformFloat(this.pass1Uniforms, "uHeightFogLength", heightFogEnd - heightFogStart);
@@ -358,8 +359,7 @@ public class DhFogPipeline {
         setUniformInt(this.pass1Uniforms, "uHeightFogFalloffType",
                 Config.Client.Advanced.Graphics.Fog.HeightFog.heightFogFalloff.get().value);
         setUniformInt(this.pass1Uniforms, "uHeightBasedOnCamera", heightFogDirection.basedOnCamera ? 1 : 0);
-        setUniformFloat(this.pass1Uniforms, "uHeightFogBaseHeight",
-                Config.Client.Advanced.Graphics.Fog.HeightFog.heightFogBaseHeight.get().floatValue());
+        setUniformFloat(this.pass1Uniforms, "uHeightFogBaseHeight", DhConfigHelper.heightFogBaseHeight());
         setUniformInt(this.pass1Uniforms, "uHeightFogAppliesUp", heightFogDirection.fogAppliesUp ? 1 : 0);
         setUniformInt(this.pass1Uniforms, "uHeightFogAppliesDown", heightFogDirection.fogAppliesDown ? 1 : 0);
         setUniformInt(this.pass1Uniforms, "uUseSphericalFog", useSphericalFog ? 1 : 0);

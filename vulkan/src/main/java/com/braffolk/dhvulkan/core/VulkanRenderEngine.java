@@ -330,12 +330,12 @@ public class VulkanRenderEngine implements VulkanBackend {
         this.renderContext.setUniformFloat("uWorldYOffset", (float) uniforms.worldYOffset);
         this.renderContext.setUniformFloat("uMircoOffset", 0.01f);
 
-        float curveRatio = Config.Client.Advanced.Graphics.Experimental.earthCurveRatio.get();
+        float curveRatio = DhConfigHelper.earthCurveRatio();
         this.renderContext.setUniformFloat("uEarthRadius",
                 (curveRatio < -1.0f || curveRatio > 1.0f) ? 6371000.0f / curveRatio : 0.0f);
 
         int renderDistChunks = Minecraft.getInstance().options.getEffectiveRenderDistance();
-        float overdrawConfig = ((Number) Config.Client.Advanced.Graphics.Culling.overdrawPrevention.get()).floatValue();
+        float overdrawConfig = DhConfigHelper.overdrawPrevention();
         float overdraw;
         if (overdrawConfig <= 0) {
             if (renderDistChunks <= 2)
@@ -352,18 +352,15 @@ public class VulkanRenderEngine implements VulkanBackend {
             overdraw = Math.max(0.05f, Math.min(overdrawConfig, 1.0f));
         }
         this.renderContext.setUniformFloat("uClipDistance", renderDistChunks * 16.0f * overdraw);
-        this.renderContext.setUniformBool("uDitherDhRendering",
-                Config.Client.Advanced.Graphics.Quality.ditherDhFade.get());
+        this.renderContext.setUniformBool("uDitherDhRendering", DhConfigHelper.ditherDhFade());
 
-        boolean noiseEnabled = Config.Client.Advanced.Graphics.NoiseTexture.enableNoiseTexture.get();
+        boolean noiseEnabled = DhConfigHelper.noiseEnabled();
         this.renderContext.setUniformBool("uNoiseEnabled", noiseEnabled);
-        this.renderContext.setUniformInt("uNoiseSteps", Config.Client.Advanced.Graphics.NoiseTexture.noiseSteps.get());
+        this.renderContext.setUniformInt("uNoiseSteps", DhConfigHelper.noiseSteps());
         this.renderContext.setUniformFloat("uNoiseIntensity", Compat.scaleNoiseIntensity(
-                Config.Client.Advanced.Graphics.NoiseTexture.noiseIntensity.get().floatValue()));
-        this.renderContext.setUniformInt("uNoiseDropoff",
-                Config.Client.Advanced.Graphics.NoiseTexture.noiseDropoff.get());
-        this.renderContext.setUniformBool("uIsWhiteWorld",
-                Config.Client.Advanced.Debugging.enableWhiteWorld.get());
+                DhConfigHelper.noiseIntensity()));
+        this.renderContext.setUniformInt("uNoiseDropoff", DhConfigHelper.noiseDropoff());
+        this.renderContext.setUniformBool("uIsWhiteWorld", DhConfigHelper.whiteWorldEnabled());
         this.renderContext.setUniformVec3f("uModelOffset", VEC3F_ZERO);
 
         // Upload UBOs after setting all uniforms
@@ -478,7 +475,7 @@ public class VulkanRenderEngine implements VulkanBackend {
             Renderer.getInstance().endRenderPass();
 
             // SSAO post-process
-            if (this.ssaoPipeline != null && Config.Client.Advanced.Graphics.Ssao.enableSsao.get()) {
+            if (this.ssaoPipeline != null && DhConfigHelper.ssaoEnabled()) {
                 try {
                     this.tempCombinedMatrix.set(uniforms.dhProjectionMatrix);
                     this.ssaoPipeline.render(this.dhFramebuffer, this.tempCombinedMatrix);
@@ -488,7 +485,7 @@ public class VulkanRenderEngine implements VulkanBackend {
             }
 
             // Fog post-process
-            if (this.fogPipeline != null && Config.Client.Advanced.Graphics.Fog.enableDhFog.get()) {
+            if (this.fogPipeline != null && DhConfigHelper.dhFogEnabled()) {
                 try {
                     this.tempCombinedMatrix.set(uniforms.dhModelViewMatrix);
                     this.tempInvProj.set(uniforms.dhProjectionMatrix);
@@ -506,8 +503,7 @@ public class VulkanRenderEngine implements VulkanBackend {
             Compat.rebindMainTarget();
 
             // Check fade mode
-            com.seibel.distanthorizons.api.enums.config.EDhApiMcRenderingFadeMode fadeMode = Config.Client.Advanced.Graphics.Quality.vanillaFadeMode
-                    .get();
+            com.seibel.distanthorizons.api.enums.config.EDhApiMcRenderingFadeMode fadeMode = DhConfigHelper.vanillaFadeMode();
             if (fadeMode == com.seibel.distanthorizons.api.enums.config.EDhApiMcRenderingFadeMode.NONE) {
                 VulkanImage debugMcDepth = DhVulkanConfig.get().vulkanRenderMode == 6
                         ? Compat.getSwapChainDepthAttachment()
@@ -536,8 +532,7 @@ public class VulkanRenderEngine implements VulkanBackend {
 
     @Override
     public void deferredComposite(RenderUniforms uniforms) {
-        com.seibel.distanthorizons.api.enums.config.EDhApiMcRenderingFadeMode fadeMode = Config.Client.Advanced.Graphics.Quality.vanillaFadeMode
-                .get();
+        com.seibel.distanthorizons.api.enums.config.EDhApiMcRenderingFadeMode fadeMode = DhConfigHelper.vanillaFadeMode();
 
         if (fadeMode == com.seibel.distanthorizons.api.enums.config.EDhApiMcRenderingFadeMode.NONE) {
             return;

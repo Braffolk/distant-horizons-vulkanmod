@@ -26,10 +26,15 @@ public class DhVulkanMixinPlugin implements IMixinConfigPlugin {
 
     private static final String DH_CONFIG_NAME = "DistantHorizons.fabric.mixins.json";
     private static final String DH_MIXIN_TO_REMOVE = "client.MixinTextureUtil";
+    // DH 3.0's MixinSharedConstants sets IS_RUNNING_IN_IDE = true, which enables
+    // VulkanMod's debug validation (VkRenderPass.VALIDATION). VulkanMod's own
+    // GuiRendererMixin intentionally skips setIndexBuffer(), so the validation
+    // throws "Missing index buffer" on the very first GUI render frame.
+    private static final String DH_MIXIN_SHARED_CONSTANTS = "client.MixinSharedConstants";
 
     @Override
     public void onLoad(String mixinPackage) {
-        System.out.println("[DH-VulkanMod] Mixin plugin loaded, resolving TextureUtil conflict...");
+        System.out.println("[DH-VulkanMod] Mixin plugin loaded, resolving DH/VulkanMod mixin conflicts...");
 
         boolean removed = false;
         try {
@@ -56,16 +61,27 @@ public class DhVulkanMixinPlugin implements IMixinConfigPlugin {
                     clientMixins = getListField(mixinConfig, "client");
                 }
                 if (clientMixins == null) {
-                    // Try to find any List<String> field containing our target
+                    // Try to find any List<String> field containing our targets
                     clientMixins = findMixinList(mixinConfig, DH_MIXIN_TO_REMOVE);
                 }
+                if (clientMixins == null) {
+                    clientMixins = findMixinList(mixinConfig, DH_MIXIN_SHARED_CONSTANTS);
+                }
 
-                if (clientMixins != null && clientMixins.remove(DH_MIXIN_TO_REMOVE)) {
-                    removed = true;
-                    System.out.println("[DH-VulkanMod] ✓ Removed " + DH_MIXIN_TO_REMOVE
-                            + " from DH config — mixin conflict resolved");
-                } else {
-                    System.out.println("[DH-VulkanMod] MixinTextureUtil not found in DH client mixin list"
+                if (clientMixins != null) {
+                    if (clientMixins.remove(DH_MIXIN_TO_REMOVE)) {
+                        removed = true;
+                        System.out.println("[DH-VulkanMod] ✓ Removed " + DH_MIXIN_TO_REMOVE
+                                + " from DH config — TextureUtil conflict resolved");
+                    }
+                    if (clientMixins.remove(DH_MIXIN_SHARED_CONSTANTS)) {
+                        removed = true;
+                        System.out.println("[DH-VulkanMod] ✓ Removed " + DH_MIXIN_SHARED_CONSTANTS
+                                + " from DH config — prevents VulkanMod validation crash");
+                    }
+                }
+                if (!removed) {
+                    System.out.println("[DH-VulkanMod] No conflicting DH mixins found in config"
                             + " (may not exist in this DH version — no conflict)");
                 }
             }
@@ -75,8 +91,8 @@ public class DhVulkanMixinPlugin implements IMixinConfigPlugin {
         }
 
         if (!removed) {
-            System.err.println("[DH-VulkanMod] Could not remove MixinTextureUtil from DH config.");
-            System.err.println("[DH-VulkanMod] If a TextureUtil mixin crash occurs, add JVM arg: -Dmixin.checks=false");
+            System.err.println("[DH-VulkanMod] Could not remove conflicting DH mixins from DH config.");
+            System.err.println("[DH-VulkanMod] If a mixin crash occurs, add JVM arg: -Dmixin.checks=false");
         }
     }
 
