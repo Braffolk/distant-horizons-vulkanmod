@@ -157,8 +157,36 @@ public class VkRenderApiDefinition extends AbstractDhRenderApiDefinition {
     static class VkTerrainRenderer implements IDhTerrainRenderer {
         private final VulkanBackend backend;
 
+        // Cached reflection fields — type of vbos differs between DH versions
+        // (GLVertexBuffer[] in 2.4 vs IVertexBufferWrapper[] in 3.0)
+        private static java.lang.reflect.Field vbosField;
+        private static java.lang.reflect.Field vbosTransparentField;
+        private static boolean reflectionResolved = false;
+
         VkTerrainRenderer(VulkanBackend backend) {
             this.backend = backend;
+        }
+
+        private static void resolveFields() {
+            if (reflectionResolved) return;
+            try {
+                vbosField = LodBufferContainer.class.getDeclaredField("vbos");
+                vbosField.setAccessible(true);
+                vbosTransparentField = LodBufferContainer.class.getDeclaredField("vbosTransparent");
+                vbosTransparentField.setAccessible(true);
+            } catch (NoSuchFieldException e) {
+                throw new RuntimeException("[DH-VulkanMod] LodBufferContainer missing vbos field", e);
+            }
+            reflectionResolved = true;
+        }
+
+        private static Object[] getVbos(LodBufferContainer container, boolean opaque) {
+            resolveFields();
+            try {
+                return (Object[]) (opaque ? vbosField.get(container) : vbosTransparentField.get(container));
+            } catch (IllegalAccessException e) {
+                throw new RuntimeException("[DH-VulkanMod] Failed to read vbos", e);
+            }
         }
 
         @Override
@@ -183,15 +211,14 @@ public class VkRenderApiDefinition extends AbstractDhRenderApiDefinition {
                     backend.setModelOffset(modelPos);
                 }
 
-                // Select opaque or transparent VBO array (use Object[] to avoid type conflicts between DH 2.4/3.0)
-                Object[] vertexBuffers = opaquePass ? container.vbos : container.vbosTransparent;
+                // Use reflection to access vbos — field type differs between DH versions
+                Object[] vertexBuffers = getVbos(container, opaquePass);
                 if (vertexBuffers == null) continue;
 
                 for (int vboIndex = 0; vboIndex < vertexBuffers.length; vboIndex++) {
                     Object vboObj = vertexBuffers[vboIndex];
                     if (!(vboObj instanceof VkVertexBufferWrapper)) continue;
                     VkVertexBufferWrapper vkVbo = (VkVertexBufferWrapper) vboObj;
-                    if (vkVbo == null) continue;
 
                     VkVertexData data = vkVbo.getVertexData();
                     if (data == null) continue;
