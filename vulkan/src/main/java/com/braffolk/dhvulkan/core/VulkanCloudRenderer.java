@@ -1,0 +1,501 @@
+package com.braffolk.dhvulkan.core;
+
+import com.braffolk.dhvulkan.compat.Compat;
+import com.seibel.distanthorizons.core.config.Config;
+import com.seibel.distanthorizons.core.dependencyInjection.SingletonInjector;
+import com.seibel.distanthorizons.core.wrapperInterfaces.minecraft.IMinecraftRenderWrapper;
+import com.seibel.distanthorizons.core.util.math.Mat4f;
+import net.minecraft.client.CloudStatus;
+import net.minecraft.client.Minecraft;
+import net.minecraft.client.multiplayer.ClientLevel;
+import net.minecraft.util.Mth;
+import net.vulkanmod.vulkan.Renderer;
+import net.vulkanmod.vulkan.VRenderSystem;
+import net.vulkanmod.vulkan.shader.GraphicsPipeline;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
+import org.joml.Matrix4fStack;
+
+import com.mojang.blaze3d.platform.NativeImage;
+import com.mojang.blaze3d.systems.RenderSystem;
+import com.mojang.blaze3d.vertex.BufferBuilder;
+
+import java.lang.reflect.Method;
+
+/**
+ * Renders clouds after the DH composite pass, so they depth-test against
+ * both MC terrain and DH LOD depth in the combined depth buffer.
+ *
+ * Directly replicates VulkanMod's CloudRenderer logic instead of calling
+ * it via reflection. This avoids VRenderSystem state corruption from
+ * the composite pipeline (which was causing cyan color and wrong depth).
+ *
+ * Respects DH's enableCloudRendering config (cached, refreshed periodically).
+ */
+public class VulkanCloudRenderer {
+
+    private static final Logger LOGGER = LogManager.getLogger("DH-VulkanMod");
+
+    // Cloud grid constants (same as VM)
+    private static final int CELL_WIDTH = 12;
+    private static final int CELL_HEIGHT = 4;
+
+    // Face direction bits (same as VM)
+    private static final int DIR_NEG_Y_BIT = 1;
+    private static final int DIR_POS_Y_BIT = 1 << 1;
+    private static final int DIR_NEG_X_BIT = 1 << 2;
+    private static final int DIR_POS_X_BIT = 1 << 3;
+    private static final int DIR_NEG_Z_BIT = 1 << 4;
+    private static final int DIR_POS_Z_BIT = 1 << 5;
+
+    // Y-state relative to clouds
+    private static final byte Y_BELOW_CLOUDS = 0;
+    private static final byte Y_ABOVE_CLOUDS = 1;
+    private static final byte Y_INSIDE_CLOUDS = 2;
+
+    // Cloud grid data (loaded from clouds.png)
+    private int[] cloudPixels;
+    private byte[] cloudRenderFaces;
+    private int cloudGridWidth;
+    private boolean textureLoaded = false;
+
+    // Mesh caching
+    private Object cloudVBO; // net.vulkanmod.render.VBO
+    private int prevCloudX;
+    private int prevCloudZ;
+    private byte prevCloudY;
+    private CloudStatus prevCloudsType;
+    private boolean needsRebuild = true;
+
+    // Reflection for PipelineManager.getCloudsPipeline() and VBO
+    private boolean reflectionResolved = false;
+    private boolean reflectionFailed = false;
+    private Method getCloudsPipelineMethod;
+    private java.lang.reflect.Constructor<?> vboConstructor;
+    private Method vboUploadMethod;
+    private Method vboBindMethod;
+    private Method vboDrawMethod;
+    private Method vboCloseMethod;
+
+    // Config cache
+    private boolean cloudRenderingEnabled = true;
+    private int configRefreshCounter = 0;
+    private static final int CONFIG_REFRESH_INTERVAL = 60;
+
+    /**
+     * Render clouds if DH's cloud rendering config is enabled.
+     * Must be called AFTER deferredComposite has written DH depth
+     * into MC's depth buffer (so clouds depth-test correctly).
+     */
+    public void renderIfEnabled(float partialTicks, Mat4f mcProjection) {
+        // Periodic config check (not every frame)
+        if (--this.configRefreshCounter <= 0) {
+            this.configRefreshCounter = CONFIG_REFRESH_INTERVAL;
+            try {
+                this.cloudRenderingEnabled = Config.Client.Advanced.Graphics.GenericRendering.enableCloudRendering.get();
+            } catch (Exception e) {
+                this.cloudRenderingEnabled = true;
+            }
+        }
+        if (!this.cloudRenderingEnabled) return;
+
+        Minecraft mc = Minecraft.getInstance();
+        ClientLevel level = mc.level;
+        if (level == null) return;
+
+        // Check cloud height from dimension
+        int cloudHeight = Compat.getCloudHeight(level);
+        if (cloudHeight < 0) return;
+
+        // Lazy resolve reflection targets
+        if (!this.reflectionResolved) {
+            resolveReflection();
+        }
+        if (this.reflectionFailed) return;
+
+        // Load texture on first call
+        if (!this.textureLoaded) {
+            loadCloudTexture();
+            if (!this.textureLoaded) return;
+        }
+
+        try {
+            renderClouds(level, mc, cloudHeight, partialTicks, mcProjection);
+        } catch (Exception e) {
+            LOGGER.error("[DH-VulkanMod] Cloud rendering failed", e);
+        }
+    }
+
+    private void renderClouds(ClientLevel level, Minecraft mc, int cloudHeight, float partialTicks, Mat4f mcProjection) throws Exception {
+        IMinecraftRenderWrapper renderWrapper = SingletonInjector.INSTANCE.get(IMinecraftRenderWrapper.class);
+        var camPos = renderWrapper.getCameraExactPosition();
+        double camX = camPos.x;
+        double camY = camPos.y;
+        double camZ = camPos.z;
+
+        int ticks = (int) (level.getGameTime() % Integer.MAX_VALUE);
+        double timeOffset = (ticks + partialTicks) * 0.03F;
+        double centerX = camX + timeOffset;
+        double centerZ = camZ + 0.33F * CELL_WIDTH;
+        double centerY = cloudHeight - camY + 0.33F;
+
+        int centerCellX = (int) Math.floor(centerX / CELL_WIDTH);
+        int centerCellZ = (int) Math.floor(centerZ / CELL_WIDTH);
+
+        byte yState;
+        if (centerY < -4.0f) {
+            yState = Y_BELOW_CLOUDS;
+        } else if (centerY > 0.0f) {
+            yState = Y_ABOVE_CLOUDS;
+        } else {
+            yState = Y_INSIDE_CLOUDS;
+        }
+
+        CloudStatus cloudsType = mc.options.getCloudsType();
+
+        // Check if mesh needs rebuilding
+        if (centerCellX != this.prevCloudX || centerCellZ != this.prevCloudZ
+                || cloudsType != this.prevCloudsType
+                || this.prevCloudY != yState
+                || this.cloudVBO == null) {
+            this.prevCloudX = centerCellX;
+            this.prevCloudZ = centerCellZ;
+            this.prevCloudsType = cloudsType;
+            this.prevCloudY = yState;
+            this.needsRebuild = true;
+        }
+
+        if (this.needsRebuild) {
+            this.needsRebuild = false;
+            if (this.cloudVBO != null) {
+                this.vboCloseMethod.invoke(this.cloudVBO);
+            }
+
+            Object cloudsMesh = buildCloudMesh(
+                    centerCellX, centerCellZ, centerY, cloudsType);
+
+            if (cloudsMesh == null) {
+                this.cloudVBO = null;
+                return;
+            }
+
+            this.cloudVBO = this.vboConstructor.newInstance(true);
+            this.vboUploadMethod.invoke(this.cloudVBO, cloudsMesh);
+        }
+
+        if (this.cloudVBO == null) return;
+
+        // --- Rendering ---
+
+        float xTranslation = (float) (centerX - (centerCellX * CELL_WIDTH));
+        float yTranslation = (float) centerY;
+        float zTranslation = (float) (centerZ - (centerCellZ * CELL_WIDTH));
+
+        // NOTE: Do NOT call Compat.rebindMainTarget() here — we are already
+        // in the correct render pass from the composite. A second rebind would
+        // start a new Vulkan render pass which may clear the depth buffer,
+        // destroying the DH LOD depth the composite just wrote via gl_FragDepth.
+
+        // Restore MC's projection matrix — critical for depth testing against the
+        // combined MC+DH depth buffer written by the composite pass.
+        VRenderSystem.applyProjectionMatrix(mcProjection.createJomlMatrix());
+
+        // Set up model-view matrix — push, translate, apply
+        Matrix4fStack poseStack = RenderSystem.getModelViewStack();
+        poseStack.pushMatrix();
+        poseStack.translate(-xTranslation, yTranslation, -zTranslation);
+        VRenderSystem.applyModelViewMatrix(poseStack);
+        VRenderSystem.calculateMVP();
+
+        Compat.setModelOffset(-xTranslation, 0, -zTranslation);
+
+        // Set cloud color from level
+        float[] cloudColor = Compat.getCloudColorRGB(level, partialTicks);
+        VRenderSystem.setShaderColor(cloudColor[0], cloudColor[1], cloudColor[2], 0.8f);
+
+        // Get the clouds pipeline
+        GraphicsPipeline cloudsPipeline = (GraphicsPipeline) this.getCloudsPipelineMethod.invoke(null);
+
+        // Set render state
+        VRenderSystem.enableBlend();
+        VRenderSystem.blendFuncSeparate(
+                org.lwjgl.opengl.GL11.GL_SRC_ALPHA,
+                org.lwjgl.opengl.GL11.GL_ONE_MINUS_SRC_ALPHA,
+                org.lwjgl.opengl.GL11.GL_ONE,
+                org.lwjgl.opengl.GL11.GL_ZERO);
+        VRenderSystem.enableDepthTest();
+        VRenderSystem.depthFunc(org.lwjgl.opengl.GL11.GL_LEQUAL);
+        VRenderSystem.depthMask = true;
+        VRenderSystem.setPolygonModeGL(org.lwjgl.opengl.GL11.GL_FILL);
+        VRenderSystem.setPrimitiveTopologyGL(org.lwjgl.opengl.GL11.GL_TRIANGLES);
+
+        boolean fastClouds = cloudsType == CloudStatus.FAST;
+        boolean insideClouds = yState == Y_INSIDE_CLOUDS;
+        boolean disableCull = insideClouds || (fastClouds && centerY <= 0.0f);
+
+        if (disableCull) {
+            VRenderSystem.disableCull();
+        } else {
+            VRenderSystem.enableCull();
+        }
+
+        // For fancy (non-fast) clouds: depth-only pre-pass
+        if (!fastClouds) {
+            VRenderSystem.colorMask(false, false, false, false);
+            this.vboBindMethod.invoke(this.cloudVBO, cloudsPipeline);
+            this.vboDrawMethod.invoke(this.cloudVBO);
+            VRenderSystem.colorMask(true, true, true, true);
+        }
+
+        // Main draw
+        this.vboBindMethod.invoke(this.cloudVBO, cloudsPipeline);
+        this.vboDrawMethod.invoke(this.cloudVBO);
+
+        // Restore state
+        poseStack.popMatrix();
+        VRenderSystem.enableCull();
+        VRenderSystem.setShaderColor(1.0f, 1.0f, 1.0f, 1.0f);
+        Compat.setModelOffset(0.0f, 0.0f, 0.0f);
+    }
+
+    // ========================= //
+    // Cloud mesh generation     //
+    // ========================= //
+
+    private Object buildCloudMesh(int centerCellX, int centerCellZ,
+                                  double cloudY, CloudStatus cloudsType) {
+        final float upFaceBrightness = 1.0f;
+        final float xDirBrightness = 0.9f;
+        final float downFaceBrightness = 0.7f;
+        final float zDirBrightness = 0.8f;
+
+        BufferBuilder bufferBuilder = Compat.beginCloudMesh();
+
+        int cloudRange = Compat.getCloudRenderRange();
+        int renderDistance = Mth.ceil(cloudRange / 12.0F);
+        boolean insideClouds = this.prevCloudY == Y_INSIDE_CLOUDS;
+
+        if (cloudsType == CloudStatus.FANCY) {
+            for (int cellX = -renderDistance; cellX < renderDistance; ++cellX) {
+                for (int cellZ = -renderDistance; cellZ < renderDistance; ++cellZ) {
+                    int cellIdx = getWrappedIdx(centerCellX + cellX, centerCellZ + cellZ);
+                    byte renderFaces = this.cloudRenderFaces[cellIdx];
+                    int baseColor = this.cloudPixels[cellIdx];
+
+                    float x = cellX * CELL_WIDTH;
+                    float z = cellZ * CELL_WIDTH;
+
+                    if ((renderFaces & DIR_POS_Y_BIT) != 0 && cloudY <= 0.0f) {
+                        int color = multiplyRGB(baseColor, upFaceBrightness);
+                        putVertex(bufferBuilder, x + CELL_WIDTH, CELL_HEIGHT, z + CELL_WIDTH, color);
+                        putVertex(bufferBuilder, x + CELL_WIDTH, CELL_HEIGHT, z, color);
+                        putVertex(bufferBuilder, x, CELL_HEIGHT, z, color);
+                        putVertex(bufferBuilder, x, CELL_HEIGHT, z + CELL_WIDTH, color);
+                    }
+
+                    if ((renderFaces & DIR_NEG_Y_BIT) != 0 && cloudY >= -CELL_HEIGHT) {
+                        int color = multiplyRGB(baseColor, downFaceBrightness);
+                        putVertex(bufferBuilder, x, 0.0f, z + CELL_WIDTH, color);
+                        putVertex(bufferBuilder, x, 0.0f, z, color);
+                        putVertex(bufferBuilder, x + CELL_WIDTH, 0.0f, z, color);
+                        putVertex(bufferBuilder, x + CELL_WIDTH, 0.0f, z + CELL_WIDTH, color);
+                    }
+
+                    if ((renderFaces & DIR_POS_X_BIT) != 0 && (x < 1.0f || insideClouds)) {
+                        int color = multiplyRGB(baseColor, xDirBrightness);
+                        putVertex(bufferBuilder, x + CELL_WIDTH, CELL_HEIGHT, z + CELL_WIDTH, color);
+                        putVertex(bufferBuilder, x + CELL_WIDTH, 0.0f, z + CELL_WIDTH, color);
+                        putVertex(bufferBuilder, x + CELL_WIDTH, 0.0f, z, color);
+                        putVertex(bufferBuilder, x + CELL_WIDTH, CELL_HEIGHT, z, color);
+                    }
+
+                    if ((renderFaces & DIR_NEG_X_BIT) != 0 && (x > -1.0f || insideClouds)) {
+                        int color = multiplyRGB(baseColor, xDirBrightness);
+                        putVertex(bufferBuilder, x, CELL_HEIGHT, z, color);
+                        putVertex(bufferBuilder, x, 0.0f, z, color);
+                        putVertex(bufferBuilder, x, 0.0f, z + CELL_WIDTH, color);
+                        putVertex(bufferBuilder, x, CELL_HEIGHT, z + CELL_WIDTH, color);
+                    }
+
+                    if ((renderFaces & DIR_POS_Z_BIT) != 0 && (z < 1.0f || insideClouds)) {
+                        int color = multiplyRGB(baseColor, zDirBrightness);
+                        putVertex(bufferBuilder, x, CELL_HEIGHT, z + CELL_WIDTH, color);
+                        putVertex(bufferBuilder, x, 0.0f, z + CELL_WIDTH, color);
+                        putVertex(bufferBuilder, x + CELL_WIDTH, 0.0f, z + CELL_WIDTH, color);
+                        putVertex(bufferBuilder, x + CELL_WIDTH, CELL_HEIGHT, z + CELL_WIDTH, color);
+                    }
+
+                    if ((renderFaces & DIR_NEG_Z_BIT) != 0 && (z > -1.0f || insideClouds)) {
+                        int color = multiplyRGB(baseColor, zDirBrightness);
+                        putVertex(bufferBuilder, x + CELL_WIDTH, CELL_HEIGHT, z, color);
+                        putVertex(bufferBuilder, x + CELL_WIDTH, 0.0f, z, color);
+                        putVertex(bufferBuilder, x, 0.0f, z, color);
+                        putVertex(bufferBuilder, x, CELL_HEIGHT, z, color);
+                    }
+                }
+            }
+        } else {
+            // Fast clouds: single bottom face per cell
+            for (int cellX = -renderDistance; cellX < renderDistance; ++cellX) {
+                for (int cellZ = -renderDistance; cellZ < renderDistance; ++cellZ) {
+                    int cellIdx = getWrappedIdx(centerCellX + cellX, centerCellZ + cellZ);
+                    byte renderFaces = this.cloudRenderFaces[cellIdx];
+                    int baseColor = this.cloudPixels[cellIdx];
+
+                    float x = cellX * CELL_WIDTH;
+                    float z = cellZ * CELL_WIDTH;
+
+                    if ((renderFaces & DIR_NEG_Y_BIT) != 0) {
+                        int color = multiplyRGB(baseColor, upFaceBrightness);
+                        putVertex(bufferBuilder, x, 0.0f, z + CELL_WIDTH, color);
+                        putVertex(bufferBuilder, x, 0.0f, z, color);
+                        putVertex(bufferBuilder, x + CELL_WIDTH, 0.0f, z, color);
+                        putVertex(bufferBuilder, x + CELL_WIDTH, 0.0f, z + CELL_WIDTH, color);
+                    }
+                }
+            }
+        }
+
+        return Compat.finishCloudMesh(bufferBuilder);
+    }
+
+    private static void putVertex(BufferBuilder builder, float x, float y, float z, int color) {
+        Compat.putCloudVertex(builder, x, y, z, color);
+    }
+
+    // ========================= //
+    // Cloud texture loading     //
+    // ========================= //
+
+    private void loadCloudTexture() {
+        try (var inputStream = Compat.openMcResource("textures/environment/clouds.png")) {
+            NativeImage image = NativeImage.read(inputStream);
+            int width = image.getWidth();
+            int height = image.getHeight();
+
+            if (width != height) {
+                LOGGER.warn("[DH-VulkanMod] Cloud texture is not square ({}x{}), skipping", width, height);
+                return;
+            }
+
+            this.cloudPixels = Compat.getCloudPixels(image);
+            this.cloudGridWidth = width;
+            this.cloudRenderFaces = computeRenderFaces();
+            this.textureLoaded = true;
+            LOGGER.info("[DH-VulkanMod] Cloud texture loaded: {}x{}", width, height);
+        } catch (Exception e) {
+            LOGGER.error("[DH-VulkanMod] Failed to load cloud texture", e);
+        }
+    }
+
+    private byte[] computeRenderFaces() {
+        byte[] renderFaces = new byte[this.cloudPixels.length];
+
+        for (int z = 0; z < this.cloudGridWidth; z++) {
+            for (int x = 0; x < this.cloudGridWidth; x++) {
+                int idx = z * this.cloudGridWidth + x;
+                int pixel = this.cloudPixels[idx];
+
+                if (!hasAlpha(pixel)) continue;
+
+                byte faces = (byte) (DIR_NEG_Y_BIT | DIR_POS_Y_BIT);
+
+                if (pixel != getTexelWrapped(x - 1, z)) faces |= DIR_NEG_X_BIT;
+                if (pixel != getTexelWrapped(x + 1, z)) faces |= DIR_POS_X_BIT;
+                if (pixel != getTexelWrapped(x, z - 1)) faces |= DIR_NEG_Z_BIT;
+                if (pixel != getTexelWrapped(x, z + 1)) faces |= DIR_POS_Z_BIT;
+
+                renderFaces[idx] = faces;
+            }
+        }
+
+        return renderFaces;
+    }
+
+    private int getTexelWrapped(int x, int z) {
+        x = Math.floorMod(x, this.cloudGridWidth);
+        z = Math.floorMod(z, this.cloudGridWidth);
+        return this.cloudPixels[z * this.cloudGridWidth + x];
+    }
+
+    private int getWrappedIdx(int x, int z) {
+        x = Math.floorMod(x, this.cloudGridWidth);
+        z = Math.floorMod(z, this.cloudGridWidth);
+        return z * this.cloudGridWidth + x;
+    }
+
+    private static boolean hasAlpha(int pixel) {
+        return ((pixel >> 24) & 0xFF) > 1;
+    }
+
+    /**
+     * Multiply RGB channels of an ARGB color by a brightness factor.
+     * Equivalent to VM's ColorUtil.ARGB.multiplyRGB().
+     */
+    private static int multiplyRGB(int color, float factor) {
+        int a = (color >> 24) & 0xFF;
+        int r = (int) (((color >> 16) & 0xFF) * factor);
+        int g = (int) (((color >> 8) & 0xFF) * factor);
+        int b = (int) ((color & 0xFF) * factor);
+        return (a << 24) | (r << 16) | (g << 8) | b;
+    }
+
+    // ========================= //
+    // Reflection resolution     //
+    // ========================= //
+
+    private void resolveReflection() {
+        this.reflectionResolved = true;
+
+        try {
+            // PipelineManager.getCloudsPipeline()
+            Class<?> pipelineManagerClass = Class.forName("net.vulkanmod.render.PipelineManager");
+            this.getCloudsPipelineMethod = pipelineManagerClass.getMethod("getCloudsPipeline");
+
+            // VBO(boolean useGpuMem)
+            Class<?> vboClass = Class.forName("net.vulkanmod.render.VBO");
+            this.vboConstructor = vboClass.getConstructor(boolean.class);
+            // Find VBO.upload(MeshData) by name — can't use MeshData.class directly
+            // because Fabric remaps Mojang class names at runtime
+            for (java.lang.reflect.Method m : vboClass.getMethods()) {
+                if (m.getName().equals("upload") && m.getParameterCount() == 1) {
+                    this.vboUploadMethod = m;
+                    break;
+                }
+            }
+            if (this.vboUploadMethod == null) {
+                throw new NoSuchMethodException("VBO.upload(MeshData) not found");
+            }
+            this.vboBindMethod = vboClass.getMethod("bind", GraphicsPipeline.class);
+            this.vboDrawMethod = vboClass.getMethod("draw");
+            this.vboCloseMethod = vboClass.getMethod("close");
+
+            LOGGER.info("[DH-VulkanMod] Cloud renderer reflection resolved.");
+        } catch (Exception e) {
+            LOGGER.warn("[DH-VulkanMod] Cloud renderer reflection failed — clouds disabled on this VM version.", e);
+            this.reflectionFailed = true;
+        }
+    }
+
+    /** Reload cloud texture (called on resource reload). */
+    public void resetBuffer() {
+        if (this.cloudVBO != null) {
+            try {
+                this.vboCloseMethod.invoke(this.cloudVBO);
+            } catch (Exception ignored) {}
+            this.cloudVBO = null;
+        }
+        this.needsRebuild = true;
+    }
+
+    /** Full cleanup — release all resources. */
+    public void cleanup() {
+        resetBuffer();
+        this.textureLoaded = false;
+        this.cloudPixels = null;
+        this.cloudRenderFaces = null;
+        this.reflectionResolved = false;
+        this.reflectionFailed = false;
+        this.configRefreshCounter = 0;
+    }
+}

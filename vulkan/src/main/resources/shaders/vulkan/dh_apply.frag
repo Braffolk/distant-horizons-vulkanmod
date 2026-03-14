@@ -114,6 +114,9 @@ void main() {
 
     // Remap DH depth to MC-compatible depth for correct occlusion against MC terrain.
     // DH uses dhProjectionMatrix with extended near/far clip planes.
+    // Clamp to 0.999 so LODs beyond MC's far plane still have depth < sky (1.0),
+    // ensuring clouds (which get depth ~1.0 or are frustum-clipped at MC's far plane)
+    // correctly fail the depth test against distant LODs.
     float mcCompatibleDepth = remapDepthDhToMc(TexCoord, dhDepth);
-    gl_FragDepth = min(mcCompatibleDepth + 0.001, 1.0);
+    gl_FragDepth = clamp(mcCompatibleDepth, 0.0, 0.999);
 }

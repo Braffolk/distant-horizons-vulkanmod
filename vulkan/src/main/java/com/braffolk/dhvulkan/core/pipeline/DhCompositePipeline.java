@@ -224,8 +224,10 @@ public class DhCompositePipeline {
         }
 
         // Set pipeline state for composite: premultiplied alpha blend, no cull, depth
-        // write
+        // write. depthTest MUST be true — without it, Vulkan ignores gl_FragDepth
+        // writes entirely (per spec: depth attachment not modified when test disabled).
         boolean prevCull = VRenderSystem.cull;
+        boolean prevDepthTest = VRenderSystem.depthTest;
         boolean prevDepthMask = VRenderSystem.depthMask;
         int prevDepthFun = VRenderSystem.depthFun;
         boolean prevBlend = PipelineState.blendInfo.enabled;
@@ -236,10 +238,10 @@ public class DhCompositePipeline {
         int prevBlendOp = PipelineState.blendInfo.blendOp;
 
         VRenderSystem.cull = false;
+        VRenderSystem.depthTest = true; // CRITICAL: enables gl_FragDepth writes
         VRenderSystem.depthMask = true;
-        // When using MC depth comparison, use GL_ALWAYS since the shader handles
-        // depth testing via the MC depth texture. Without MC depth, also use
-        // GL_ALWAYS because MC's depth buffer is uninitialized at this point.
+        // GL_ALWAYS: the shader handles depth comparison via the MC depth texture.
+        // The depth test always passes, but depth WRITES still happen via gl_FragDepth.
         VRenderSystem.depthFun = 519; // GL_ALWAYS
         // Premultiplied alpha blending: DH's color buffer is already
         // alpha-premultiplied from DH's own transparent pass blending,
@@ -261,6 +263,7 @@ public class DhCompositePipeline {
 
         // Restore state
         VRenderSystem.cull = prevCull;
+        VRenderSystem.depthTest = prevDepthTest;
         VRenderSystem.depthMask = prevDepthMask;
         VRenderSystem.depthFun = prevDepthFun;
         PipelineState.blendInfo.enabled = prevBlend;

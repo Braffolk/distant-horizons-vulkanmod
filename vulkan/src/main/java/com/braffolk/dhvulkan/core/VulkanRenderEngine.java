@@ -72,6 +72,8 @@ public class VulkanRenderEngine implements VulkanBackend {
     private DhFogPipeline fogPipeline;
     /** Depth reader -- copies MC depth to R32F for sampling on NVIDIA */
     private DhDepthReaderPipeline depthReaderPipeline;
+    /** Cloud renderer -- renders clouds after DH composite with correct depth */
+    private final VulkanCloudRenderer cloudRenderer = new VulkanCloudRenderer();
 
     /** Shared index buffer for quad rendering (6 indices per quad) */
     private Object quadIndexBuffer;
@@ -507,12 +509,17 @@ public class VulkanRenderEngine implements VulkanBackend {
 
             Compat.rebindMainTarget();
             this.runComposite(uniforms, mcDepthTexture);
+
+            // Render clouds AFTER composite — MC's depth buffer now has both
+            // MC terrain and DH LOD depth, so clouds depth-test correctly.
+            this.cloudRenderer.renderIfEnabled(uniforms.partialTicks, uniforms.mcProjectionMatrix);
         } catch (Exception e) {
             LOGGER.error("[DH-Vulkan] deferredComposite error, falling back to no-depth", e);
             try {
                 Renderer.getInstance().endRenderPass();
                 Compat.rebindMainTarget();
                 this.runComposite(uniforms, null);
+                this.cloudRenderer.renderIfEnabled(uniforms.partialTicks, uniforms.mcProjectionMatrix);
             } catch (Exception e2) {
                 LOGGER.error("[DH-Vulkan] Fallback composite also failed", e2);
             }
@@ -574,6 +581,8 @@ public class VulkanRenderEngine implements VulkanBackend {
 
     @Override
     public void cleanup() {
+        this.cloudRenderer.cleanup();
+
         try {
             Compat.waitDeviceIdle();
         } catch (Exception e) {

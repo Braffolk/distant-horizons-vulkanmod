@@ -580,6 +580,190 @@ public final class Compat {
         cleanupDepthCopy();
     }
 
+    // ========================= //
+    // Cloud rendering helpers   //
+    // ========================= //
+
+    /**
+     * Load a resource by path from Minecraft's resource manager.
+     * ResourceLocation was renamed to Identifier in MC 1.21.11.
+     */
+    public static java.io.InputStream openMcResource(String path) throws java.io.IOException {
+        #if MC_VER <= MC_1_20_6
+        var loc = new net.minecraft.resources.ResourceLocation(path);
+        #elif MC_VER <= MC_1_21_10
+        var loc = net.minecraft.resources.ResourceLocation.withDefaultNamespace(path);
+        #else
+        var loc = net.minecraft.resources.Identifier.withDefaultNamespace(path);
+        #endif
+        return net.minecraft.client.Minecraft.getInstance().getResourceManager()
+                .getResourceOrThrow(loc).open();
+    }
+
+    /**
+     * Get the cloud render range in blocks.
+     * MC 1.21.x has options.cloudRange(), MC 1.20.x uses renderDistance.
+     */
+    public static int getCloudRenderRange() {
+        #if MC_VER <= MC_1_20_6
+        return net.minecraft.client.Minecraft.getInstance().options.renderDistance().get() * 16;
+        #else
+        return Math.min(net.minecraft.client.Minecraft.getInstance().options.cloudRange().get(), 128) * 16;
+        #endif
+    }
+
+    /**
+     * Get cloud pixel data from a NativeImage as int array.
+     * MC 1.21.x has getPixelsABGR(), MC 1.20.x has getPixelRGBA per-pixel.
+     */
+    public static int[] getCloudPixels(com.mojang.blaze3d.platform.NativeImage image) {
+        #if MC_VER <= MC_1_20_6
+        int width = image.getWidth();
+        int height = image.getHeight();
+        int[] pixels = new int[width * height];
+        for (int y = 0; y < height; y++) {
+            for (int x = 0; x < width; x++) {
+                pixels[y * width + x] = image.getPixelRGBA(x, y);
+            }
+        }
+        return pixels;
+        #else
+        return image.getPixelsABGR();
+        #endif
+    }
+
+    /**
+     * Get cloud height for the current dimension. Returns -1 if none (e.g. nether).
+     */
+    public static int getCloudHeight(net.minecraft.client.multiplayer.ClientLevel level) {
+        try {
+            #if MC_VER <= MC_1_20_6
+            // MC 1.20.x: cloudHeight might be an OptionalInt
+            java.lang.reflect.Method m = level.dimensionType().getClass().getMethod("cloudHeight");
+            Object result = m.invoke(level.dimensionType());
+            if (result instanceof java.util.OptionalInt) {
+                return ((java.util.OptionalInt) result).orElse(-1);
+            } else if (result instanceof java.util.Optional) {
+                @SuppressWarnings("unchecked")
+                java.util.Optional<Integer> opt = (java.util.Optional<Integer>) result;
+                return opt.orElse(-1);
+            }
+            return 192; // fallback overworld
+            #elif MC_VER <= MC_1_21_10
+            java.util.Optional<Integer> opt = level.dimensionType().cloudHeight();
+            return opt.orElse(-1);
+            #else
+            // MC 1.21.11: dimensionType API may have changed, fallback to 192
+            // Cloud height is typically 192 in overworld dimensions
+            return level.dimensionType().hasSkyLight() ? 192 : -1;
+            #endif
+        } catch (Exception e) {
+            return 192;
+        }
+    }
+
+    /**
+     * Get cloud color as RGB float[3] for the current level.
+     * API varies significantly across MC versions.
+     */
+    public static float[] getCloudColorRGB(net.minecraft.client.multiplayer.ClientLevel level, float partialTicks) {
+        try {
+            #if MC_VER < MC_1_21_3
+            // MC 1.20.x - 1.21.1: returns Vec3
+            net.minecraft.world.phys.Vec3 color = level.getCloudColor(partialTicks);
+            return new float[]{(float) color.x, (float) color.y, (float) color.z};
+            #elif MC_VER <= MC_1_21_10
+            // MC 1.21.3 - 1.21.10: returns int (ARGB)
+            int argb = level.getCloudColor(partialTicks);
+            float r = ((argb >> 16) & 0xFF) / 255.0f;
+            float g = ((argb >> 8) & 0xFF) / 255.0f;
+            float b = (argb & 0xFF) / 255.0f;
+            return new float[]{r, g, b};
+            #else
+            // MC 1.21.11+: uses environmentAttributes
+            int argb = level.environmentAttributes().getValue(
+                    net.minecraft.world.attribute.EnvironmentAttributes.CLOUD_COLOR,
+                    net.minecraft.core.BlockPos.ZERO);
+            float r = ((argb >> 16) & 0xFF) / 255.0f;
+            float g = ((argb >> 8) & 0xFF) / 255.0f;
+            float b = (argb & 0xFF) / 255.0f;
+            return new float[]{r, g, b};
+            #endif
+        } catch (Exception e) {
+            return new float[]{1.0f, 1.0f, 1.0f}; // fallback white
+        }
+    }
+
+    /**
+     * Begin building cloud mesh geometry.
+     * MC 1.21.x: Tesselator.getInstance().begin(Mode, Format)
+     * MC 1.20.x: new BufferBuilder(size); builder.begin(Mode, Format)
+     */
+    public static com.mojang.blaze3d.vertex.BufferBuilder beginCloudMesh() {
+        #if MC_VER <= MC_1_20_6
+        com.mojang.blaze3d.vertex.BufferBuilder builder = com.mojang.blaze3d.vertex.Tesselator.getInstance().getBuilder();
+        builder.begin(com.mojang.blaze3d.vertex.VertexFormat.Mode.QUADS, com.mojang.blaze3d.vertex.DefaultVertexFormat.POSITION_COLOR);
+        return builder;
+        #else
+        return com.mojang.blaze3d.vertex.Tesselator.getInstance().begin(
+                com.mojang.blaze3d.vertex.VertexFormat.Mode.QUADS,
+                com.mojang.blaze3d.vertex.DefaultVertexFormat.POSITION_COLOR);
+        #endif
+    }
+
+    /**
+     * Add a vertex with position + ARGB color to the cloud mesh builder.
+     */
+    public static void putCloudVertex(com.mojang.blaze3d.vertex.BufferBuilder builder, float x, float y, float z, int color) {
+        #if MC_VER <= MC_1_20_6
+        float a = ((color >> 24) & 0xFF) / 255.0f;
+        float r = ((color >> 16) & 0xFF) / 255.0f;
+        float g = ((color >> 8) & 0xFF) / 255.0f;
+        float b = (color & 0xFF) / 255.0f;
+        builder.vertex(x, y, z).color(r, g, b, a).endVertex();
+        #else
+        builder.addVertex(x, y, z).setColor(color);
+        #endif
+    }
+
+    /**
+     * Finish building the cloud mesh, returning the mesh data (or null if empty).
+     * Returns Object to avoid referencing MeshData which doesn't exist on 1.20.x.
+     */
+    public static Object finishCloudMesh(com.mojang.blaze3d.vertex.BufferBuilder builder) {
+        #if MC_VER <= MC_1_20_6
+        builder.end();
+        // On 1.20.x, we need to return something that VBO.upload can handle.
+        // Since VBO doesn't exist on VM 0.4.2, this code path won't actually be reached.
+        return null;
+        #else
+        return builder.build();
+        #endif
+    }
+
+    /**
+     * Set VRenderSystem model offset. Only exists on VM 0.6.x.
+     */
+    public static void setModelOffset(float x, float y, float z) {
+        try {
+            java.lang.reflect.Method m = net.vulkanmod.vulkan.VRenderSystem.class.getMethod("setModelOffset", float.class, float.class, float.class);
+            m.invoke(null, x, y, z);
+        } catch (Exception ignored) {
+            // VM 0.4.2 doesn't have setModelOffset — no-op
+        }
+    }
+
+    /**
+     * Get the MeshData class for reflection. Returns null on MC 1.20.x (class doesn't exist).
+     */
+    public static Class<?> getMeshDataClass() {
+        try {
+            return Class.forName("com.mojang.blaze3d.vertex.MeshData");
+        } catch (ClassNotFoundException e) {
+            return null;
+        }
+    }
+
     private static final com.seibel.distanthorizons.core.logging.DhLogger LOGGER = new com.seibel.distanthorizons.core.logging.DhLoggerBuilder()
             .build();
 
