@@ -75,15 +75,13 @@ public class VkRenderApiDefinition extends AbstractDhRenderApiDefinition {
     // Helper: convert RenderParams to RenderUniforms
     // =========================================== //
 
-    static RenderUniforms toUniforms(RenderParams params) {
-        RenderUniforms u = new RenderUniforms();
-        // RenderParams fields are Mat4f (DH core), safe to cast
-        u.set((com.seibel.distanthorizons.core.util.math.Mat4f) (Object) params.dhProjectionMatrix,
+    static RenderUniforms toUniforms(RenderParams params, RenderUniforms target) {
+        target.set((com.seibel.distanthorizons.core.util.math.Mat4f) (Object) params.dhProjectionMatrix,
               (com.seibel.distanthorizons.core.util.math.Mat4f) (Object) params.dhModelViewMatrix,
               (com.seibel.distanthorizons.core.util.math.Mat4f) (Object) params.mcProjectionMatrix);
-        u.worldYOffset = params.worldYOffset;
-        u.partialTicks = params.partialTicks;
-        return u;
+        target.worldYOffset = params.worldYOffset;
+        target.partialTicks = params.partialTicks;
+        return target;
     }
 
     // =========================================== //
@@ -96,7 +94,7 @@ public class VkRenderApiDefinition extends AbstractDhRenderApiDefinition {
      */
     static class VkMetaRenderer implements IDhMetaRenderer {
         private final VulkanBackend backend;
-        private RenderUniforms lastUniforms;
+        private final RenderUniforms cachedUniforms = new RenderUniforms();
         private boolean frameActive = false;
         private boolean initialized = false;
 
@@ -111,25 +109,25 @@ public class VkRenderApiDefinition extends AbstractDhRenderApiDefinition {
                 backend.init();
                 initialized = true;
             }
-            this.lastUniforms = toUniforms(renderParams);
+            toUniforms(renderParams, this.cachedUniforms);
             backend.beginFrame();
-            backend.fillUniforms(this.lastUniforms);
+            backend.fillUniforms(this.cachedUniforms);
             this.frameActive = true;
         }
 
         @Override
         public void runRenderPassCleanup(RenderParams renderParams) {
             if (!frameActive) return;
-            this.lastUniforms = toUniforms(renderParams);
-            backend.endFrame(this.lastUniforms);
+            toUniforms(renderParams, this.cachedUniforms);
+            backend.endFrame(this.cachedUniforms);
             this.frameActive = false;
         }
 
         @Override
         public void applyToMcTexture(RenderParams renderParams) {
             // Called at the end to composite DH's framebuffer onto MC's render target
-            RenderUniforms u = toUniforms(renderParams);
-            backend.deferredComposite(u);
+            toUniforms(renderParams, this.cachedUniforms);
+            backend.deferredComposite(this.cachedUniforms);
         }
 
         @Override
@@ -142,9 +140,7 @@ public class VkRenderApiDefinition extends AbstractDhRenderApiDefinition {
          * Manual trigger for deferred composite, called from shared MixinLevelRenderer.
          */
         void triggerDeferredComposite() {
-            if (lastUniforms != null) {
-                backend.deferredComposite(lastUniforms);
-            }
+            backend.deferredComposite(this.cachedUniforms);
         }
     }
 
@@ -156,6 +152,9 @@ public class VkRenderApiDefinition extends AbstractDhRenderApiDefinition {
      */
     static class VkTerrainRenderer implements IDhTerrainRenderer {
         private final VulkanBackend backend;
+
+        // Cached to avoid per-container allocation in the render loop
+        private final Vec3f reusableModelPos = new Vec3f(0, 0, 0);
 
         // Cached reflection fields — type of vbos differs between DH versions
         // (GLVertexBuffer[] in 2.4 vs IVertexBufferWrapper[] in 3.0)
@@ -204,11 +203,11 @@ public class VkRenderApiDefinition extends AbstractDhRenderApiDefinition {
                 // Compute model offset relative to camera (matches GL reference)
                 com.seibel.distanthorizons.core.util.math.Vec3d camPos = renderEventParam.exactCameraPosition;
                 if (camPos != null) {
-                    Vec3f modelPos = new Vec3f(
+                    this.reusableModelPos.set(
                         (float) (container.minCornerBlockPos.getX() - camPos.x),
                         (float) (container.minCornerBlockPos.getY() - camPos.y),
                         (float) (container.minCornerBlockPos.getZ() - camPos.z));
-                    backend.setModelOffset(modelPos);
+                    backend.setModelOffset(this.reusableModelPos);
                 }
 
                 // Use reflection to access vbos — field type differs between DH versions

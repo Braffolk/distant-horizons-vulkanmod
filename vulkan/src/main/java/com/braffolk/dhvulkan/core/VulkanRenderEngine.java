@@ -52,9 +52,7 @@ public class VulkanRenderEngine implements VulkanBackend {
     private final float[] tempInvProjArray = new float[16];
     private final float[] tempMcProjArray = new float[16];
 
-    // VBO cache pruning: amortized sweep to detect dead VBOs
-    private static final int PRUNE_BATCH_SIZE = 64;
-    private int pruneIteratorIndex = 0;
+
 
     private final VulkanRenderContext renderContext;
     private boolean initialized = false;
@@ -217,9 +215,6 @@ public class VulkanRenderEngine implements VulkanBackend {
         this.drawCount = 0;
         this.frameReady = false;
 
-        // Hot-reload config
-        DhVulkanConfig.reload();
-
         if (this.initFailed)
             return;
 
@@ -284,7 +279,6 @@ public class VulkanRenderEngine implements VulkanBackend {
             this.pendingFreeBatch.add(pf);
         }
 
-        pruneDeadCacheEntries();
 
         // Bind terrain pipeline
         this.renderContext.bindTerrainPipeline();
@@ -292,31 +286,7 @@ public class VulkanRenderEngine implements VulkanBackend {
         this.frameReady = true;
     }
 
-    private void pruneDeadCacheEntries() {
-        if (this.vulkanBufferCache.isEmpty())
-            return;
 
-        Integer[] keys = this.vulkanBufferCache.keySet().toArray(new Integer[0]);
-        int total = keys.length;
-        if (total == 0)
-            return;
-
-        if (this.pruneIteratorIndex >= total) {
-            this.pruneIteratorIndex = 0;
-        }
-
-        int checked = 0;
-        while (checked < PRUNE_BATCH_SIZE && checked < total) {
-            int idx = (this.pruneIteratorIndex + checked) % total;
-            int dataId = keys[idx];
-            CachedBuffer cached = this.vulkanBufferCache.get(dataId);
-            if (cached != null) {
-                // Currently a no-op -- see pruning TODO in VulkanRenderDelegate
-            }
-            checked++;
-        }
-        this.pruneIteratorIndex += checked;
-    }
 
     @Override
     public void fillUniforms(RenderUniforms uniforms) {
@@ -408,7 +378,11 @@ public class VulkanRenderEngine implements VulkanBackend {
                 Object vkBuffer = Compat.createGpuVertexBuffer(dataSize);
                 handle.position(0);
                 Compat.copyBuffer(vkBuffer, handle, dataSize);
-                handle.position(0);
+
+                // Data is now on the GPU — release the CPU copy immediately.
+                // This frees potentially hundreds of MB of native memory that
+                // would otherwise sit idle until the wrapper is closed.
+                data.clearData();
 
                 cached = new CachedBuffer(vkBuffer, handleId);
                 this.vulkanBufferCache.put(dataId, cached);
@@ -620,7 +594,6 @@ public class VulkanRenderEngine implements VulkanBackend {
             cached.free();
         }
         this.vulkanBufferCache.clear();
-        this.pruneIteratorIndex = 0;
 
         if (this.quadIndexBuffer != null) {
             Compat.scheduleFree(this.quadIndexBuffer);

@@ -29,6 +29,13 @@ public class VkVertexData {
      */
     public volatile int handleIdentity;
 
+    /**
+     * Optional cleanup callback invoked when clearData() is called.
+     * Used by VkVertexBufferWrapper to free its native ownedBuffer
+     * immediately after GPU upload, rather than holding it until close().
+     */
+    private volatile Runnable onClear;
+
     public VkVertexData(int id) {
         this.id = id;
     }
@@ -39,9 +46,17 @@ public class VkVertexData {
         this.handleIdentity = handleIdentity;
     }
 
+    public void setOnClear(Runnable onClear) {
+        this.onClear = onClear;
+    }
+
     public void clearData() {
         this.vertexBuffer = null;
         this.byteSize = 0;
         this.handleIdentity = 0;
+        Runnable cb = this.onClear;
+        if (cb != null) {
+            cb.run();
+        }
     }
 }

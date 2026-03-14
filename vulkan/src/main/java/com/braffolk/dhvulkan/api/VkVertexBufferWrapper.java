@@ -3,6 +3,7 @@ package com.braffolk.dhvulkan.api;
 import com.braffolk.dhvulkan.core.VulkanBackend;
 import com.braffolk.dhvulkan.core.data.VkVertexData;
 import com.seibel.distanthorizons.core.wrapperInterfaces.render.objects.IVertexBufferWrapper;
+import org.lwjgl.system.MemoryUtil;
 
 import java.nio.ByteBuffer;
 
@@ -20,6 +21,9 @@ public class VkVertexBufferWrapper implements IVertexBufferWrapper {
     private static int nextId = 0;
     private final int id;
 
+    /** Our owned copy of the vertex buffer — allocated via MemoryUtil, must be explicitly freed */
+    private ByteBuffer ownedBuffer;
+
     public VkVertexBufferWrapper(VulkanBackend backend) {
         this.backend = backend;
         this.id = nextId++;
@@ -30,18 +34,33 @@ public class VkVertexBufferWrapper implements IVertexBufferWrapper {
         if (this.vertexData == null) {
             this.vertexData = new VkVertexData(id);
         }
-        // DH 3.0 frees the source ByteBuffer immediately after upload() returns
-        // (via MemoryUtil.memFree in LodBufferContainer's finally block).
-        // We MUST copy the data here — storing a reference would be a use-after-free.
-        int size = buffer.remaining();
-        ByteBuffer copy = ByteBuffer.allocateDirect(size);
-        copy.order(buffer.order());
-        int oldPos = buffer.position();
-        copy.put(buffer);
-        buffer.position(oldPos);
-        copy.flip();
 
-        this.vertexData.setData(copy, System.identityHashCode(copy));
+        // Free any previously owned buffer before allocating a new one
+        if (this.ownedBuffer != null) {
+            MemoryUtil.memFree(this.ownedBuffer);
+            this.ownedBuffer = null;
+        }
+
+        // DH 3.0 frees the source ByteBuffer immediately after upload() returns.
+        // Copy data using LWJGL's MemoryUtil (raw malloc — much faster than ByteBuffer.allocateDirect
+        // which involves JVM cleaner registration, synchronization, and slow GC finalization).
+        int size = buffer.remaining();
+        this.ownedBuffer = MemoryUtil.memAlloc(size);
+        int oldPos = buffer.position();
+        this.ownedBuffer.put(buffer);
+        buffer.position(oldPos);
+        this.ownedBuffer.flip();
+
+        this.vertexData.setData(this.ownedBuffer, System.identityHashCode(this.ownedBuffer));
+
+        // Register cleanup: when drawVertexData() uploads to GPU and calls clearData(),
+        // free our native buffer immediately instead of waiting for close()
+        this.vertexData.setOnClear(() -> {
+            if (this.ownedBuffer != null) {
+                MemoryUtil.memFree(this.ownedBuffer);
+                this.ownedBuffer = null;
+            }
+        });
 
         // DH 3.0 has BYTES_PER_VERTEX = 14 but actual vertex layout is 16 bytes
         // (the putVertex writes short padding at the end which isn't counted).
@@ -55,6 +74,10 @@ public class VkVertexBufferWrapper implements IVertexBufferWrapper {
         if (this.vertexData != null) {
             backend.queueDataFree(this.vertexData);
             this.vertexData = null;
+        }
+        if (this.ownedBuffer != null) {
+            MemoryUtil.memFree(this.ownedBuffer);
+            this.ownedBuffer = null;
         }
     }
 

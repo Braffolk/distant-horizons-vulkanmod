@@ -189,36 +189,73 @@ public final class DhConfigHelper {
      * Apply velocity-based reduction to the overdraw ratio.
      * At high speeds (elytra, spectator), the overdraw pulls closer to the camera
      * so MC terrain doesn't outrun DH terrain, preventing gaps.
-     * Uses reflection since these fields may not exist in all compiled DH jars.
+     * Uses reflection (cached) since these fields may not exist in all compiled DH jars.
      */
-    public static float applyVelocityReduction(float overdraw) {
+    // Cached reflection handles for velocity reduction — resolved once, reused every frame
+    private static boolean velocityReflectionResolved = false;
+    private static boolean velocityReflectionAvailable = false;
+    private static java.lang.reflect.Field reduceConfigField;
+    private static java.lang.reflect.Method reduceConfigGetMethod;
+    private static java.lang.reflect.Field clientApiInstanceField;
+    private static java.lang.reflect.Field cameraSpeedField;
+    private static java.lang.reflect.Method getAverageMethod;
+
+    private static void resolveVelocityReflection() {
+        if (velocityReflectionResolved) return;
+        velocityReflectionResolved = true;
         try {
-            // Check reduceOverdrawWithFastMovement config via reflection
             Class<?> culling = Class.forName("com.seibel.distanthorizons.core.config.Config$Client$Advanced$Graphics$Culling");
-            java.lang.reflect.Field reduceField = culling.getDeclaredField("reduceOverdrawWithFastMovement");
-            Object configEntry = reduceField.get(null);
-            java.lang.reflect.Method getMethod = configEntry.getClass().getMethod("get");
-            Boolean reduceEnabled = (Boolean) getMethod.invoke(configEntry);
-            if (!reduceEnabled) {
-                return overdraw;
+            reduceConfigField = culling.getDeclaredField("reduceOverdrawWithFastMovement");
+
+            Class<?> clientApiClass = Class.forName("com.seibel.distanthorizons.core.api.internal.ClientApi");
+            clientApiInstanceField = clientApiClass.getDeclaredField("INSTANCE");
+            cameraSpeedField = clientApiClass.getDeclaredField("cameraSpeedRollingAverage");
+
+            // Pre-resolve method handles
+            Object configEntry = reduceConfigField.get(null);
+            reduceConfigGetMethod = configEntry.getClass().getMethod("get");
+
+            Object clientApi = clientApiInstanceField.get(null);
+            if (clientApi != null) {
+                Object rollingAvg = cameraSpeedField.get(clientApi);
+                if (rollingAvg != null) {
+                    getAverageMethod = rollingAvg.getClass().getMethod("getAverage");
+                }
+            }
+            velocityReflectionAvailable = (reduceConfigGetMethod != null);
+        } catch (Exception e) {
+            velocityReflectionAvailable = false;
+        }
+    }
+
+    public static float applyVelocityReduction(float overdraw) {
+        resolveVelocityReflection();
+        if (!velocityReflectionAvailable) return overdraw;
+
+        try {
+            Object configEntry = reduceConfigField.get(null);
+            Boolean reduceEnabled = (Boolean) reduceConfigGetMethod.invoke(configEntry);
+            if (!reduceEnabled) return overdraw;
+
+            Object clientApi = clientApiInstanceField.get(null);
+            if (clientApi == null) return overdraw;
+
+            Object rollingAvg = cameraSpeedField.get(clientApi);
+            if (rollingAvg == null) return overdraw;
+
+            // Lazily resolve getAverage if it wasn't available during init
+            if (getAverageMethod == null) {
+                getAverageMethod = rollingAvg.getClass().getMethod("getAverage");
             }
 
-            // Read cameraSpeedRollingAverage via reflection
-            Class<?> clientApiClass = Class.forName("com.seibel.distanthorizons.core.api.internal.ClientApi");
-            java.lang.reflect.Field instanceField = clientApiClass.getDeclaredField("INSTANCE");
-            Object clientApi = instanceField.get(null);
-            java.lang.reflect.Field avgField = clientApiClass.getDeclaredField("cameraSpeedRollingAverage");
-            Object rollingAvg = avgField.get(clientApi);
-            java.lang.reflect.Method getAvgMethod = rollingAvg.getClass().getMethod("getAverage");
-            double avgSpeed = (Double) getAvgMethod.invoke(rollingAvg);
-
+            double avgSpeed = (Double) getAverageMethod.invoke(rollingAvg);
             if (avgSpeed >= DYNAMIC_MIN_SPEED) {
                 float speedRange = (float) ((DYNAMIC_MAX_SPEED - avgSpeed) / DYNAMIC_MAX_SPEED);
                 speedRange = Math.max(speedRange, DYNAMIC_MIN_OVERDRAW_RATIO);
                 overdraw *= speedRange;
             }
         } catch (Exception e) {
-            // Silently ignore — field may not exist in this DH version or not initialized yet
+            // Silently ignore
         }
         return overdraw;
     }
@@ -257,12 +294,11 @@ public final class DhConfigHelper {
      * @param viewportWidth    framebuffer viewport width in pixels
      * @param viewportHeight   framebuffer viewport height in pixels
      */
-    public static float getNearClipPlaneInBlocks(int renderDistChunks, int viewportWidth, int viewportHeight) {
+    public static float getNearClipPlaneInBlocks(int renderDistChunks, int viewportWidth, int viewportHeight, boolean lodOnly) {
         float overdraw = getBaseOverdrawRatio(renderDistChunks);
         overdraw = applyVelocityReduction(overdraw);
 
         float nearClipPlane;
-        boolean lodOnly = Config.Client.Advanced.Debugging.lodOnlyMode.get();
         if (lodOnly) {
             nearClipPlane = 0.1f;
         } else {
@@ -301,11 +337,13 @@ public final class DhConfigHelper {
      * @param viewportHeight   framebuffer viewport height in pixels
      */
     public static float getShaderClipDistance(int renderDistChunks, int viewportWidth, int viewportHeight) {
-        float clipDist = getNearClipPlaneInBlocks(renderDistChunks, viewportWidth, viewportHeight);
-        if (!Config.Client.Advanced.Debugging.lodOnlyMode.get()) {
+        boolean lodOnly = Config.Client.Advanced.Debugging.lodOnlyMode.get();
+        float clipDist = getNearClipPlaneInBlocks(renderDistChunks, viewportWidth, viewportHeight, lodOnly);
+        if (!lodOnly) {
             // +16 block buffer prevents the near clip and fragment discard circle from touching
             clipDist += 16.0f;
         }
         return clipDist;
     }
 }
+
