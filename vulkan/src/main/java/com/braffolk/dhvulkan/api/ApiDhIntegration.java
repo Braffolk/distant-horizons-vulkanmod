@@ -39,15 +39,6 @@ public class ApiDhIntegration implements DhIntegration {
         }
     }
 
-    /**
-     * Called from shared MixinLevelRenderer after MC terrain renders.
-     */
-    public void deferredComposite() {
-        if (renderApi != null) {
-            renderApi.getVkMetaRenderer().triggerDeferredComposite();
-        }
-    }
-
     public static ApiDhIntegration getInstance() {
         return instance;
     }

@@ -47,14 +47,19 @@ public interface VulkanBackend {
 
     /**
      * End the current frame's rendering.
-     * Runs SSAO + fog post-process, composites (if fade=NONE), restores MC state.
+     * Restores MC render state. Post-processing and compositing are now
+     * handled by {@link #deferredComposite} which is called from
+     * applyToMcTexture() — ensuring the composite happens before weather.
      */
     void endFrame(RenderUniforms uniforms);
 
     /**
-     * Composite DH's framebuffer onto MC's render target with MC depth comparison.
-     * Called AFTER MC finishes all terrain rendering (opaque + translucent).
-     * Only runs when fade mode is SINGLE_PASS or DOUBLE_PASS.
+     * Run post-processing (SSAO, fog) and composite DH's framebuffer onto
+     * MC's render target. Must be called while MC's render pass is active
+     * and BEFORE weather / translucent particles render.
+     *
+     * Called from applyToMcTexture() on DH 3.0, or from the equivalent
+     * delegate method on DH 2.4.
      */
     void deferredComposite(RenderUniforms uniforms);
 

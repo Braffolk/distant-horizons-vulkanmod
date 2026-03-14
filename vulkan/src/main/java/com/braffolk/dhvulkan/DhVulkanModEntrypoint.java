@@ -99,18 +99,6 @@ public class DhVulkanModEntrypoint implements ClientModInitializer {
         }
     }
 
-    /**
-     * Called from shared MixinLevelRenderer after MC terrain finishes rendering.
-     * Dispatches deferredComposite to the active integration path.
-     */
-    public static void deferredComposite() {
-        if (activeIntegration instanceof Dh24Integration) {
-            ((Dh24Integration) activeIntegration).deferredComposite();
-        } else if (activeIntegration instanceof com.braffolk.dhvulkan.api.ApiDhIntegration) {
-            ((com.braffolk.dhvulkan.api.ApiDhIntegration) activeIntegration).deferredComposite();
-        }
-    }
-
     /** Get the active integration (for mixins that need it) */
     public static DhIntegration getActiveIntegration() {
         return activeIntegration;

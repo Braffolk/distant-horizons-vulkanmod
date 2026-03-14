@@ -142,10 +142,15 @@ public class MixinLodRenderer implements IVulkanLodRenderer {
             }
         }
 
-        // End frame — delegate handles SSAO, fog, depth compositing
+        // Composite DH onto MC — must happen BEFORE endFrame restores state
+        // and BEFORE MC renders weather/particles. This matches DH core's
+        // applyToMcTexture() → runRenderPassCleanup() order.
+        profiler.popPush("LOD Vulkan composite");
+        this.dhvulkan$vulkanDelegate.deferredComposite(renderParams);
+
+        // End frame — restores MC render state
         profiler.popPush("LOD Vulkan cleanup");
         this.dhvulkan$vulkanDelegate.endFrame(renderParams);
-        this.dhvulkan$lastVulkanRenderParams = renderParams;
 
         profiler.pop();
         ci.cancel();

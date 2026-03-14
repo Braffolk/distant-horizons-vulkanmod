@@ -433,6 +433,33 @@ public class VulkanRenderEngine implements VulkanBackend {
             return;
 
         try {
+            // End DH's render pass if still active (may have been ended by deferredComposite)
+            Renderer.getInstance().endRenderPass();
+            Compat.rebindMainTarget();
+
+            // Restore MC render state
+            VRenderSystem.cull = this.savedCullState;
+            VRenderSystem.depthMask = this.savedDepthMask;
+            VRenderSystem.depthFun = this.savedDepthFun;
+            VRenderSystem.topology = this.savedTopology;
+            VRenderSystem.polygonMode = this.savedPolygonMode;
+            PipelineState.blendInfo.enabled = this.savedBlendEnabled;
+            PipelineState.blendInfo.srcRgbFactor = this.savedBlendSrcRgb;
+            PipelineState.blendInfo.dstRgbFactor = this.savedBlendDstRgb;
+            PipelineState.blendInfo.srcAlphaFactor = this.savedBlendSrcAlpha;
+            PipelineState.blendInfo.dstAlphaFactor = this.savedBlendDstAlpha;
+            PipelineState.blendInfo.blendOp = this.savedBlendOp;
+        } catch (Exception e) {
+            LOGGER.error("[DH-Vulkan] endFrame error", e);
+        }
+    }
+
+    @Override
+    public void deferredComposite(RenderUniforms uniforms) {
+        if (!this.frameReady)
+            return;
+
+        try {
             // End DH's render pass
             Renderer.getInstance().endRenderPass();
 
@@ -462,55 +489,24 @@ public class VulkanRenderEngine implements VulkanBackend {
 
             // End any render pass left by SSAO/Fog, then rebind MC
             Renderer.getInstance().endRenderPass();
-            Compat.rebindMainTarget();
 
-            // Check fade mode
+            // Read MC depth for depth-compared composite (fade mode support)
             com.seibel.distanthorizons.api.enums.config.EDhApiMcRenderingFadeMode fadeMode = DhConfigHelper.vanillaFadeMode();
-            if (fadeMode == com.seibel.distanthorizons.api.enums.config.EDhApiMcRenderingFadeMode.NONE) {
-                VulkanImage debugMcDepth = DhVulkanConfig.get().vulkanRenderMode == 6
-                        ? Compat.getSwapChainDepthAttachment()
-                        : null;
-                this.runComposite(uniforms, debugMcDepth);
-            } else if (DhVulkanConfig.get().vulkanRenderMode != 6) {
-                this.runComposite(uniforms, null);
-            }
-
-            // Restore MC render state
-            VRenderSystem.cull = this.savedCullState;
-            VRenderSystem.depthMask = this.savedDepthMask;
-            VRenderSystem.depthFun = this.savedDepthFun;
-            VRenderSystem.topology = this.savedTopology;
-            VRenderSystem.polygonMode = this.savedPolygonMode;
-            PipelineState.blendInfo.enabled = this.savedBlendEnabled;
-            PipelineState.blendInfo.srcRgbFactor = this.savedBlendSrcRgb;
-            PipelineState.blendInfo.dstRgbFactor = this.savedBlendDstRgb;
-            PipelineState.blendInfo.srcAlphaFactor = this.savedBlendSrcAlpha;
-            PipelineState.blendInfo.dstAlphaFactor = this.savedBlendDstAlpha;
-            PipelineState.blendInfo.blendOp = this.savedBlendOp;
-        } catch (Exception e) {
-            LOGGER.error("[DH-Vulkan] endFrame error", e);
-        }
-    }
-
-    @Override
-    public void deferredComposite(RenderUniforms uniforms) {
-        com.seibel.distanthorizons.api.enums.config.EDhApiMcRenderingFadeMode fadeMode = DhConfigHelper.vanillaFadeMode();
-
-        if (fadeMode == com.seibel.distanthorizons.api.enums.config.EDhApiMcRenderingFadeMode.NONE) {
-            return;
-        }
-
-        try {
-            VulkanImage mcDepth = Compat.getSwapChainDepthAttachment();
-            Renderer.getInstance().endRenderPass();
-
-            VulkanImage mcDepthR32F = null;
-            if (this.depthReaderPipeline != null) {
-                mcDepthR32F = this.depthReaderPipeline.readDepth(mcDepth);
+            VulkanImage mcDepthTexture = null;
+            if (fadeMode != com.seibel.distanthorizons.api.enums.config.EDhApiMcRenderingFadeMode.NONE
+                    || DhVulkanConfig.get().vulkanRenderMode == 6) {
+                try {
+                    VulkanImage mcDepth = Compat.getSwapChainDepthAttachment();
+                    if (this.depthReaderPipeline != null) {
+                        mcDepthTexture = this.depthReaderPipeline.readDepth(mcDepth);
+                    }
+                } catch (Exception e) {
+                    LOGGER.error("[DH-Vulkan] MC depth read failed, compositing without depth", e);
+                }
             }
 
             Compat.rebindMainTarget();
-            this.runComposite(uniforms, mcDepthR32F);
+            this.runComposite(uniforms, mcDepthTexture);
         } catch (Exception e) {
             LOGGER.error("[DH-Vulkan] deferredComposite error, falling back to no-depth", e);
             try {

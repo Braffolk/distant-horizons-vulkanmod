@@ -9,22 +9,21 @@ import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 
 /**
- * Mixin into Minecraft's {@link LevelRenderer} to composite the Vulkan frame
- * after MC finishes rendering all terrain layers.
+ * Mixin into Minecraft's {@link LevelRenderer}.
  *
- * This hook fires at the end of {@code renderLevel()} so that LODs are
- * composited onto MC's render target with correct depth testing.
+ * Previously used to composite DH at renderLevel() RETURN, but that caused
+ * DH LODs to appear on top of weather (rain/snow) because the composite
+ * happened after MC finished rendering everything including weather.
  *
- * Shared between DH 2.4 and DH 3.0 paths.
+ * The composite now happens inside DH's own render lifecycle
+ * (applyToMcTexture on DH 3.0, delegate endFrame on DH 2.4) which fires
+ * before weather renders — matching how DH core handles this in OpenGL.
+ *
+ * This mixin is kept as a placeholder for future render hooks but currently
+ * has no active injections.
  */
 @Mixin(LevelRenderer.class)
 public class MixinLevelRenderer {
-
-    @Inject(method = "renderLevel", at = @At("RETURN"))
-    private void dhvulkan$compositeAfterMcRender(CallbackInfo ci) {
-        if (!Compat.isVulkanModActive())
-            return;
-
-        DhVulkanModEntrypoint.deferredComposite();
-    }
+    // Composite is now triggered by DH core's applyToMcTexture() callback
+    // at the correct pipeline stage (after solid terrain, before weather).
 }

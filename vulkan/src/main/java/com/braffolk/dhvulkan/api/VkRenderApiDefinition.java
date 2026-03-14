@@ -136,12 +136,6 @@ public class VkRenderApiDefinition extends AbstractDhRenderApiDefinition {
             // This is a no-op here since VulkanBackend handles it internally.
         }
 
-        /**
-         * Manual trigger for deferred composite, called from shared MixinLevelRenderer.
-         */
-        void triggerDeferredComposite() {
-            backend.deferredComposite(this.cachedUniforms);
-        }
     }
 
     /**
