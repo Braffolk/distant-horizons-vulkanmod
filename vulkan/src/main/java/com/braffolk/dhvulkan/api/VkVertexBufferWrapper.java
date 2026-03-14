@@ -42,7 +42,12 @@ public class VkVertexBufferWrapper implements IVertexBufferWrapper {
         copy.flip();
 
         this.vertexData.setData(copy, System.identityHashCode(copy));
-        this.indexCount = vertexCount;
+
+        // DH 3.0 has BYTES_PER_VERTEX = 14 but actual vertex layout is 16 bytes
+        // (the putVertex writes short padding at the end which isn't counted).
+        // Don't trust DH's vertexCount — compute from actual data size / stride.
+        int actualStride = 16; // 3×short + 1×short + 4×ubyte + 2×ubyte + 1×short(pad) = 16
+        this.indexCount = size / actualStride;
     }
 
     @Override
