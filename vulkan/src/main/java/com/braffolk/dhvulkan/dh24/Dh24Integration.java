@@ -15,6 +15,7 @@ public class Dh24Integration implements DhIntegration {
 
     private static final Logger LOGGER = LogManager.getLogger("DH-VulkanMod");
     private Dh24RenderDelegate delegate;
+    private boolean wired = false;
 
     @Override
     public void initialize(VulkanBackend backend) {
@@ -24,31 +25,19 @@ public class Dh24Integration implements DhIntegration {
 
     /**
      * Called from MixinLodRenderer on the first render frame to wire
-     * the delegate into LodRenderer.
+     * the delegate into LodRenderer. Only runs once.
      */
     public void wireIfNeeded() {
-        if (this.delegate == null)
+        if (this.delegate == null || this.wired)
             return;
 
         try {
             IVulkanLodRenderer lodRenderer = (IVulkanLodRenderer) LodRenderer.INSTANCE;
             lodRenderer.dhvulkan$setVulkanDelegate(this.delegate);
-            LOGGER.info("[DH-VulkanMod] Dh24RenderDelegate wired into LodRenderer. Ready.");
+            this.wired = true;
+            LOGGER.info("[DH-VulkanMod] Dh24RenderDelegate wired into LodRenderer.");
         } catch (Exception e) {
             LOGGER.error("[DH-VulkanMod] Failed to wire delegate", e);
-        }
-    }
-
-    /**
-     * Called from shared MixinLevelRenderer after MC terrain renders.
-     * Delegates to the deferredComposite method on the duck-interfaced LodRenderer.
-     */
-    public void deferredComposite() {
-        try {
-            IVulkanLodRenderer lodRenderer = (IVulkanLodRenderer) LodRenderer.INSTANCE;
-            lodRenderer.dhvulkan$compositeVulkanFrame();
-        } catch (Exception e) {
-            LOGGER.error("[DH-VulkanMod] deferredComposite failed", e);
         }
     }
 
