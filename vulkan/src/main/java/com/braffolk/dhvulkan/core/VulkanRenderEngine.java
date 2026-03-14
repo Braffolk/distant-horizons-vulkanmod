@@ -335,23 +335,10 @@ public class VulkanRenderEngine implements VulkanBackend {
                 (curveRatio < -1.0f || curveRatio > 1.0f) ? 6371000.0f / curveRatio : 0.0f);
 
         int renderDistChunks = Minecraft.getInstance().options.getEffectiveRenderDistance();
-        float overdrawConfig = DhConfigHelper.overdrawPrevention();
-        float overdraw;
-        if (overdrawConfig <= 0) {
-            if (renderDistChunks <= 2)
-                overdraw = 0.2f;
-            else if (renderDistChunks <= 4)
-                overdraw = 0.3f;
-            else if (renderDistChunks <= 6)
-                overdraw = 0.6f;
-            else if (renderDistChunks <= 10)
-                overdraw = 0.8f;
-            else
-                overdraw = 0.9f;
-        } else {
-            overdraw = Math.max(0.05f, Math.min(overdrawConfig, 1.0f));
-        }
-        this.renderContext.setUniformFloat("uClipDistance", renderDistChunks * 16.0f * overdraw);
+        int vpWidth = Minecraft.getInstance().getWindow().getWidth();
+        int vpHeight = Minecraft.getInstance().getWindow().getHeight();
+        this.renderContext.setUniformFloat("uClipDistance",
+                DhConfigHelper.getShaderClipDistance(renderDistChunks, vpWidth, vpHeight));
         this.renderContext.setUniformBool("uDitherDhRendering", DhConfigHelper.ditherDhFade());
 
         boolean noiseEnabled = DhConfigHelper.noiseEnabled();

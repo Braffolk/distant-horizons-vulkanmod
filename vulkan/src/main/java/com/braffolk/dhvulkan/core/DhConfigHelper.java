@@ -154,4 +154,158 @@ public final class DhConfigHelper {
     public static com.seibel.distanthorizons.api.enums.config.EDhApiMcRenderingFadeMode vanillaFadeMode() {
         return Config.Client.Advanced.Graphics.Quality.vanillaFadeMode.get();
     }
+
+    // ======================================= //
+    // Overdraw / clip distance (full pipeline) //
+    // ======================================= //
+
+    // Speed thresholds for dynamic overdraw (blocks/sec)
+    private static final float DYNAMIC_MIN_SPEED = 10.0f;  // slightly above sprinting (~7)
+    private static final float DYNAMIC_MAX_SPEED = 100.0f;  // max spectator speed
+    private static final float DYNAMIC_MIN_OVERDRAW_RATIO = 0.2f;
+
+    /**
+     * Returns the base overdraw ratio from config, applying auto-mode
+     * distance-based selection if config is negative (auto).
+     *
+     * @param renderDistChunks the vanilla render distance in chunks
+     */
+    public static float getBaseOverdrawRatio(int renderDistChunks) {
+        float overdraw = overdrawPrevention();
+        if (overdraw < 0) {
+            // Auto mode: pick ratio based on vanilla render distance
+            if (renderDistChunks <= 2) overdraw = 0.2f;
+            else if (renderDistChunks <= 4) overdraw = 0.3f;
+            else if (renderDistChunks <= 6) overdraw = 0.6f;
+            else if (renderDistChunks <= 10) overdraw = 0.8f;
+            else overdraw = 0.9f;
+        } else {
+            overdraw = Math.max(0.05f, Math.min(overdraw, 1.0f));
+        }
+        return overdraw;
+    }
+
+    /**
+     * Apply velocity-based reduction to the overdraw ratio.
+     * At high speeds (elytra, spectator), the overdraw pulls closer to the camera
+     * so MC terrain doesn't outrun DH terrain, preventing gaps.
+     * Uses reflection since these fields may not exist in all compiled DH jars.
+     */
+    public static float applyVelocityReduction(float overdraw) {
+        try {
+            // Check reduceOverdrawWithFastMovement config via reflection
+            Class<?> culling = Class.forName("com.seibel.distanthorizons.core.config.Config$Client$Advanced$Graphics$Culling");
+            java.lang.reflect.Field reduceField = culling.getDeclaredField("reduceOverdrawWithFastMovement");
+            Object configEntry = reduceField.get(null);
+            java.lang.reflect.Method getMethod = configEntry.getClass().getMethod("get");
+            Boolean reduceEnabled = (Boolean) getMethod.invoke(configEntry);
+            if (!reduceEnabled) {
+                return overdraw;
+            }
+
+            // Read cameraSpeedRollingAverage via reflection
+            Class<?> clientApiClass = Class.forName("com.seibel.distanthorizons.core.api.internal.ClientApi");
+            java.lang.reflect.Field instanceField = clientApiClass.getDeclaredField("INSTANCE");
+            Object clientApi = instanceField.get(null);
+            java.lang.reflect.Field avgField = clientApiClass.getDeclaredField("cameraSpeedRollingAverage");
+            Object rollingAvg = avgField.get(clientApi);
+            java.lang.reflect.Method getAvgMethod = rollingAvg.getClass().getMethod("getAverage");
+            double avgSpeed = (Double) getAvgMethod.invoke(rollingAvg);
+
+            if (avgSpeed >= DYNAMIC_MIN_SPEED) {
+                float speedRange = (float) ((DYNAMIC_MAX_SPEED - avgSpeed) / DYNAMIC_MAX_SPEED);
+                speedRange = Math.max(speedRange, DYNAMIC_MIN_OVERDRAW_RATIO);
+                overdraw *= speedRange;
+            }
+        } catch (Exception e) {
+            // Silently ignore — field may not exist in this DH version or not initialized yet
+        }
+        return overdraw;
+    }
+
+    /**
+     * Height-based near clip override.
+     * When the player is 1000+ blocks above the world max height,
+     * use a larger near clip to prevent Z-precision issues.
+     *
+     * @return override distance in blocks, or -1 if no override needed
+     */
+    public static float getHeightBasedNearClipOverride() {
+        try {
+            var mc = com.seibel.distanthorizons.core.dependencyInjection.SingletonInjector.INSTANCE
+                    .get(com.seibel.distanthorizons.core.wrapperInterfaces.minecraft.IMinecraftClientWrapper.class);
+            var level = mc.getWrappedClientLevel();
+            if (level != null) {
+                int playerHeight = mc.getPlayerBlockPos().getY();
+                int levelMaxHeight = level.getMaxHeight();
+                if (playerHeight > levelMaxHeight + 1_000) {
+                    return playerHeight - (levelMaxHeight + 1000);
+                }
+            }
+        } catch (Exception e) {
+            // Safely ignore
+        }
+        return -1.0f;
+    }
+
+    /**
+     * Compute the near clip plane distance in blocks, matching DH's
+     * {@code RenderUtil.getNearClipPlaneInBlocks()} exactly.
+     * Includes: auto-mode, velocity reduction, height override, and FOV/aspect normalization.
+     *
+     * @param renderDistChunks the vanilla render distance in chunks
+     * @param viewportWidth    framebuffer viewport width in pixels
+     * @param viewportHeight   framebuffer viewport height in pixels
+     */
+    public static float getNearClipPlaneInBlocks(int renderDistChunks, int viewportWidth, int viewportHeight) {
+        float overdraw = getBaseOverdrawRatio(renderDistChunks);
+        overdraw = applyVelocityReduction(overdraw);
+
+        float nearClipPlane;
+        boolean lodOnly = Config.Client.Advanced.Debugging.lodOnlyMode.get();
+        if (lodOnly) {
+            nearClipPlane = 0.1f;
+        } else {
+            nearClipPlane = renderDistChunks * 16.0f * overdraw;
+            if (nearClipPlane < 0.1f) {
+                nearClipPlane = 0.1f;
+            }
+        }
+
+        // Height-based override for Z-precision at extreme altitudes
+        float heightOverride = getHeightBasedNearClipOverride();
+        if (heightOverride != -1.0f) {
+            nearClipPlane = heightOverride;
+        }
+
+        // FOV/aspect-ratio normalization (fixed 70° to match DH's behavior)
+        double fov = 70.0;
+        double aspectRatio = (double) viewportWidth / viewportHeight;
+        double tanHalfFov = Math.tan(fov / 180.0 * Math.PI / 2.0);
+        nearClipPlane = (float) (nearClipPlane / Math.sqrt(1.0 + tanHalfFov * tanHalfFov * (aspectRatio * aspectRatio + 1.0)));
+
+        // When close to ground (no height override), cap to prevent near clip becoming visible
+        if (heightOverride == -1.0f) {
+            nearClipPlane = Math.min(nearClipPlane, 7.5f);
+        }
+
+        return nearClipPlane;
+    }
+
+    /**
+     * Compute the final uClipDistance uniform value for the terrain shader.
+     * This is the near clip plane + 16 block buffer (unless in lodOnly mode).
+     *
+     * @param renderDistChunks the vanilla render distance in chunks
+     * @param viewportWidth    framebuffer viewport width in pixels
+     * @param viewportHeight   framebuffer viewport height in pixels
+     */
+    public static float getShaderClipDistance(int renderDistChunks, int viewportWidth, int viewportHeight) {
+        float clipDist = getNearClipPlaneInBlocks(renderDistChunks, viewportWidth, viewportHeight);
+        if (!Config.Client.Advanced.Debugging.lodOnlyMode.get()) {
+            // +16 block buffer prevents the near clip and fragment discard circle from touching
+            clipDist += 16.0f;
+        }
+        return clipDist;
+    }
 }
