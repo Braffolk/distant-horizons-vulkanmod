@@ -25,6 +25,34 @@ import java.nio.ByteBuffer;
 public final class Compat {
 
     // ========================= //
+    // Cached reflection fields  //
+    // ========================= //
+
+    private static java.lang.reflect.Field vulkanImageIdField;
+    private static java.lang.reflect.Field vulkanImageViewField;
+    private static java.lang.reflect.Field rendererCmdBufferField;
+    private static java.lang.reflect.Field defaultMainPassAuxField;
+
+    static {
+        try {
+            vulkanImageIdField = VulkanImage.class.getDeclaredField("id");
+            vulkanImageIdField.setAccessible(true);
+        } catch (Exception ignored) {}
+        try {
+            vulkanImageViewField = VulkanImage.class.getDeclaredField("mainImageView");
+            vulkanImageViewField.setAccessible(true);
+        } catch (Exception ignored) {}
+        try {
+            rendererCmdBufferField = Renderer.class.getDeclaredField("currentCmdBuffer");
+            rendererCmdBufferField.setAccessible(true);
+        } catch (Exception ignored) {}
+        try {
+            defaultMainPassAuxField = net.vulkanmod.vulkan.pass.DefaultMainPass.class.getDeclaredField("auxRenderPass");
+            defaultMainPassAuxField.setAccessible(true);
+        } catch (Exception ignored) {}
+    }
+
+    // ========================= //
     // VulkanMod detection       //
     // ========================= //
 
@@ -212,10 +240,8 @@ public final class Compat {
             // End any currently active render pass first
             Renderer.getInstance().endRenderPass();
 
-            java.lang.reflect.Field cmdField = Renderer.class.getDeclaredField("currentCmdBuffer");
-            cmdField.setAccessible(true);
             org.lwjgl.vulkan.VkCommandBuffer cmdBuffer =
-                    (org.lwjgl.vulkan.VkCommandBuffer) cmdField.get(Renderer.getInstance());
+                    (org.lwjgl.vulkan.VkCommandBuffer) rendererCmdBufferField.get(Renderer.getInstance());
             org.lwjgl.system.MemoryStack stack = org.lwjgl.system.MemoryStack.stackPush();
             framebuffer.beginRenderPass(cmdBuffer, renderPass, stack);
             stack.close();
@@ -246,11 +272,8 @@ public final class Compat {
         // VM 0.4.2: rebindMainTarget starts auxRenderPass on swapChain but doesn't
         // update Renderer state. Fix up so bindGraphicsPipeline/endRenderPass work.
         try {
-            java.lang.reflect.Field auxField =
-                    net.vulkanmod.vulkan.pass.DefaultMainPass.class.getDeclaredField("auxRenderPass");
-            auxField.setAccessible(true);
             net.vulkanmod.vulkan.framebuffer.RenderPass auxPass =
-                    (net.vulkanmod.vulkan.framebuffer.RenderPass) auxField.get(mainPass);
+                    (net.vulkanmod.vulkan.framebuffer.RenderPass) defaultMainPassAuxField.get(mainPass);
             Renderer.getInstance().setBoundFramebuffer(net.vulkanmod.vulkan.Vulkan.getSwapChain());
             Renderer.getInstance().setBoundRenderPass(auxPass);
         } catch (Exception e) {
@@ -380,9 +403,7 @@ public final class Compat {
 
         if ((depthImage.aspect & VK_IMAGE_ASPECT_STENCIL_BIT) != 0) {
             try {
-                java.lang.reflect.Field idField = VulkanImage.class.getDeclaredField("id");
-                idField.setAccessible(true);
-                long imageId = (long) idField.get(depthImage);
+                long imageId = (long) vulkanImageIdField.get(depthImage);
 
                 if (imageId != lastDepthImageId || depthOnlyView == 0) {
                     if (depthOnlyView != 0) {
@@ -398,11 +419,9 @@ public final class Compat {
                             depthImage.format, depthOnlyView);
                 }
 
-                java.lang.reflect.Field viewField = VulkanImage.class.getDeclaredField("mainImageView");
-                viewField.setAccessible(true);
-                savedOriginalView = (long) viewField.get(depthImage);
+                savedOriginalView = (long) vulkanImageViewField.get(depthImage);
                 savedDepthImage = depthImage;
-                viewField.setLong(depthImage, depthOnlyView);
+                vulkanImageViewField.setLong(depthImage, depthOnlyView);
 
                 VTextureSelector.bindTexture(slot, depthImage);
                 // DO NOT restore here — descriptor set write happens later
@@ -424,9 +443,7 @@ public final class Compat {
     public static void restoreMcDepthView() {
         if (savedDepthImage != null && savedOriginalView != 0) {
             try {
-                java.lang.reflect.Field viewField = VulkanImage.class.getDeclaredField("mainImageView");
-                viewField.setAccessible(true);
-                viewField.setLong(savedDepthImage, savedOriginalView);
+                vulkanImageViewField.setLong(savedDepthImage, savedOriginalView);
             } catch (Exception e) {
                 LOGGER.error("[DH-Vulkan] Failed to restore MC depth view", e);
             }
@@ -488,9 +505,7 @@ public final class Compat {
             }
 
             // Get the current command buffer from Renderer
-            java.lang.reflect.Field cmdField = Renderer.class.getDeclaredField("currentCmdBuffer");
-            cmdField.setAccessible(true);
-            org.lwjgl.vulkan.VkCommandBuffer cmdBuffer = (org.lwjgl.vulkan.VkCommandBuffer) cmdField
+            org.lwjgl.vulkan.VkCommandBuffer cmdBuffer = (org.lwjgl.vulkan.VkCommandBuffer) rendererCmdBufferField
                     .get(Renderer.getInstance());
 
             try (org.lwjgl.system.MemoryStack stack = org.lwjgl.system.MemoryStack.stackPush()) {
@@ -503,10 +518,8 @@ public final class Compat {
                         org.lwjgl.vulkan.VK10.VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
 
                 // Copy depth
-                java.lang.reflect.Field idField = VulkanImage.class.getDeclaredField("id");
-                idField.setAccessible(true);
-                long srcId = (long) idField.get(srcDepth);
-                long dstId = (long) idField.get(mcDepthCopyImage);
+                long srcId = (long) vulkanImageIdField.get(srcDepth);
+                long dstId = (long) vulkanImageIdField.get(mcDepthCopyImage);
 
                 org.lwjgl.vulkan.VkImageCopy.Buffer copyRegion = org.lwjgl.vulkan.VkImageCopy.calloc(1, stack);
                 copyRegion.get(0)

@@ -25,6 +25,9 @@ public class Dh24RenderDelegate implements IVulkanRenderDelegate {
     /** Reusable RenderUniforms to avoid per-frame allocations */
     private final RenderUniforms cachedUniforms = new RenderUniforms();
 
+    /** Cached VkVertexData by vboId — avoids new VkVertexData per draw call */
+    private final java.util.HashMap<Integer, VkVertexData> vertexDataCache = new java.util.HashMap<>();
+
     public Dh24RenderDelegate(VulkanBackend backend) {
         this.backend = backend;
     }
@@ -64,7 +67,12 @@ public class Dh24RenderDelegate implements IVulkanRenderDelegate {
         IVulkanVertexBuffer vkBuf = (IVulkanVertexBuffer) vbo;
         int vboId = System.identityHashCode(vbo);
 
-        VkVertexData data = new VkVertexData(vboId);
+        VkVertexData data = this.vertexDataCache.get(vboId);
+        if (data == null) {
+            data = new VkVertexData(vboId);
+            this.vertexDataCache.put(vboId, data);
+        }
+
         ByteBuffer handle = (ByteBuffer) vkBuf.dhvulkan$getVulkanBufferHandle();
         if (handle != null) {
             data.setData(handle, System.identityHashCode(handle));
@@ -101,19 +109,26 @@ public class Dh24RenderDelegate implements IVulkanRenderDelegate {
     @Override
     public void freeBuffer(GLVertexBuffer vbo) {
         int vboId = System.identityHashCode(vbo);
-        VkVertexData data = new VkVertexData(vboId);
+        VkVertexData data = this.vertexDataCache.remove(vboId);
+        if (data == null) {
+            data = new VkVertexData(vboId);
+        }
         this.backend.queueDataFree(data);
     }
 
     @Override
     public void queueBufferFree(GLVertexBuffer vbo) {
         int vboId = System.identityHashCode(vbo);
-        VkVertexData data = new VkVertexData(vboId);
+        VkVertexData data = this.vertexDataCache.remove(vboId);
+        if (data == null) {
+            data = new VkVertexData(vboId);
+        }
         this.backend.queueDataFree(data);
     }
 
     @Override
     public void cleanup() {
+        this.vertexDataCache.clear();
         this.backend.cleanup();
     }
 }

@@ -72,6 +72,7 @@ public class VkVertexBufferWrapper implements IVertexBufferWrapper {
     @Override
     public void close() {
         if (this.vertexData != null) {
+            this.vertexData.setOnClear(null); // Break reference chain
             backend.queueDataFree(this.vertexData);
             this.vertexData = null;
         }

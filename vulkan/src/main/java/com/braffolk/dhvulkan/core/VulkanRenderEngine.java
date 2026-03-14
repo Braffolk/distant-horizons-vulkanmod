@@ -30,8 +30,8 @@ import org.apache.logging.log4j.Logger;
 
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
+import java.util.HashMap;
 import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentLinkedQueue;
 
 /**
@@ -98,7 +98,7 @@ public class VulkanRenderEngine implements VulkanBackend {
     /**
      * Cache of uploaded Vulkan vertex buffers, keyed by VkVertexData.id.
      */
-    private final Map<Integer, CachedBuffer> vulkanBufferCache = new ConcurrentHashMap<>();
+    private final Map<Integer, CachedBuffer> vulkanBufferCache = new HashMap<>();
 
     private static class PendingFree {
         final int dataId;
@@ -192,7 +192,7 @@ public class VulkanRenderEngine implements VulkanBackend {
         }
 
         int indexCount = quadCount * 6;
-        ByteBuffer indexData = ByteBuffer.allocateDirect(indexCount * 4);
+        ByteBuffer indexData = org.lwjgl.system.MemoryUtil.memAlloc(indexCount * 4);
         indexData.order(ByteOrder.nativeOrder());
         for (int i = 0; i < quadCount; i++) {
             int base = i * 4;
@@ -207,6 +207,7 @@ public class VulkanRenderEngine implements VulkanBackend {
 
         this.quadIndexBuffer = Compat.createIndexBuffer(indexData.remaining());
         Compat.copyBuffer(this.quadIndexBuffer, indexData, indexData.remaining());
+        org.lwjgl.system.MemoryUtil.memFree(indexData);
         this.quadIndexBufferCapacity = quadCount;
     }
 

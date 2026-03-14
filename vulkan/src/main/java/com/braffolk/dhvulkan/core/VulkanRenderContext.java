@@ -71,6 +71,12 @@ public class VulkanRenderContext {
      */
     private final Map<String, MappedBuffer> uniformBuffers = new HashMap<>();
 
+    /**
+     * Direct reference to the model offset buffer — avoids HashMap.get(String)
+     * on the hottest uniform setter (~200× per frame per render pass).
+     */
+    private MappedBuffer modelOffsetBuffer;
+
     // =============//
     // constructor //
     // =============//
@@ -190,11 +196,14 @@ public class VulkanRenderContext {
      * frame.
      */
     private void addDhUniform(AlignedStruct.Builder builder, String type, String name, int count, int byteSize) {
-        // Create a persistent MappedBuffer for this uniform
         MappedBuffer mb = new MappedBuffer(byteSize);
         this.uniformBuffers.put(name, mb);
 
-        // Use Compat to handle VM version differences in uniform setup
+        // Cache direct reference for the hot-path model offset uniform
+        if ("uModelOffset".equals(name)) {
+            this.modelOffsetBuffer = mb;
+        }
+
         Compat.addUniformWithBuffer(builder, type, name, count, () -> mb);
     }
 
@@ -232,7 +241,10 @@ public class VulkanRenderContext {
 
     /** Write a vec3 uniform value */
     public void setUniformVec3f(String name, Vec3f value) {
-        MappedBuffer mb = this.uniformBuffers.get(name);
+        // Fast path for model offset (called ~200× per frame)
+        MappedBuffer mb = ("uModelOffset".equals(name) && this.modelOffsetBuffer != null)
+                ? this.modelOffsetBuffer
+                : this.uniformBuffers.get(name);
         if (mb == null)
             return;
 
