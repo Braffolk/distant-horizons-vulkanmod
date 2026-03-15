@@ -77,6 +77,8 @@ public class VulkanRenderEngine implements VulkanBackend {
     private VulkanImage cachedMcDepthTexture = null;
     /** Cloud renderer -- renders clouds after DH composite with correct depth (VM 0.6 only) */
     private final VulkanCloudRenderer cloudRenderer = new VulkanCloudRenderer();
+    /** Per-frame performance profiler */
+    private final DhFrameProfiler profiler = new DhFrameProfiler();
 
     /** Shared index buffer for quad rendering (6 indices per quad) */
     private Object quadIndexBuffer;
@@ -299,6 +301,9 @@ public class VulkanRenderEngine implements VulkanBackend {
         if (!this.frameReady)
             return;
 
+        this.profiler.beginFrame();
+        this.profiler.begin(DhFrameProfiler.PHASE_UNIFORMS);
+
         // Use DH's projection matrix for terrain rendering
         this.tempCombinedMatrix.set(uniforms.dhProjectionMatrix);
         this.tempCombinedMatrix.multiply(uniforms.dhModelViewMatrix);
@@ -328,6 +333,9 @@ public class VulkanRenderEngine implements VulkanBackend {
 
         // Upload UBOs after setting all uniforms
         this.renderContext.uploadAndBindUBOs();
+
+        this.profiler.end(DhFrameProfiler.PHASE_UNIFORMS);
+        this.profiler.begin(DhFrameProfiler.PHASE_DRAWS);
     }
 
     @Override
@@ -356,6 +364,7 @@ public class VulkanRenderEngine implements VulkanBackend {
                     }
                     this.renderContext.applyPerDrawState();
                     this.renderContext.drawIndexed(stale.vkBuffer, this.quadIndexBuffer, indexCount);
+                    this.profiler.countDraw();
                     this.drawCount++;
                 } catch (Exception e) {
                     // Buffer may have been freed already
@@ -403,6 +412,7 @@ public class VulkanRenderEngine implements VulkanBackend {
             // THE draw call
             this.renderContext.applyPerDrawState();
             this.renderContext.drawIndexed(cached.vkBuffer, this.quadIndexBuffer, indexCount);
+            this.profiler.countDraw();
 
         } catch (Exception e) {
             LOGGER.error("[DH-Vulkan] drawVertexData error", e);
@@ -438,22 +448,27 @@ public class VulkanRenderEngine implements VulkanBackend {
         if (!this.frameReady)
             return;
 
+        this.profiler.end(DhFrameProfiler.PHASE_DRAWS);
+
         try {
             // End DH's render pass — transitions attachments to SHADER_READ_ONLY
             Renderer.getInstance().endRenderPass();
 
             // SSAO post-process (between LOD render and composite)
             if (this.ssaoPipeline != null && DhConfigHelper.ssaoEnabled()) {
+                this.profiler.begin(DhFrameProfiler.PHASE_SSAO);
                 try {
                     this.tempCombinedMatrix.set(uniforms.dhProjectionMatrix);
                     this.ssaoPipeline.render(this.dhFramebuffer, this.tempCombinedMatrix);
                 } catch (Exception e) {
                     LOGGER.error("[DH-Vulkan] SSAO render failed", e);
                 }
+                this.profiler.end(DhFrameProfiler.PHASE_SSAO);
             }
 
             // Fog post-process (after SSAO, before composite)
             if (this.fogPipeline != null && DhConfigHelper.dhFogEnabled()) {
+                this.profiler.begin(DhFrameProfiler.PHASE_FOG);
                 try {
                     this.tempCombinedMatrix.set(uniforms.dhModelViewMatrix);
                     this.tempInvProj.set(uniforms.dhProjectionMatrix);
@@ -464,6 +479,7 @@ public class VulkanRenderEngine implements VulkanBackend {
                 } catch (Exception e) {
                     LOGGER.error("[DH-Vulkan] Fog render failed", e);
                 }
+                this.profiler.end(DhFrameProfiler.PHASE_FOG);
             }
 
             // End any render pass left by SSAO/Fog, then rebind MC
@@ -480,17 +496,21 @@ public class VulkanRenderEngine implements VulkanBackend {
                 // NONE: only composite, no Phase 2b re-composite.
                 // Render clouds BEFORE composite so LODs draw on top (no depth available in NONE mode).
                 if (this.cloudRenderer.isAvailable()) {
+                    this.profiler.begin(DhFrameProfiler.PHASE_CLOUDS);
                     this.cloudRenderer.renderIfEnabled(uniforms.partialTicks, uniforms.mcProjectionMatrix, uniforms.dhModelViewMatrix);
+                    this.profiler.end(DhFrameProfiler.PHASE_CLOUDS);
                 }
+                this.profiler.begin(DhFrameProfiler.PHASE_COMPOSITE);
                 VulkanImage mcDepthForComposite = DhVulkanConfig.get().vulkanRenderMode == 6 && this.depthReaderPipeline != null
                         ? this.depthReaderPipeline.getCachedDepthTexture()
                         : null;
                 this.runComposite(uniforms, mcDepthForComposite);
+                this.profiler.end(DhFrameProfiler.PHASE_COMPOSITE);
             } else if (DhVulkanConfig.get().vulkanRenderMode != 6) {
                 // SINGLE/DOUBLE normal: draw LOD colors with depth=1.0 (shader handles it).
-                // Phase 2b (lateComposite at renderLevel @RETURN) re-composites with
-                // real MC depth AND proper gl_FragDepth writes.
+                this.profiler.begin(DhFrameProfiler.PHASE_COMPOSITE);
                 this.runComposite(uniforms, null);
+                this.profiler.end(DhFrameProfiler.PHASE_COMPOSITE);
             }
             // SINGLE/DOUBLE + mode 6: skip Phase 1 entirely —
             // lateComposite alone handles debug via depth reader (matches vm.5).
@@ -510,6 +530,7 @@ public class VulkanRenderEngine implements VulkanBackend {
         } catch (Exception e) {
             LOGGER.error("[DH-Vulkan] endFrame error", e);
         }
+        this.profiler.endFrame();
     }
 
     @Override
@@ -554,6 +575,7 @@ public class VulkanRenderEngine implements VulkanBackend {
      * Called from whichever hook fires first (deferredComposite or lateComposite).
      */
     private void doPhase2(RenderUniforms uniforms) {
+        this.profiler.begin(DhFrameProfiler.PHASE_PHASE2);
         try {
             VulkanImage mcDepth = Compat.getSwapChainDepthAttachment();
             Renderer.getInstance().endRenderPass();
@@ -571,7 +593,9 @@ public class VulkanRenderEngine implements VulkanBackend {
             // VM 0.6: clouds render in MC's render pass, depth-testing against combined depth.
             // VM 0.4.2: clouds were already rendered in endFrame() via DH framebuffer.
             if (this.cloudRenderer.isAvailable()) {
+                this.profiler.begin(DhFrameProfiler.PHASE_CLOUDS);
                 this.cloudRenderer.renderIfEnabled(uniforms.partialTicks, uniforms.mcProjectionMatrix, uniforms.dhModelViewMatrix);
+                this.profiler.end(DhFrameProfiler.PHASE_CLOUDS);
             }
         } catch (Exception e) {
             LOGGER.error("[DH-Vulkan] Phase 2 composite error", e);
@@ -582,6 +606,7 @@ public class VulkanRenderEngine implements VulkanBackend {
                 LOGGER.error("[DH-Vulkan] Recovery also failed", e2);
             }
         }
+        this.profiler.end(DhFrameProfiler.PHASE_PHASE2);
     }
 
     @Override
