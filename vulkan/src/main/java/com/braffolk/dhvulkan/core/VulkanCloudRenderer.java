@@ -9,7 +9,6 @@ import net.minecraft.client.CloudStatus;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.multiplayer.ClientLevel;
 import net.minecraft.util.Mth;
-import net.vulkanmod.vulkan.Renderer;
 import net.vulkanmod.vulkan.VRenderSystem;
 import net.vulkanmod.vulkan.shader.GraphicsPipeline;
 import org.apache.logging.log4j.LogManager;
@@ -26,11 +25,9 @@ import java.lang.reflect.Method;
  * Renders clouds after the DH composite pass, so they depth-test against
  * both MC terrain and DH LOD depth in the combined depth buffer.
  *
- * Directly replicates VulkanMod's CloudRenderer logic instead of calling
- * it via reflection. This avoids VRenderSystem state corruption from
- * the composite pipeline (which was causing cyan color and wrong depth).
- *
- * Respects DH's enableCloudRendering config (cached, refreshed periodically).
+ * Requires VM 0.6+ API (PipelineManager.getCloudsPipeline(), VBO.bind/draw).
+ * On older VM versions, this renderer is disabled and the engine should
+ * use an alternative cloud rendering path.
  */
 public class VulkanCloudRenderer {
 
@@ -40,7 +37,7 @@ public class VulkanCloudRenderer {
     private static final int CELL_WIDTH = 12;
     private static final int CELL_HEIGHT = 4;
 
-    // Face direction bits (same as VM)
+    // Face direction bits
     private static final int DIR_NEG_Y_BIT = 1;
     private static final int DIR_POS_Y_BIT = 1 << 1;
     private static final int DIR_NEG_X_BIT = 1 << 2;
@@ -67,10 +64,10 @@ public class VulkanCloudRenderer {
     private CloudStatus prevCloudsType;
     private boolean needsRebuild = true;
 
-    // Reflection for PipelineManager.getCloudsPipeline() and VBO
+    // Reflection — VM 0.6 only
     private boolean reflectionResolved = false;
     private boolean reflectionFailed = false;
-    private Method getCloudsPipelineMethod;
+    private GraphicsPipeline cloudsPipeline;
     private java.lang.reflect.Constructor<?> vboConstructor;
     private Method vboUploadMethod;
     private Method vboBindMethod;
@@ -82,9 +79,16 @@ public class VulkanCloudRenderer {
     private int configRefreshCounter = 0;
     private static final int CONFIG_REFRESH_INTERVAL = 60;
 
+    /** Returns true if this renderer is available (VM 0.6+). */
+    public boolean isAvailable() {
+        if (!this.reflectionResolved) {
+            resolveReflection();
+        }
+        return !this.reflectionFailed;
+    }
 
     public void renderIfEnabled(float partialTicks, Mat4f mcProjection, Mat4f mcModelView) {
-        // Periodic config check (not every frame)
+        // Periodic config check
         if (--this.configRefreshCounter <= 0) {
             this.configRefreshCounter = CONFIG_REFRESH_INTERVAL;
             try {
@@ -93,36 +97,21 @@ public class VulkanCloudRenderer {
                 this.cloudRenderingEnabled = true;
             }
         }
-        if (!this.cloudRenderingEnabled) {
-            return;
-        }
+        if (!this.cloudRenderingEnabled) return;
 
         Minecraft mc = Minecraft.getInstance();
         ClientLevel level = mc.level;
-        if (level == null) {
-            return;
-        }
+        if (level == null) return;
 
-        // Check cloud height from dimension
         int cloudHeight = Compat.getCloudHeight(level);
-        if (cloudHeight < 0) {
-            return;
-        }
+        if (cloudHeight < 0) return;
 
-        // Lazy resolve reflection targets
-        if (!this.reflectionResolved) {
-            resolveReflection();
-        }
-        if (this.reflectionFailed) {
-            return;
-        }
+        if (!this.reflectionResolved) resolveReflection();
+        if (this.reflectionFailed) return;
 
-        // Load texture on first call
         if (!this.textureLoaded) {
             loadCloudTexture();
-            if (!this.textureLoaded) {
-                return;
-            }
+            if (!this.textureLoaded) return;
         }
 
         try {
@@ -132,37 +121,30 @@ public class VulkanCloudRenderer {
         }
     }
 
-    private void renderClouds(ClientLevel level, Minecraft mc, int cloudHeight, float partialTicks, Mat4f mcProjection, Mat4f mcModelView) throws Exception {
+    private void renderClouds(ClientLevel level, Minecraft mc, int cloudHeight,
+                              float partialTicks, Mat4f mcProjection, Mat4f mcModelView) throws Exception {
         IMinecraftRenderWrapper renderWrapper = SingletonInjector.INSTANCE.get(IMinecraftRenderWrapper.class);
         var camPos = renderWrapper.getCameraExactPosition();
-        double camX = camPos.x;
-        double camY = camPos.y;
-        double camZ = camPos.z;
 
         int ticks = (int) (level.getGameTime() % Integer.MAX_VALUE);
         double timeOffset = (ticks + partialTicks) * 0.03F;
-        double centerX = camX + timeOffset;
-        double centerZ = camZ + 0.33F * CELL_WIDTH;
-        double centerY = cloudHeight - camY + 0.33F;
+        double centerX = camPos.x + timeOffset;
+        double centerZ = camPos.z + 0.33F * CELL_WIDTH;
+        double centerY = cloudHeight - camPos.y + 0.33F;
 
         int centerCellX = (int) Math.floor(centerX / CELL_WIDTH);
         int centerCellZ = (int) Math.floor(centerZ / CELL_WIDTH);
 
         byte yState;
-        if (centerY < -4.0f) {
-            yState = Y_BELOW_CLOUDS;
-        } else if (centerY > 0.0f) {
-            yState = Y_ABOVE_CLOUDS;
-        } else {
-            yState = Y_INSIDE_CLOUDS;
-        }
+        if (centerY < -4.0f) yState = Y_BELOW_CLOUDS;
+        else if (centerY > 0.0f) yState = Y_ABOVE_CLOUDS;
+        else yState = Y_INSIDE_CLOUDS;
 
         CloudStatus cloudsType = mc.options.getCloudsType();
 
-        // Check if mesh needs rebuilding
+        // Rebuild mesh when camera cell changes
         if (centerCellX != this.prevCloudX || centerCellZ != this.prevCloudZ
-                || cloudsType != this.prevCloudsType
-                || this.prevCloudY != yState
+                || cloudsType != this.prevCloudsType || this.prevCloudY != yState
                 || this.cloudVBO == null) {
             this.prevCloudX = centerCellX;
             this.prevCloudZ = centerCellZ;
@@ -173,17 +155,10 @@ public class VulkanCloudRenderer {
 
         if (this.needsRebuild) {
             this.needsRebuild = false;
-            if (this.cloudVBO != null) {
-                this.vboCloseMethod.invoke(this.cloudVBO);
-            }
+            if (this.cloudVBO != null) this.vboCloseMethod.invoke(this.cloudVBO);
 
-            Object cloudsMesh = buildCloudMesh(
-                    centerCellX, centerCellZ, centerY, cloudsType);
-
-            if (cloudsMesh == null) {
-                this.cloudVBO = null;
-                return;
-            }
+            Object cloudsMesh = buildCloudMesh(centerCellX, centerCellZ, centerY, cloudsType);
+            if (cloudsMesh == null) { this.cloudVBO = null; return; }
 
             this.cloudVBO = this.vboConstructor.newInstance(true);
             this.vboUploadMethod.invoke(this.cloudVBO, cloudsMesh);
@@ -192,79 +167,67 @@ public class VulkanCloudRenderer {
         if (this.cloudVBO == null) return;
 
         // --- Rendering ---
-
         float xTranslation = (float) (centerX - (centerCellX * CELL_WIDTH));
         float yTranslation = (float) centerY;
         float zTranslation = (float) (centerZ - (centerCellZ * CELL_WIDTH));
 
-        // NOTE: Do NOT call Compat.rebindMainTarget() here — we are already
-        // in the correct render pass from the composite. A second rebind would
-        // start a new Vulkan render pass which may clear the depth buffer,
-        // destroying the DH LOD depth the composite just wrote via gl_FragDepth.
-
-        // Restore MC's projection matrix — critical for depth testing against the
-        // combined MC+DH depth buffer written by the composite pass.
+        // Restore MC's projection — critical for depth testing against combined depth buffer.
         VRenderSystem.applyProjectionMatrix(mcProjection.createJomlMatrix());
 
-        // Set up model-view matrix: start with the camera's view matrix (rotation),
-        // then apply cloud translation. At renderLevel @RETURN, the modelview stack
-        // has been reset, so we must restore the camera view matrix manually.
+        // Set up model-view: camera view + cloud translation.
         Matrix4fStack poseStack = RenderSystem.getModelViewStack();
         poseStack.pushMatrix();
-        poseStack.set(mcModelView.createJomlMatrix());
-        poseStack.translate(-xTranslation, yTranslation, -zTranslation);
-        VRenderSystem.applyModelViewMatrix(poseStack);
-        VRenderSystem.calculateMVP();
+        try {
+            poseStack.set(mcModelView.createJomlMatrix());
+            poseStack.translate(-xTranslation, yTranslation, -zTranslation);
+            VRenderSystem.applyModelViewMatrix(poseStack);
+            VRenderSystem.calculateMVP();
 
-        Compat.setModelOffset(-xTranslation, 0, -zTranslation);
+            Compat.setModelOffset(-xTranslation, 0, -zTranslation);
 
-        // Set cloud color from level
-        float[] cloudColor = Compat.getCloudColorRGB(level, partialTicks);
-        VRenderSystem.setShaderColor(cloudColor[0], cloudColor[1], cloudColor[2], 0.8f);
+            float[] cloudColor = Compat.getCloudColorRGB(level, partialTicks);
+            VRenderSystem.setShaderColor(cloudColor[0], cloudColor[1], cloudColor[2], 0.8f);
 
-        // Get the clouds pipeline
-        GraphicsPipeline cloudsPipeline = (GraphicsPipeline) this.getCloudsPipelineMethod.invoke(null);
+            GraphicsPipeline pipeline = this.cloudsPipeline;
 
-        // Set render state
-        VRenderSystem.enableBlend();
-        VRenderSystem.blendFuncSeparate(
-                org.lwjgl.opengl.GL11.GL_SRC_ALPHA,
-                org.lwjgl.opengl.GL11.GL_ONE_MINUS_SRC_ALPHA,
-                org.lwjgl.opengl.GL11.GL_ONE,
-                org.lwjgl.opengl.GL11.GL_ZERO);
-        VRenderSystem.enableDepthTest();
-        VRenderSystem.depthFunc(org.lwjgl.opengl.GL11.GL_LEQUAL);
-        VRenderSystem.depthMask = true;
-        VRenderSystem.setPolygonModeGL(org.lwjgl.opengl.GL11.GL_FILL);
-        VRenderSystem.setPrimitiveTopologyGL(org.lwjgl.opengl.GL11.GL_TRIANGLES);
+            // Render state
+            VRenderSystem.enableBlend();
+            VRenderSystem.blendFuncSeparate(
+                    org.lwjgl.opengl.GL11.GL_SRC_ALPHA,
+                    org.lwjgl.opengl.GL11.GL_ONE_MINUS_SRC_ALPHA,
+                    org.lwjgl.opengl.GL11.GL_ONE,
+                    org.lwjgl.opengl.GL11.GL_ZERO);
+            VRenderSystem.enableDepthTest();
+            VRenderSystem.depthFunc(org.lwjgl.opengl.GL11.GL_LEQUAL);
+            VRenderSystem.depthMask = true;
+            VRenderSystem.setPolygonModeGL(org.lwjgl.opengl.GL11.GL_FILL);
+            VRenderSystem.setPrimitiveTopologyGL(org.lwjgl.opengl.GL11.GL_TRIANGLES);
 
-        boolean fastClouds = cloudsType == CloudStatus.FAST;
-        boolean insideClouds = yState == Y_INSIDE_CLOUDS;
-        boolean disableCull = insideClouds || (fastClouds && centerY <= 0.0f);
+            boolean fastClouds = cloudsType == CloudStatus.FAST;
+            boolean insideClouds = yState == Y_INSIDE_CLOUDS;
+            if (insideClouds || (fastClouds && centerY <= 0.0f)) {
+                VRenderSystem.disableCull();
+            } else {
+                VRenderSystem.enableCull();
+            }
 
-        if (disableCull) {
-            VRenderSystem.disableCull();
-        } else {
-            VRenderSystem.enableCull();
-        }
+            // Fancy clouds: depth-only pre-pass
+            if (!fastClouds) {
+                VRenderSystem.colorMask(false, false, false, false);
+                this.vboBindMethod.invoke(this.cloudVBO, pipeline);
+                this.vboDrawMethod.invoke(this.cloudVBO);
+                VRenderSystem.colorMask(true, true, true, true);
+            }
 
-        // For fancy (non-fast) clouds: depth-only pre-pass
-        if (!fastClouds) {
-            VRenderSystem.colorMask(false, false, false, false);
-            this.vboBindMethod.invoke(this.cloudVBO, cloudsPipeline);
+            // Main draw
+            this.vboBindMethod.invoke(this.cloudVBO, pipeline);
             this.vboDrawMethod.invoke(this.cloudVBO);
-            VRenderSystem.colorMask(true, true, true, true);
+        } finally {
+            poseStack.popMatrix();
+            VRenderSystem.enableCull();
+            VRenderSystem.setShaderColor(1.0f, 1.0f, 1.0f, 1.0f);
+            Compat.setModelOffset(0.0f, 0.0f, 0.0f);
         }
-
-        // Main draw
-        this.vboBindMethod.invoke(this.cloudVBO, cloudsPipeline);
-        this.vboDrawMethod.invoke(this.cloudVBO);
-
-        // Restore state
-        poseStack.popMatrix();
-        VRenderSystem.enableCull();
-        VRenderSystem.setShaderColor(1.0f, 1.0f, 1.0f, 1.0f);
-        Compat.setModelOffset(0.0f, 0.0f, 0.0f);
     }
 
     // ========================= //
@@ -399,25 +362,20 @@ public class VulkanCloudRenderer {
 
     private byte[] computeRenderFaces() {
         byte[] renderFaces = new byte[this.cloudPixels.length];
-
         for (int z = 0; z < this.cloudGridWidth; z++) {
             for (int x = 0; x < this.cloudGridWidth; x++) {
                 int idx = z * this.cloudGridWidth + x;
                 int pixel = this.cloudPixels[idx];
-
                 if (!hasAlpha(pixel)) continue;
 
                 byte faces = (byte) (DIR_NEG_Y_BIT | DIR_POS_Y_BIT);
-
                 if (pixel != getTexelWrapped(x - 1, z)) faces |= DIR_NEG_X_BIT;
                 if (pixel != getTexelWrapped(x + 1, z)) faces |= DIR_POS_X_BIT;
                 if (pixel != getTexelWrapped(x, z - 1)) faces |= DIR_NEG_Z_BIT;
                 if (pixel != getTexelWrapped(x, z + 1)) faces |= DIR_POS_Z_BIT;
-
                 renderFaces[idx] = faces;
             }
         }
-
         return renderFaces;
     }
 
@@ -437,10 +395,6 @@ public class VulkanCloudRenderer {
         return ((pixel >> 24) & 0xFF) > 1;
     }
 
-    /**
-     * Multiply RGB channels of an ARGB color by a brightness factor.
-     * Equivalent to VM's ColorUtil.ARGB.multiplyRGB().
-     */
     private static int multiplyRGB(int color, float factor) {
         int a = (color >> 24) & 0xFF;
         int r = (int) (((color >> 16) & 0xFF) * factor);
@@ -455,17 +409,25 @@ public class VulkanCloudRenderer {
 
     private void resolveReflection() {
         this.reflectionResolved = true;
-
         try {
-            // PipelineManager.getCloudsPipeline()
             Class<?> pipelineManagerClass = Class.forName("net.vulkanmod.render.PipelineManager");
-            this.getCloudsPipelineMethod = pipelineManagerClass.getMethod("getCloudsPipeline");
 
-            // VBO(boolean useGpuMem)
+            // Requires VM 0.6+ getCloudsPipeline()
+            Method getCloudsPipelineMethod = pipelineManagerClass.getMethod("getCloudsPipeline");
+            this.cloudsPipeline = (GraphicsPipeline) getCloudsPipelineMethod.invoke(null);
+            LOGGER.info("[DH-VulkanMod] Cloud pipeline: using VM 0.6 getCloudsPipeline()");
+
+            if (this.cloudsPipeline == null) {
+                throw new RuntimeException("Cloud pipeline is null");
+            }
+
+            // VM 0.6 VBO API
             Class<?> vboClass = Class.forName("net.vulkanmod.render.VBO");
             this.vboConstructor = vboClass.getConstructor(boolean.class);
-            // Find VBO.upload(MeshData) by name — can't use MeshData.class directly
-            // because Fabric remaps Mojang class names at runtime
+            this.vboBindMethod = vboClass.getMethod("bind", GraphicsPipeline.class);
+            this.vboDrawMethod = vboClass.getMethod("draw");
+
+            // upload(MeshData) — name-based lookup because Fabric remaps class names
             for (java.lang.reflect.Method m : vboClass.getMethods()) {
                 if (m.getName().equals("upload") && m.getParameterCount() == 1) {
                     this.vboUploadMethod = m;
@@ -475,13 +437,11 @@ public class VulkanCloudRenderer {
             if (this.vboUploadMethod == null) {
                 throw new NoSuchMethodException("VBO.upload(MeshData) not found");
             }
-            this.vboBindMethod = vboClass.getMethod("bind", GraphicsPipeline.class);
-            this.vboDrawMethod = vboClass.getMethod("draw");
             this.vboCloseMethod = vboClass.getMethod("close");
 
-            LOGGER.info("[DH-VulkanMod] Cloud renderer reflection resolved.");
+            LOGGER.info("[DH-VulkanMod] Cloud renderer reflection resolved (VM 0.6).");
         } catch (Exception e) {
-            LOGGER.warn("[DH-VulkanMod] Cloud renderer reflection failed — clouds disabled on this VM version.", e);
+            LOGGER.info("[DH-VulkanMod] VM 0.6 cloud API not available, custom cloud renderer disabled. ({})", e.getMessage());
             this.reflectionFailed = true;
         }
     }
@@ -489,9 +449,7 @@ public class VulkanCloudRenderer {
     /** Reload cloud texture (called on resource reload). */
     public void resetBuffer() {
         if (this.cloudVBO != null) {
-            try {
-                this.vboCloseMethod.invoke(this.cloudVBO);
-            } catch (Exception ignored) {}
+            try { this.vboCloseMethod.invoke(this.cloudVBO); } catch (Exception ignored) {}
             this.cloudVBO = null;
         }
         this.needsRebuild = true;

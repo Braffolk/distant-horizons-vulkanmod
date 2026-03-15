@@ -75,7 +75,7 @@ public class VulkanRenderEngine implements VulkanBackend {
     private DhDepthReaderPipeline depthReaderPipeline;
     /** Cached MC depth texture read at beginFrame() for use in deferredComposite() */
     private VulkanImage cachedMcDepthTexture = null;
-    /** Cloud renderer -- renders clouds after DH composite with correct depth */
+    /** Cloud renderer -- renders clouds after DH composite with correct depth (VM 0.6 only) */
     private final VulkanCloudRenderer cloudRenderer = new VulkanCloudRenderer();
 
     /** Shared index buffer for quad rendering (6 indices per quad) */
@@ -534,8 +534,8 @@ public class VulkanRenderEngine implements VulkanBackend {
 
         com.seibel.distanthorizons.api.enums.config.EDhApiMcRenderingFadeMode fadeMode = DhConfigHelper.vanillaFadeMode();
         if (fadeMode == com.seibel.distanthorizons.api.enums.config.EDhApiMcRenderingFadeMode.NONE) {
-            // NONE: Phase 1 was the only composite. Just render clouds.
-            if (this.frameReady) {
+            // NONE: Phase 1 was the only composite. Just render clouds (VM 0.6 only).
+            if (this.frameReady && this.cloudRenderer.isAvailable()) {
                 this.cloudRenderer.renderIfEnabled(uniforms.partialTicks, uniforms.mcProjectionMatrix, uniforms.dhModelViewMatrix);
             }
             return;
@@ -566,8 +566,11 @@ public class VulkanRenderEngine implements VulkanBackend {
             Compat.rebindMainTarget();
             this.runComposite(uniforms, mcDepthR32F);
 
-            // Clouds render in the same render pass, depth-testing against combined depth.
-            this.cloudRenderer.renderIfEnabled(uniforms.partialTicks, uniforms.mcProjectionMatrix, uniforms.dhModelViewMatrix);
+            // VM 0.6: clouds render in MC's render pass, depth-testing against combined depth.
+            // VM 0.4.2: clouds were already rendered in endFrame() via DH framebuffer.
+            if (this.cloudRenderer.isAvailable()) {
+                this.cloudRenderer.renderIfEnabled(uniforms.partialTicks, uniforms.mcProjectionMatrix, uniforms.dhModelViewMatrix);
+            }
         } catch (Exception e) {
             LOGGER.error("[DH-Vulkan] Phase 2 composite error", e);
             try {

@@ -87,12 +87,15 @@ public final class Compat {
      * This bridges the module boundary without requiring shared code to import dh24 types.
      */
     private static Runnable deferredCompositeHook;
+    /** Per-frame flag: true if Phase 2a (addCloudsPass) already fired this frame. */
+    private static boolean deferredCompositeRanThisFrame = false;
 
     public static void setDeferredCompositeHook(Runnable hook) {
         deferredCompositeHook = hook;
     }
 
     public static void runDeferredCompositeHook() {
+        deferredCompositeRanThisFrame = true;
         Runnable hook = deferredCompositeHook;
         if (hook != null) hook.run();
     }
@@ -101,6 +104,9 @@ public final class Compat {
      * Static hook for Phase 2b late re-composite.
      * Set by MixinLodRenderer (dh24 module), called by MixinLevelRenderer (shared module)
      * at renderLevel @RETURN.
+     *
+     * On MC 1.20.6 where addCloudsPass doesn't exist, the deferred composite
+     * hook is also called here as fallback.
      */
     private static Runnable lateCompositeHook;
 
@@ -109,6 +115,13 @@ public final class Compat {
     }
 
     public static void runLateCompositeHook() {
+        // If Phase 2a didn't fire (MC 1.20.6 — no addCloudsPass), run it now
+        if (!deferredCompositeRanThisFrame) {
+            Runnable deferred = deferredCompositeHook;
+            if (deferred != null) deferred.run();
+        }
+        deferredCompositeRanThisFrame = false; // reset for next frame
+
         Runnable hook = lateCompositeHook;
         if (hook != null) hook.run();
     }
@@ -862,10 +875,9 @@ public final class Compat {
      */
     public static Object finishCloudMesh(com.mojang.blaze3d.vertex.BufferBuilder builder) {
         #if MC_VER <= MC_1_20_6
-        builder.end();
-        // On 1.20.x, we need to return something that VBO.upload can handle.
-        // Since VBO doesn't exist on VM 0.4.2, this code path won't actually be reached.
-        return null;
+        // On 1.20.x, builder.end() returns BufferBuilder.RenderedBuffer
+        // which is what VM 0.4.2's VBO.upload() expects
+        return builder.end();
         #else
         return builder.build();
         #endif
