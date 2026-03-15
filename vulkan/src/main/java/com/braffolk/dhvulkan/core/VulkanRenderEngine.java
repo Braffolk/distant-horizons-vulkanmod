@@ -510,50 +510,58 @@ public class VulkanRenderEngine implements VulkanBackend {
 
     @Override
     public void deferredComposite(RenderUniforms uniforms) {
-        // Phase 2a: called from addCloudsPass @HEAD — AFTER MC terrain.
-        // Only renders clouds. Depth reading is in lateComposite (renderLevel @RETURN).
-
-        if (!this.frameReady)
-            return;
-
-        try {
-            this.cloudRenderer.renderIfEnabled(uniforms.partialTicks, uniforms.mcProjectionMatrix);
-        } catch (Exception e) {
-            LOGGER.error("[DH-Vulkan] deferredComposite error", e);
-        }
+        // Fallback: called from addCloudsPass @HEAD if that hook fires.
+        // On VulkanMod 0.6.1, addCloudsPass does NOT exist — all work is done
+        // in lateComposite (renderLevel @RETURN) instead.
+        // This is kept for compatibility with VM versions that DO call addCloudsPass.
+        if (!this.frameReady) return;
+        // If this fires, skip lateComposite's work by marking phase2 done.
+        this.phase2Done = true;
+        doPhase2(uniforms);
     }
 
     /**
-     * Phase 2b: called from renderLevel @RETURN — AFTER terrain AND weather.
+     * Called from renderLevel @RETURN — AFTER terrain, weather, everything.
      * 
-     * Only reads and caches MC depth for debug mode 6 visualization.
-     * Does NOT re-composite LODs — Phase 1 already composited LOD colors
-     * with gl_FragDepth=1.0, letting MC terrain and weather render on top
-     * via rasterizer depth testing. Re-compositing here would overwrite
-     * weather (rain/snow) because the depth check can't detect weather pixels.
+     * On VulkanMod 0.6.1, this is the ONLY hook that fires (addCloudsPass doesn't exist).
+     * Does: read MC depth, re-composite LODs with depth comparison, render clouds.
      */
     @Override
     public void lateComposite(RenderUniforms uniforms) {
+        if (this.phase2Done) {
+            this.phase2Done = false;
+            return; // Already handled by deferredComposite
+        }
+
         com.seibel.distanthorizons.api.enums.config.EDhApiMcRenderingFadeMode fadeMode = DhConfigHelper.vanillaFadeMode();
-
-        if (!this.depthReadLogged) {
-            LOGGER.info("[DH-Vulkan] lateComposite called: fadeMode={}, frameReady={}", fadeMode, this.frameReady);
-        }
-
         if (fadeMode == com.seibel.distanthorizons.api.enums.config.EDhApiMcRenderingFadeMode.NONE) {
+            // NONE: Phase 1 was the only composite. Just render clouds.
+            if (this.frameReady) {
+                this.cloudRenderer.renderIfEnabled(uniforms.partialTicks, uniforms.mcProjectionMatrix, uniforms.dhModelViewMatrix);
+            }
             return;
         }
 
-        if (!this.frameReady)
-            return;
+        if (!this.frameReady) return;
+        doPhase2(uniforms);
+    }
 
-        // Read and cache MC depth for debug mode 6 (next frame's Phase 1 uses cached depth)
+    private boolean phase2Done = false;
+
+    /**
+     * Phase 2: read MC depth, re-composite LODs with depth comparison, render clouds.
+     * Called from whichever hook fires first (deferredComposite or lateComposite).
+     */
+    private void doPhase2(RenderUniforms uniforms) {
         try {
             VulkanImage mcDepth = Compat.getSwapChainDepthAttachment();
             Renderer.getInstance().endRenderPass();
 
+            // Read MC depth into sampleable R32F
+            VulkanImage mcDepthR32F = null;
             if (this.depthReaderPipeline != null) {
-                this.cachedMcDepthTexture = this.depthReaderPipeline.readDepth(mcDepth);
+                mcDepthR32F = this.depthReaderPipeline.readDepth(mcDepth);
+                this.cachedMcDepthTexture = mcDepthR32F;
 
                 if (!this.depthReadLogged) {
                     LOGGER.info("[DH-Vulkan] MC depth read: {}x{} fmt={}",
@@ -563,10 +571,12 @@ public class VulkanRenderEngine implements VulkanBackend {
             }
 
             Compat.rebindMainTarget();
-            // No runComposite() — Phase 1 already handled LOD compositing.
-            // Re-compositing here would overwrite weather pixels.
+            this.runComposite(uniforms, mcDepthR32F);
+
+            // Clouds render in the same render pass, depth-testing against combined depth.
+            this.cloudRenderer.renderIfEnabled(uniforms.partialTicks, uniforms.mcProjectionMatrix, uniforms.dhModelViewMatrix);
         } catch (Exception e) {
-            LOGGER.error("[DH-Vulkan] lateComposite error", e);
+            LOGGER.error("[DH-Vulkan] Phase 2 composite error", e);
             try {
                 Renderer.getInstance().endRenderPass();
                 Compat.rebindMainTarget();

@@ -82,12 +82,9 @@ public class VulkanCloudRenderer {
     private int configRefreshCounter = 0;
     private static final int CONFIG_REFRESH_INTERVAL = 60;
 
-    /**
-     * Render clouds if DH's cloud rendering config is enabled.
-     * Must be called AFTER deferredComposite has written DH depth
-     * into MC's depth buffer (so clouds depth-test correctly).
-     */
-    public void renderIfEnabled(float partialTicks, Mat4f mcProjection) {
+    private boolean cloudDiagLogged = false;
+
+    public void renderIfEnabled(float partialTicks, Mat4f mcProjection, Mat4f mcModelView) {
         // Periodic config check (not every frame)
         if (--this.configRefreshCounter <= 0) {
             this.configRefreshCounter = CONFIG_REFRESH_INTERVAL;
@@ -97,36 +94,57 @@ public class VulkanCloudRenderer {
                 this.cloudRenderingEnabled = true;
             }
         }
-        if (!this.cloudRenderingEnabled) return;
+        if (!this.cloudRenderingEnabled) {
+            if (!cloudDiagLogged) { LOGGER.info("[DH-Vulkan] CLOUD DIAG: disabled by config"); cloudDiagLogged = true; }
+            return;
+        }
 
         Minecraft mc = Minecraft.getInstance();
         ClientLevel level = mc.level;
-        if (level == null) return;
+        if (level == null) {
+            if (!cloudDiagLogged) { LOGGER.info("[DH-Vulkan] CLOUD DIAG: level is null"); cloudDiagLogged = true; }
+            return;
+        }
 
         // Check cloud height from dimension
         int cloudHeight = Compat.getCloudHeight(level);
-        if (cloudHeight < 0) return;
+        if (cloudHeight < 0) {
+            if (!cloudDiagLogged) { LOGGER.info("[DH-Vulkan] CLOUD DIAG: cloudHeight={} (negative, skipping)", cloudHeight); cloudDiagLogged = true; }
+            return;
+        }
 
         // Lazy resolve reflection targets
         if (!this.reflectionResolved) {
             resolveReflection();
         }
-        if (this.reflectionFailed) return;
+        if (this.reflectionFailed) {
+            if (!cloudDiagLogged) { LOGGER.info("[DH-Vulkan] CLOUD DIAG: reflection failed"); cloudDiagLogged = true; }
+            return;
+        }
 
         // Load texture on first call
         if (!this.textureLoaded) {
             loadCloudTexture();
-            if (!this.textureLoaded) return;
+            if (!this.textureLoaded) {
+                if (!cloudDiagLogged) { LOGGER.info("[DH-Vulkan] CLOUD DIAG: texture not loaded"); cloudDiagLogged = true; }
+                return;
+            }
+        }
+
+        if (!cloudDiagLogged) {
+            LOGGER.info("[DH-Vulkan] CLOUD DIAG: all checks passed, rendering clouds. height={} boundRP={}",
+                    cloudHeight, Renderer.getInstance().getBoundRenderPass() != null ? "ACTIVE" : "null");
+            cloudDiagLogged = true;
         }
 
         try {
-            renderClouds(level, mc, cloudHeight, partialTicks, mcProjection);
+            renderClouds(level, mc, cloudHeight, partialTicks, mcProjection, mcModelView);
         } catch (Exception e) {
             LOGGER.error("[DH-VulkanMod] Cloud rendering failed", e);
         }
     }
 
-    private void renderClouds(ClientLevel level, Minecraft mc, int cloudHeight, float partialTicks, Mat4f mcProjection) throws Exception {
+    private void renderClouds(ClientLevel level, Minecraft mc, int cloudHeight, float partialTicks, Mat4f mcProjection, Mat4f mcModelView) throws Exception {
         IMinecraftRenderWrapper renderWrapper = SingletonInjector.INSTANCE.get(IMinecraftRenderWrapper.class);
         var camPos = renderWrapper.getCameraExactPosition();
         double camX = camPos.x;
@@ -200,9 +218,12 @@ public class VulkanCloudRenderer {
         // combined MC+DH depth buffer written by the composite pass.
         VRenderSystem.applyProjectionMatrix(mcProjection.createJomlMatrix());
 
-        // Set up model-view matrix — push, translate, apply
+        // Set up model-view matrix: start with the camera's view matrix (rotation),
+        // then apply cloud translation. At renderLevel @RETURN, the modelview stack
+        // has been reset, so we must restore the camera view matrix manually.
         Matrix4fStack poseStack = RenderSystem.getModelViewStack();
         poseStack.pushMatrix();
+        poseStack.set(mcModelView.createJomlMatrix());
         poseStack.translate(-xTranslation, yTranslation, -zTranslation);
         VRenderSystem.applyModelViewMatrix(poseStack);
         VRenderSystem.calculateMVP();
