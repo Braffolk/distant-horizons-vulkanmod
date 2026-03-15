@@ -1,3 +1,29 @@
+## v2.4.0-3.0.0+vm.1
+
+**Clouds, weather, and DH 3.0 support.** Clouds now render correctly behind and in front of LOD terrain. Weather effects (rain, snow) are no longer hidden behind LODs. Compatible with both DH 2.4.x and 3.0.x (nightly) from a single jar.
+
+### What's New
+
+- **Cloud rendering** — clouds now render with correct depth against LOD terrain (on 1.21.11). Supports fast and fancy cloud modes.
+- **Weather fixed** — rain, snow, and particles no longer render behind LODs. The rendering pipeline has been reordered so weather effects always appear in front of terrain as expected.
+- **DH 3.0 support** — now works with both Distant Horizons 2.4.x and 3.0.x (nightly).
+- **Smoother camera movement** — camera velocity now dynamically adjusts overdraw to prevent LOD pop-in when moving fast, matching base DH behavior.
+
+### Known Issues
+
+- Cloud rendering is only available on VulkanMod 0.6+ (MC 1.21.11). VM 0.4.2 uses MC's default cloud rendering.
+- Rare LOD flicker when detail level changes during fast camera movement.
+
+### Technical Details
+
+- Custom Vulkan cloud renderer builds cloud geometry as VBO meshes and renders them with MC's projection matrix for accurate depth testing against LOD terrain.
+- `uModelOffset` now uses Vulkan push constants on VM 0.6.1+ instead of per-draw UBO re-uploads, reducing CPU-side overhead.
+- LOD compositing and post-processing (SSAO, fog) moved to `deferredComposite` to execute before MC's weather pass.
+- In NONE fade mode, clouds render before the LOD composite so LODs draw on top (no depth buffer available for comparison).
+- Added `DhFrameProfiler` — lightweight per-frame timing for all rendering phases (disabled by default, zero overhead when off).
+
+
+
 ## v2.4.0-2.4.6+vm.5
 
 **Major VRAM fix** — GPU memory now properly cleans up during gameplay. Previously, VRAM would grow indefinitely (easily reaching 7GB+) as you explored or left and rejoined servers. With this fix, VRAM stays stable under normal use and reliably frees up between server sessions. Additionally, rendering at extreme altitudes and high render distances is now more stable, and SSAO performance is improved at long distances.

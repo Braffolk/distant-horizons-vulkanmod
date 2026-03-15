@@ -21,11 +21,12 @@ LODs are rendered using VulkanMod's Vulkan pipeline instead of OpenGL, enabling 
 - Noise / dithering on LODs
 - Fade / clip distance transitions
 - Earth curvature rendering
+- Cloud rendering with correct depth against LOD terrain (VM 0.6+)
+- Weather effects (rain, snow) render correctly in front of LODs
 
 ### ⚠️ Not Yet Implemented
 - **Shader pack support** — VulkanMod does not support shader packs (Iris/OptiFine)
 - **Wireframe debug mode**
-- **Cloud rendering** to LOD distance
 
 See [docs/vulkan_implementation_roadmap.md](docs/vulkan_implementation_roadmap.md) for the full technical roadmap.
 
@@ -34,7 +35,7 @@ See [docs/vulkan_implementation_roadmap.md](docs/vulkan_implementation_roadmap.m
 - **Minecraft:** 1.20.6 or 1.21.11
 - **Mod loader:** Fabric
 - **VulkanMod** must be installed (0.4.2 for MC 1.20.6, 0.6.1 for MC 1.21.11)
-- **Distant Horizons** 2.4.5+ must be installed
+- **Distant Horizons** 2.4.0+ or 3.0.0+ must be installed
 
 > This is not the official Distant Horizons mod. For the original, see the [GitLab](https://gitlab.com/distant-horizons-team/distant-horizons) or [CurseForge](https://www.curseforge.com/minecraft/mc-mods/distant-horizons) pages.
 
