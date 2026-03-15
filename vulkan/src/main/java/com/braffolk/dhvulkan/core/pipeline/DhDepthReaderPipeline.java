@@ -8,7 +8,7 @@
  *    TRANSFER_SRC for vkCmdCopyImage.
  */
 
-package com.braffolk.dhvulkan;
+package com.braffolk.dhvulkan.core.pipeline;
 
 import com.braffolk.dhvulkan.compat.Compat;
 import com.mojang.blaze3d.vertex.VertexFormat;
@@ -23,7 +23,7 @@ import net.vulkanmod.vulkan.shader.PipelineState;
 import net.vulkanmod.vulkan.shader.descriptor.ImageDescriptor;
 import net.vulkanmod.vulkan.shader.descriptor.UBO;
 import net.vulkanmod.vulkan.shader.layout.AlignedStruct;
-import net.vulkanmod.vulkan.texture.VTextureSelector;
+
 import net.vulkanmod.vulkan.texture.VulkanImage;
 
 import java.io.BufferedReader;
@@ -72,6 +72,7 @@ public class DhDepthReaderPipeline {
     private net.vulkanmod.vulkan.util.MappedBuffer dummyBuf;
     private int width, height;
     private boolean initialized = false;
+
 
     private static final com.seibel.distanthorizons.core.logging.DhLogger LOGGER = new com.seibel.distanthorizons.core.logging.DhLoggerBuilder()
             .build();
@@ -152,6 +153,7 @@ public class DhDepthReaderPipeline {
         // Prepare depth-only view (does NOT restore — stays set through upload)
         Compat.prepareMcDepthForSampling(MC_DEPTH_READ_SLOT, mcDepth);
 
+
         // Save/set state
         boolean prevCull = VRenderSystem.cull;
         boolean prevBlend = PipelineState.blendInfo.enabled;
@@ -162,6 +164,8 @@ public class DhDepthReaderPipeline {
         Compat.beginRenderPass(this.renderPass, this.framebuffer);
         Renderer.getInstance().bindGraphicsPipeline(this.pipeline);
         Renderer.getInstance().uploadAndBindUBOs(this.pipeline);
+
+
         Compat.draw(this.quadVertexBuffer, 3);
         Renderer.getInstance().endRenderPass();
 
@@ -172,6 +176,17 @@ public class DhDepthReaderPipeline {
         VRenderSystem.cull = prevCull;
         PipelineState.blendInfo.enabled = prevBlend;
 
+        return this.framebuffer.getColorAttachment();
+    }
+
+    /**
+     * Returns the cached R32F depth texture from the last readDepth() call.
+     * This texture persists between frames (only recreated on resize),
+     * so it can be used in the NEXT frame's composite for 1-frame-delayed
+     * MC depth comparison.
+     */
+    public VulkanImage getCachedDepthTexture() {
+        if (!this.initialized || this.framebuffer == null) return null;
         return this.framebuffer.getColorAttachment();
     }
 

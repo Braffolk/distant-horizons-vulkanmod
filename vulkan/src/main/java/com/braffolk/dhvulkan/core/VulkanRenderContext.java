@@ -5,7 +5,7 @@
  *    VulkanMod integration for native Vulkan rendering backend.
  */
 
-package com.braffolk.dhvulkan;
+package com.braffolk.dhvulkan.core;
 
 import com.braffolk.dhvulkan.compat.Compat;
 import com.mojang.blaze3d.vertex.VertexFormat;
@@ -71,6 +71,12 @@ public class VulkanRenderContext {
      */
     private final Map<String, MappedBuffer> uniformBuffers = new HashMap<>();
 
+    /**
+     * Direct reference to the model offset buffer — avoids HashMap.get(String)
+     * on the hottest uniform setter (~200× per frame per render pass).
+     */
+    private MappedBuffer modelOffsetBuffer;
+
     // =============//
     // constructor //
     // =============//
@@ -86,7 +92,7 @@ public class VulkanRenderContext {
     }
 
     public static boolean isActive() {
-        return com.braffolk.dhvulkan.duck.IVulkanGLProxy.isVulkanModActive();
+        return com.braffolk.dhvulkan.compat.Compat.isVulkanModActive();
     }
 
     // ================//
@@ -143,6 +149,13 @@ public class VulkanRenderContext {
         String vertSource = readShaderResource("shaders/vulkan/dh_terrain.vert");
         String fragSource = readShaderResource("shaders/vulkan/dh_terrain.frag");
 
+        // On VM 0.6.1: enable push constants in shaders via preprocessor define.
+        // Must be injected AFTER #version (GLSL requires #version as first directive).
+        if (Compat.hasPushConstants()) {
+            vertSource = vertSource.replaceFirst("(#version 450)", "$1\n#define USE_PUSH_CONSTANTS");
+            fragSource = fragSource.replaceFirst("(#version 450)", "$1\n#define USE_PUSH_CONSTANTS");
+        }
+
         Pipeline.Builder builder = new Pipeline.Builder(DH_TERRAIN_FORMAT);
         builder.compileShaders("dh_terrain", vertSource, fragSource);
 
@@ -155,7 +168,20 @@ public class VulkanRenderContext {
 
         // Create persistent MappedBuffer for each uniform and set as supplier
         addDhUniform(uboBuilder, "matrix4x4", "uCombinedMatrix", 1, 64); // mat4 = 16 floats = 64 bytes
-        addDhUniform(uboBuilder, "float", "uModelOffset", 3, 12); // vec3 = 3 floats = 12 bytes
+
+        // uModelOffset: push constant on VM 0.6.1, UBO on VM 0.4.2
+        this.modelOffsetBuffer = new MappedBuffer(12); // vec3 = 3 floats = 12 bytes
+        if (Compat.hasPushConstants()) {
+            // Model offset as push constant — zero descriptor overhead per draw
+            Compat.buildAndSetPushConstants(builder, "float", "uModelOffset", 3,
+                    () -> this.modelOffsetBuffer);
+        } else {
+            // Fallback: model offset in UBO (requires full rebind per draw)
+            this.uniformBuffers.put("uModelOffset", this.modelOffsetBuffer);
+            Compat.addUniformWithBuffer(uboBuilder, "float", "uModelOffset", 3,
+                    () -> this.modelOffsetBuffer);
+        }
+
         addDhUniform(uboBuilder, "float", "uWorldYOffset", 1, 4);
         addDhUniform(uboBuilder, "float", "uMircoOffset", 1, 4);
         addDhUniform(uboBuilder, "float", "uEarthRadius", 1, 4);
@@ -190,11 +216,14 @@ public class VulkanRenderContext {
      * frame.
      */
     private void addDhUniform(AlignedStruct.Builder builder, String type, String name, int count, int byteSize) {
-        // Create a persistent MappedBuffer for this uniform
         MappedBuffer mb = new MappedBuffer(byteSize);
         this.uniformBuffers.put(name, mb);
 
-        // Use Compat to handle VM version differences in uniform setup
+        // Cache direct reference for the hot-path model offset uniform
+        if ("uModelOffset".equals(name)) {
+            this.modelOffsetBuffer = mb;
+        }
+
         Compat.addUniformWithBuffer(builder, type, name, count, () -> mb);
     }
 
@@ -239,6 +268,25 @@ public class VulkanRenderContext {
         mb.putFloat(0, value.x);
         mb.putFloat(4, value.y);
         mb.putFloat(8, value.z);
+    }
+
+    /**
+     * Write model offset directly (hot path, ~200× per frame).
+     * Uses direct field reference — no HashMap lookup.
+     */
+    public void setModelOffset(Vec3f value) {
+        this.modelOffsetBuffer.putFloat(0, value.x);
+        this.modelOffsetBuffer.putFloat(4, value.y);
+        this.modelOffsetBuffer.putFloat(8, value.z);
+    }
+
+    /**
+     * Apply per-draw state before each drawIndexed call.
+     * - VM 0.6.1: issues vkCmdPushConstants (12 bytes to cmd buffer, no alloc)
+     * - VM 0.4.2: full uploadAndBindUBOs (descriptor set alloc + UBO copy)
+     */
+    public void applyPerDrawState() {
+        Compat.applyPerDrawState(this.terrainPipeline);
     }
 
     /** Write a float uniform value */

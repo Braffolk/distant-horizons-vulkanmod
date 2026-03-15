@@ -1,10 +1,13 @@
 package com.braffolk.dhvulkan;
 
+import com.braffolk.dhvulkan.bridge.DhIntegration;
+import com.braffolk.dhvulkan.bridge.DhVersionDetector;
 import com.braffolk.dhvulkan.config.DhVulkanConfig;
-import com.braffolk.dhvulkan.duck.IVulkanGLProxy;
-import com.braffolk.dhvulkan.duck.IVulkanLodRenderer;
+import com.braffolk.dhvulkan.core.VulkanBackend;
+import com.braffolk.dhvulkan.core.VulkanRenderEngine;
+import com.braffolk.dhvulkan.dh24.Dh24Integration;
+import com.braffolk.dhvulkan.compat.Compat;
 import com.mojang.brigadier.arguments.IntegerArgumentType;
-import com.seibel.distanthorizons.core.render.renderer.LodRenderer;
 import net.fabricmc.api.ClientModInitializer;
 import net.fabricmc.fabric.api.client.command.v2.ClientCommandManager;
 import net.fabricmc.fabric.api.client.command.v2.ClientCommandRegistrationCallback;
@@ -14,15 +17,18 @@ import org.apache.logging.log4j.Logger;
 
 /**
  * Main entrypoint for the DH-VulkanMod extension mod.
+ * Detects DH version at runtime and initializes the appropriate integration.
  */
 public class DhVulkanModEntrypoint implements ClientModInitializer {
 
     private static final Logger LOGGER = LogManager.getLogger("DH-VulkanMod");
-    private static VulkanRenderDelegate pendingDelegate;
 
     private static final String[] MODE_NAMES = {
             "Normal", "DH Depth", "SSAO", "Fog Alpha", "Fog Color", "Normals", "MC Depth"
     };
+
+    /** The active integration (dh24 or api), set during init */
+    private static DhIntegration activeIntegration;
 
     @Override
     public void onInitializeClient() {
@@ -53,31 +59,61 @@ public class DhVulkanModEntrypoint implements ClientModInitializer {
                             })));
         });
 
-        if (!IVulkanGLProxy.isVulkanModActive()) {
+        if (!Compat.isVulkanModActive()) {
             LOGGER.warn("[DH-VulkanMod] VulkanMod is NOT detected. Extension will be inactive.");
             return;
         }
 
         LOGGER.info("[DH-VulkanMod] VulkanMod detected. Vulkan rendering backend will be used.");
-        pendingDelegate = new VulkanRenderDelegate();
-        LOGGER.info("[DH-VulkanMod] VulkanRenderDelegate created. Will wire on first render frame.");
+
+        // Create the shared Vulkan backend
+        VulkanBackend backend = new VulkanRenderEngine();
+
+        // Detect DH version and initialize the appropriate integration
+        DhVersionDetector.DhVersion dhVersion = DhVersionDetector.detect();
+        LOGGER.info("[DH-VulkanMod] Detected DH version: {}", dhVersion);
+
+        switch (dhVersion) {
+            case DH_3_0:
+                com.braffolk.dhvulkan.api.ApiDhIntegration apiIntegration = new com.braffolk.dhvulkan.api.ApiDhIntegration();
+                apiIntegration.initialize(backend);
+                activeIntegration = apiIntegration;
+                break;
+            case DH_2_4:
+            default:
+                activeIntegration = new Dh24Integration();
+                activeIntegration.initialize(backend);
+                break;
+        }
+
+        LOGGER.info("[DH-VulkanMod] Using integration: {}", activeIntegration.getName());
     }
 
     /**
      * Called from MixinLodRenderer before the first render pass to wire the
-     * delegate.
+     * delegate. Only applies to DH 2.4 path.
      */
     public static void wireIfNeeded() {
-        if (pendingDelegate == null)
-            return;
+        if (activeIntegration instanceof Dh24Integration) {
+            ((Dh24Integration) activeIntegration).wireIfNeeded();
+        }
+    }
 
-        try {
-            IVulkanLodRenderer lodRenderer = (IVulkanLodRenderer) LodRenderer.INSTANCE;
-            lodRenderer.dhvulkan$setVulkanDelegate(pendingDelegate);
-            LOGGER.info("[DH-VulkanMod] VulkanRenderDelegate wired into LodRenderer. Ready.");
-            pendingDelegate = null;
-        } catch (Exception e) {
-            LOGGER.error("[DH-VulkanMod] Failed to wire delegate", e);
+    /** Get the active integration (for mixins that need it) */
+    public static DhIntegration getActiveIntegration() {
+        return activeIntegration;
+    }
+
+    /**
+     * Called from MixinLevelRenderer at renderLevel @RETURN to read MC's depth
+     * buffer while the swapchain depth is in a known-good Vulkan image layout.
+     * The result is cached and used by the next deferredComposite() call.
+     */
+    public static void readAndCacheMcDepth() {
+        if (activeIntegration == null) return;
+        VulkanBackend backend = activeIntegration.getBackend();
+        if (backend != null) {
+            backend.readAndCacheMcDepth();
         }
     }
 }

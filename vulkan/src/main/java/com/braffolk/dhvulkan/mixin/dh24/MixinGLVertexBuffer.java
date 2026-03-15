@@ -1,6 +1,6 @@
-package com.braffolk.dhvulkan.mixin;
+package com.braffolk.dhvulkan.mixin.dh24;
 
-import com.braffolk.dhvulkan.duck.IVulkanVertexBuffer;
+import com.braffolk.dhvulkan.dh24.duck.IVulkanVertexBuffer;
 import com.seibel.distanthorizons.core.render.glObject.buffer.GLVertexBuffer;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Unique;

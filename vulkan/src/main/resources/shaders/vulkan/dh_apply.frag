@@ -5,10 +5,16 @@ layout(location = 0) out vec4 fragColor;
 
 // UBO at binding 0
 layout(std140, binding = 0) uniform CompositeUBO {
-    mat4 uInvProj;    // inverse of DH's projection matrix (for view-space reconstruction)
-    mat4 uMcProj;     // MC's projection matrix (for remapping DH depth → MC depth)
-    int uDebugMode;   // 0=off, 1=depth, 2=ssao, 3=fog_alpha, 4=fog_color, 5=normals, 6=mc_depth
-    int uUseMcDepth;  // 0=no MC depth comparison, 1=discard where MC terrain is closer
+    mat4 uInvProj;          // inverse of DH's projection matrix (for view-space reconstruction)
+    mat4 uMcProj;           // MC's projection matrix (for remapping DH depth → MC depth)
+    mat4 uInvMcMvmProj;     // inverse of MC's modelview-projection matrix (for MC fragment distance)
+    mat4 uRemapProj;        // = uMcProj * uInvProj — fused unproject+reproject (1× mat4 instead of 2×)
+    int uDebugMode;         // 0=off, 1=depth, 2=ssao, 3=fog_alpha, 4=fog_color, 5=normals, 6=mc_depth
+    int uUseMcDepth;        // 0=no MC depth comparison, 1=use MC depth for fade
+    float uStartFadeBlockDist;  // distance where DH fade begins (blocks)
+    float uEndFadeBlockDist;    // distance where DH fade ends (blocks)
+    float uStartFadeBlockDistSq; // squared, for dot() instead of length()
+    float uEndFadeBlockDistSq;   // squared, for dot() instead of length()
 };
 
 layout(set = 0, binding = 1) uniform sampler2D gDhColorTexture;
@@ -34,11 +40,8 @@ vec3 reconstructViewPos(vec2 uv, float depth) {
  * with MC's projection.
  */
 float remapDepthDhToMc(vec2 uv, float dhDepth) {
-    // Unproject from DH clip space to view space
-    vec4 viewPos = uInvProj * vec4(vec3(uv, dhDepth) * 2.0 - 1.0, 1.0);
-    viewPos /= viewPos.w;
-    // Reproject to MC clip space
-    vec4 mcClip = uMcProj * viewPos;
+    // Single mat4 multiply: uRemapProj = uMcProj * uInvProj (pre-multiplied on CPU)
+    vec4 mcClip = uRemapProj * vec4(vec3(uv, dhDepth) * 2.0 - 1.0, 1.0);
     return (mcClip.z / mcClip.w) * 0.5 + 0.5;
 }
 
@@ -70,17 +73,31 @@ void main() {
         discard;
     }
 
-    // MC depth comparison: if MC rendered terrain at this pixel, discard the LOD.
+    // MC depth comparison with distance-based fade (matching DH base's vanillaFade.frag).
+    // Instead of a hard discard, smoothly fade LODs based on MC fragment distance.
+    float fadeMultiplier = 1.0;
     if (uUseMcDepth != 0) {
         float mcDepth = texture(gMcDepthTexture, TexCoord).r;
-        if (mcDepth < 0.9999) {
-            discard;  // MC terrain exists here → hide LOD
+        if (mcDepth < 1.0) {
+            // MC terrain exists — calculate view-space distance for fade
+            vec4 mcNdc = vec4(TexCoord * 2.0 - 1.0, mcDepth * 2.0 - 1.0, 1.0);
+            vec4 mcViewPos = uInvMcMvmProj * mcNdc;
+            mcViewPos /= mcViewPos.w;
+            // Use squared distance to avoid per-pixel sqrt
+            float mcFragDistSq = dot(mcViewPos.xyz, mcViewPos.xyz);
+
+            // smoothstep on squared values (thresholds pre-squared on CPU)
+            fadeMultiplier = smoothstep(uStartFadeBlockDistSq, uEndFadeBlockDistSq, mcFragDistSq);
+            if (fadeMultiplier <= 0.0) {
+                discard;  // fully within MC terrain range
+            }
         }
     }
 
     if (uDebugMode == 0) {
-        // Normal rendering
+        // Normal rendering — apply distance fade for MC/DH transition
         fragColor = texture(gDhColorTexture, TexCoord);
+        fragColor *= fadeMultiplier;  // premultiplied alpha: scale RGB+A together
     }
     else if (uDebugMode == 1) {
         // Depth visualization: reconstruct view-space Z, map to grayscale
@@ -112,8 +129,17 @@ void main() {
         fragColor = texture(gDhColorTexture, TexCoord);
     }
 
-    // Remap DH depth to MC-compatible depth for correct occlusion against MC terrain.
-    // DH uses dhProjectionMatrix with extended near/far clip planes.
-    float mcCompatibleDepth = remapDepthDhToMc(TexCoord, dhDepth);
-    gl_FragDepth = min(mcCompatibleDepth + 0.001, 1.0);
+    if (uUseMcDepth != 0) {
+        // Phase 2b (with MC depth comparison): remap DH depth to MC-compatible depth.
+        // Clamp to 0.999 so LODs beyond MC's far plane still have depth < sky (1.0),
+        // ensuring clouds (depth ~1.0) fail the depth test against distant LODs.
+        float mcCompatibleDepth = remapDepthDhToMc(TexCoord, dhDepth);
+        gl_FragDepth = clamp(mcCompatibleDepth, 0.0, 0.999);
+    } else {
+        // Phase 1 (without MC depth): write far-plane depth so MC terrain AND
+        // weather both render freely on top via LEQUAL. LOD colors are still
+        // blended onto the swapchain — only the depth is transparent.
+        // Phase 2b re-composites with proper depth after weather renders.
+        gl_FragDepth = 1.0;
+    }
 }

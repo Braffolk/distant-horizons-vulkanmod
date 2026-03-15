@@ -95,8 +95,7 @@ void main()
         }
         else
         {
-            float depthValue = textureLod(uDepthMap, TexCoord, 0).r;
-            fragColor.rgb = vec3(depthValue);
+            fragColor.rgb = vec3(fragmentDepth);
             fragColor.a = 1.0;
         }
     }

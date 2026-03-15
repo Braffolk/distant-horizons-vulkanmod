@@ -1,6 +1,6 @@
 # Distant Horizons → VulkanMod: Implementation Roadmap
 
-Status as of 2026-03-10: **Phases 1-7, extension mod port, multi-version support, and MC depth comparison complete.** LODs render with correct colors, depth, lightmap, transparency, compositing, SSAO, fog, noise, earth curvature, overdraw prevention, and MC depth occlusion via an extension mod (mixin-based, no DH source modifications). Supports MC 1.20.6 (VulkanMod 0.4.2) and MC 1.21.11 (VulkanMod 0.6.1) from a single codebase.
+Status as of 2026-03-15: **Phases 1-7, extension mod port, multi-version support, MC depth comparison, cloud rendering, and DH 3.0 compatibility complete.** LODs render with correct colors, depth, lightmap, transparency, compositing, SSAO, fog, noise, earth curvature, overdraw prevention, cloud depth, weather ordering, and MC depth occlusion via an extension mod (mixin-based, no DH source modifications). Supports MC 1.20.6 (VulkanMod 0.4.2) and MC 1.21.11 (VulkanMod 0.6.1) from a single codebase. Compatible with both DH 2.4.x and 3.0.x.
 
 ## Architecture Overview
 
@@ -8,7 +8,7 @@ The Vulkan backend is implemented as a **Fabric extension mod** (`dh-vulkanmod`)
 
 Core files under `vulkan/src/main/java/com/braffolk/dhvulkan/`:
 - **`VulkanRenderContext.java`** — Pipeline creation, UBO management, shader conversion, draw calls
-- **`VulkanRenderDelegate.java`** — `IVulkanRenderDelegate` impl, per-frame uniform fill, VBO cache
+- **`VulkanRenderEngine.java`** — `VulkanBackend` impl, per-frame uniform fill, VBO cache, draw dispatch
 - **`DhVulkanFramebuffer.java`** — DH-owned Vulkan framebuffer with color+depth, auto-resize
 - **`DhCompositePipeline.java`** — Fullscreen triangle composite with depth bias
 - **`DhSsaoPipeline.java`** — 2-pass SSAO post-process
@@ -106,7 +106,7 @@ Vulkan shaders under `vulkan/src/main/resources/shaders/vulkan/`:
 - [x] **Fog** — Vulkan-native 2-pass post-process via `DhFogPipeline.java`, see details below
 - [x] **Earth curvature** — vertex shader curves terrain based on `uEarthRadius`
 - [ ] **Wireframe debug** — needs `VK_POLYGON_MODE_LINE` pipeline variant
-- [ ] **Cloud rendering** — DH renders vanilla-style clouds to LOD distance (GL-only, needs investigation)
+- [x] **Cloud rendering** — custom Vulkan cloud renderer with VBO mesh geometry, correct depth compositing against LOD terrain. Supports fast/fancy modes. VM 0.6+ only.
 
 ### SSAO Implementation Details
 
@@ -282,13 +282,60 @@ The fix: **`MixinLodBufferContainer`** intercepts `uploadBuffersDirect()` at HEA
 
 ---
 
+## Phase 8: DH 3.0 Rendering API Integration -- IN PROGRESS
+
+**Phase 8a (core refactor) complete.** `VulkanBackend` interface extracted, pipelines in `core/pipeline/`, `RenderUniforms`/`VkVertexData` created, DH 2.4 mixins organized under `mixin/shared/`. Both DH 2.4.x and 3.0.x supported from a single codebase via `DhConfigHelper` abstraction.
+
+DH 3.0 introduces `AbstractDhRenderApiDefinition`, a pluggable rendering backend with injectable singletons for all render passes (`IDhMetaRenderer`, `IDhTerrainRenderer`, `IDhSsaoRenderer`, `IDhFogRenderer`, `IDhFarFadeRenderer`) and factory methods (`IVertexBufferWrapper`, `ILodContainerUniformBufferWrapper`). This eliminates 6 of our 8 current mixins.
+
+Instead of intercepting DH's GL pipeline via mixins, we register a `VkDhRenderApiDefinition` that provides Vulkan implementations of each renderer interface. DH calls our code directly.
+
+Still needed: `MixinLightMapWrapper` (DH's `MixinLightTexture` calls GL-dependent `uploadLightmap()` every frame from outside the rendering API), `MixinLevelRenderer` (post-MC-terrain composite timing), and a small `MixinDependencySetup` to register our API definition.
+
+### Architecture: Three-Layer Design
+
+```
+dhvulkan/
+├── core/             # Vulkan engine, DH-agnostic, zero DH imports
+│   ├── VulkanBackend       -- central rendering interface
+│   ├── VulkanRenderEngine  -- refactored from VulkanRenderDelegate
+│   ├── pipeline/           -- SSAO, fog, composite, depth reader
+│   └── data/               -- RenderUniforms, VkVertexData
+├── dh24/             # DH 2.4.x integration, all 8 current mixins + adapter
+│   ├── mixin/              -- MixinLodRenderer, MixinGLProxy, etc.
+│   ├── duck/               -- IVulkanVertexBuffer, etc.
+│   └── Dh24RenderDelegate  -- translates DH 2.4 types to core types
+├── api/              # DH 3.0 integration, API impls + 2-3 mixins
+│   ├── VkDhRenderApiDefinition
+│   ├── renderer/           -- VkMetaRenderer, VkTerrainRenderer, etc.
+│   ├── VkVertexBufferWrapper
+│   └── mixin/              -- MixinDependencySetup, MixinLightMapWrapper, MixinLevelRenderer
+├── bridge/           # Version detection + integration interface
+│   ├── DhIntegration       -- interface both paths implement
+│   └── DhVersionDetector   -- runtime class presence check
+└── compat/           # MC version compat (existing)
+```
+
+Nothing in `core/`, `api/`, `bridge/`, or `compat/` imports from `dh24/`. Dropping DH 2.4 support = delete `dh24/` + edit 2 files (`dh-vulkanmod.mixins.json`, `DhVulkanModEntrypoint.java`).
+
+`DhVersionDetector` checks for `AbstractDhRenderApiDefinition` class presence at runtime. `DhVulkanMixinPlugin.shouldApplyMixin()` conditionally loads only the appropriate mixin set.
+
+### Migration
+
+1. **Phase 8a**: Refactor core. Extract `VulkanBackend` interface from `VulkanRenderDelegate`, move pipelines to `core/pipeline/`, create `RenderUniforms`/`VkVertexData`. No behavior change. Move current mixins to `dh24/`. Verify existing DH 2.4 functionality.
+2. **Phase 8b**: Add DH 3.0 path. Implement `VkDhRenderApiDefinition` + renderer impls + `VkVertexBufferWrapper`. Add `MixinDependencySetup`. Wire conditional loading. Test with DH 3.0.
+
+---
+
 ## Key Files Reference
 
 | File | Purpose |
 |------|---------|
 | `compat/Compat.java` | Single source of truth for all version-specific API differences |
 | `VulkanRenderContext.java` | Pipeline, UBOs, shader conversion, draw API |
-| `VulkanRenderDelegate.java` | Per-frame uniforms, VBO cache, draw dispatch, render pass switching |
+| `VulkanRenderEngine.java` | Per-frame uniforms, VBO cache, draw dispatch, render pass switching |
+| `VulkanCloudRenderer.java` | Custom cloud rendering with VBO mesh and depth compositing |
+| `DhFrameProfiler.java` | Lightweight per-frame timing for all rendering phases |
 | `DhVulkanFramebuffer.java` | DH-owned Vulkan framebuffer (color + depth) |
 | `DhCompositePipeline.java` | Fullscreen triangle composite pipeline |
 | `DhSsaoPipeline.java` | 2-pass SSAO post-process |

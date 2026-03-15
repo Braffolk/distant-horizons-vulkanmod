@@ -49,3 +49,4 @@ docs/handoff*
 docs/*handoff*
 docs/*HANDOFF*
 jars/
+com/seibel/distanthorizons/core/config/Config$Client$Advanced$Graphics$Culling.class

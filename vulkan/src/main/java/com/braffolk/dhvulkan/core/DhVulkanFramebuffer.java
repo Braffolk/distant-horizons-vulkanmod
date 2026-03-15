@@ -5,7 +5,7 @@
  *    DH-owned Vulkan framebuffer for Phase 6 render pass integration.
  */
 
-package com.braffolk.dhvulkan;
+package com.braffolk.dhvulkan.core;
 
 import com.braffolk.dhvulkan.compat.Compat;
 import com.seibel.distanthorizons.core.logging.DhLogger;

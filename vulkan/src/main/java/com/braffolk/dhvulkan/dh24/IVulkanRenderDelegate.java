@@ -3,7 +3,7 @@
  *    licensed under the GNU LGPL v3 License.
  */
 
-package com.braffolk.dhvulkan;
+package com.braffolk.dhvulkan.dh24;
 
 import com.seibel.distanthorizons.api.methods.events.sharedParameterObjects.DhApiRenderParam;
 import com.seibel.distanthorizons.core.render.glObject.buffer.GLVertexBuffer;
@@ -67,6 +67,12 @@ public interface IVulkanRenderDelegate {
      * exists.
      */
     void deferredComposite(DhApiRenderParam renderParam);
+
+    /**
+     * Late re-composite: called from renderLevel @RETURN, AFTER terrain + weather.
+     * Re-composites DH LODs with real MC depth for SINGLE/DOUBLE fade modes.
+     */
+    void lateComposite(DhApiRenderParam renderParam);
 
     /**
      * Free the cached Vulkan buffer associated with a GLVertexBuffer.

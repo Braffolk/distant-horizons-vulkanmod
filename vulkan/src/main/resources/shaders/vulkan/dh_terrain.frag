@@ -21,7 +21,9 @@ layout(location = 0) out vec4 fragColor;
 // Uniforms — shared with vertex shader
 layout(set = 0, binding = 0) uniform DhUniforms {
     mat4 uCombinedMatrix;
+#ifndef USE_PUSH_CONSTANTS
     vec3 uModelOffset;
+#endif
     float uWorldYOffset;
     float uMircoOffset;
     float uEarthRadius;
@@ -39,9 +41,11 @@ layout(set = 0, binding = 0) uniform DhUniforms {
 //    Noise functions    //
 // ==================== //
 
-float rand(float co) { return fract(sin(co * 91.3458) * 47453.5453); }
-float rand(vec2 co) { return fract(sin(dot(co.xy, vec2(12.9898, 78.233))) * 43758.5453); }
-float rand(vec3 co) { return rand(co.xy + rand(co.z)); }
+// Integer hash — no trig, faster than sin-based PRNG on GPU
+uint ihash(uint x) { x += x << 10u; x ^= x >> 6u; x += x << 3u; x ^= x >> 11u; x += x << 15u; return x; }
+float rand(float co) { return float(ihash(floatBitsToUint(co))) / 4294967295.0; }
+float rand(vec2 co) { return float(ihash(ihash(floatBitsToUint(co.x)) ^ floatBitsToUint(co.y))) / 4294967295.0; }
+float rand(vec3 co) { return float(ihash(ihash(ihash(floatBitsToUint(co.x)) ^ floatBitsToUint(co.y)) ^ floatBitsToUint(co.z))) / 4294967295.0; }
 
 vec3 quantize(vec3 val, int stepSize)
 {

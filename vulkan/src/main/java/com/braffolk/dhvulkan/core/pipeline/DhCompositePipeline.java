@@ -5,7 +5,7 @@
  *    Composite pipeline for Phase 6 — composites DH's framebuffer onto MC's.
  */
 
-package com.braffolk.dhvulkan;
+package com.braffolk.dhvulkan.core.pipeline;
 
 import com.braffolk.dhvulkan.compat.Compat;
 import com.mojang.blaze3d.vertex.VertexFormat;
@@ -71,8 +71,14 @@ public class DhCompositePipeline {
     // Persistent uniform buffers
     private MappedBuffer invProjBuf;
     private MappedBuffer mcProjBuf;
+    private MappedBuffer invMcMvmProjBuf;
+    private MappedBuffer remapProjBuf;
     private MappedBuffer debugModeBuf;
     private MappedBuffer useMcDepthBuf;
+    private MappedBuffer startFadeDistBuf;
+    private MappedBuffer endFadeDistBuf;
+    private MappedBuffer startFadeDistSqBuf;
+    private MappedBuffer endFadeDistSqBuf;
 
     /**
      * Simple vertex format for the fullscreen quad: just vec2 position.
@@ -144,6 +150,12 @@ public class DhCompositePipeline {
         this.mcProjBuf = new MappedBuffer(64);
         Compat.addUniformWithBuffer(uboBuilder, "matrix4x4", "uMcProj", 1, () -> this.mcProjBuf);
 
+        this.invMcMvmProjBuf = new MappedBuffer(64);
+        Compat.addUniformWithBuffer(uboBuilder, "matrix4x4", "uInvMcMvmProj", 1, () -> this.invMcMvmProjBuf);
+
+        this.remapProjBuf = new MappedBuffer(64);
+        Compat.addUniformWithBuffer(uboBuilder, "matrix4x4", "uRemapProj", 1, () -> this.remapProjBuf);
+
         this.debugModeBuf = new MappedBuffer(4);
         this.debugModeBuf.putInt(0, 0);
         Compat.addUniformWithBuffer(uboBuilder, "int", "uDebugMode", 1, () -> this.debugModeBuf);
@@ -152,12 +164,34 @@ public class DhCompositePipeline {
         this.useMcDepthBuf.putInt(0, 0);
         Compat.addUniformWithBuffer(uboBuilder, "int", "uUseMcDepth", 1, () -> this.useMcDepthBuf);
 
+        this.startFadeDistBuf = new MappedBuffer(4);
+        this.startFadeDistBuf.putFloat(0, 0);
+        Compat.addUniformWithBuffer(uboBuilder, "float", "uStartFadeBlockDist", 1, () -> this.startFadeDistBuf);
+
+        this.endFadeDistBuf = new MappedBuffer(4);
+        this.endFadeDistBuf.putFloat(0, 0);
+        Compat.addUniformWithBuffer(uboBuilder, "float", "uEndFadeBlockDist", 1, () -> this.endFadeDistBuf);
+
+        this.startFadeDistSqBuf = new MappedBuffer(4);
+        this.startFadeDistSqBuf.putFloat(0, 0);
+        Compat.addUniformWithBuffer(uboBuilder, "float", "uStartFadeBlockDistSq", 1, () -> this.startFadeDistSqBuf);
+
+        this.endFadeDistSqBuf = new MappedBuffer(4);
+        this.endFadeDistSqBuf.putFloat(0, 0);
+        Compat.addUniformWithBuffer(uboBuilder, "float", "uEndFadeBlockDistSq", 1, () -> this.endFadeDistSqBuf);
+
         UBO mainUbo = uboBuilder.buildUBO(0, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT);
-        Compat.setUniformSuppliers(mainUbo, java.util.Map.of(
-                "uInvProj", this.invProjBuf,
-                "uMcProj", this.mcProjBuf,
-                "uDebugMode", this.debugModeBuf,
-                "uUseMcDepth", this.useMcDepthBuf));
+        Compat.setUniformSuppliers(mainUbo, java.util.Map.ofEntries(
+                java.util.Map.entry("uInvProj", this.invProjBuf),
+                java.util.Map.entry("uMcProj", this.mcProjBuf),
+                java.util.Map.entry("uInvMcMvmProj", this.invMcMvmProjBuf),
+                java.util.Map.entry("uRemapProj", this.remapProjBuf),
+                java.util.Map.entry("uDebugMode", this.debugModeBuf),
+                java.util.Map.entry("uUseMcDepth", this.useMcDepthBuf),
+                java.util.Map.entry("uStartFadeBlockDist", this.startFadeDistBuf),
+                java.util.Map.entry("uEndFadeBlockDist", this.endFadeDistBuf),
+                java.util.Map.entry("uStartFadeBlockDistSq", this.startFadeDistSqBuf),
+                java.util.Map.entry("uEndFadeBlockDistSq", this.endFadeDistSqBuf)));
         ubos.add(mainUbo);
 
         // Image descriptors — DH color/depth + SSAO/fog debug + MC depth
@@ -186,7 +220,8 @@ public class DhCompositePipeline {
     public void render(VulkanImage dhColorTexture, VulkanImage dhDepthTexture,
             VulkanImage ssaoTexture, VulkanImage fogTexture,
             VulkanImage mcDepthTexture,
-            int debugMode, float[] invProjMatrix, float[] mcProjMatrix) {
+            int debugMode, float[] invProjMatrix, float[] mcProjMatrix,
+            float[] invMcMvmProjMatrix, float startFadeDist, float endFadeDist) {
         if (!this.initialized) {
             return;
         }
@@ -202,6 +237,33 @@ public class DhCompositePipeline {
         if (mcProjMatrix != null && mcProjMatrix.length == 16) {
             for (int i = 0; i < 16; i++) {
                 this.mcProjBuf.putFloat(i * 4, mcProjMatrix[i]);
+            }
+        }
+        if (invMcMvmProjMatrix != null && invMcMvmProjMatrix.length == 16) {
+            for (int i = 0; i < 16; i++) {
+                this.invMcMvmProjBuf.putFloat(i * 4, invMcMvmProjMatrix[i]);
+            }
+        }
+        this.startFadeDistBuf.putFloat(0, startFadeDist);
+        this.endFadeDistBuf.putFloat(0, endFadeDist);
+        this.startFadeDistSqBuf.putFloat(0, startFadeDist * startFadeDist);
+        this.endFadeDistSqBuf.putFloat(0, endFadeDist * endFadeDist);
+
+        // Compute fused remap matrix: uRemapProj = mcProj * invProj
+        // This saves one mat4×vec4 per pixel in the shader
+        if (invProjMatrix != null && mcProjMatrix != null) {
+            float[] remapProj = new float[16];
+            for (int row = 0; row < 4; row++) {
+                for (int col = 0; col < 4; col++) {
+                    float sum = 0;
+                    for (int k = 0; k < 4; k++) {
+                        sum += mcProjMatrix[k * 4 + row] * invProjMatrix[col * 4 + k];
+                    }
+                    remapProj[col * 4 + row] = sum;
+                }
+            }
+            for (int i = 0; i < 16; i++) {
+                this.remapProjBuf.putFloat(i * 4, remapProj[i]);
             }
         }
 
@@ -224,8 +286,10 @@ public class DhCompositePipeline {
         }
 
         // Set pipeline state for composite: premultiplied alpha blend, no cull, depth
-        // write
+        // write. depthTest MUST be true — without it, Vulkan ignores gl_FragDepth
+        // writes entirely (per spec: depth attachment not modified when test disabled).
         boolean prevCull = VRenderSystem.cull;
+        boolean prevDepthTest = VRenderSystem.depthTest;
         boolean prevDepthMask = VRenderSystem.depthMask;
         int prevDepthFun = VRenderSystem.depthFun;
         boolean prevBlend = PipelineState.blendInfo.enabled;
@@ -236,10 +300,10 @@ public class DhCompositePipeline {
         int prevBlendOp = PipelineState.blendInfo.blendOp;
 
         VRenderSystem.cull = false;
+        VRenderSystem.depthTest = true; // CRITICAL: enables gl_FragDepth writes
         VRenderSystem.depthMask = true;
-        // When using MC depth comparison, use GL_ALWAYS since the shader handles
-        // depth testing via the MC depth texture. Without MC depth, also use
-        // GL_ALWAYS because MC's depth buffer is uninitialized at this point.
+        // GL_ALWAYS: the shader handles depth comparison via the MC depth texture.
+        // The depth test always passes, but depth WRITES still happen via gl_FragDepth.
         VRenderSystem.depthFun = 519; // GL_ALWAYS
         // Premultiplied alpha blending: DH's color buffer is already
         // alpha-premultiplied from DH's own transparent pass blending,
@@ -261,6 +325,7 @@ public class DhCompositePipeline {
 
         // Restore state
         VRenderSystem.cull = prevCull;
+        VRenderSystem.depthTest = prevDepthTest;
         VRenderSystem.depthMask = prevDepthMask;
         VRenderSystem.depthFun = prevDepthFun;
         PipelineState.blendInfo.enabled = prevBlend;
@@ -298,6 +363,30 @@ public class DhCompositePipeline {
         if (this.useMcDepthBuf != null) {
             org.lwjgl.system.MemoryUtil.memFree(this.useMcDepthBuf.buffer);
             this.useMcDepthBuf = null;
+        }
+        if (this.invMcMvmProjBuf != null) {
+            org.lwjgl.system.MemoryUtil.memFree(this.invMcMvmProjBuf.buffer);
+            this.invMcMvmProjBuf = null;
+        }
+        if (this.startFadeDistBuf != null) {
+            org.lwjgl.system.MemoryUtil.memFree(this.startFadeDistBuf.buffer);
+            this.startFadeDistBuf = null;
+        }
+        if (this.endFadeDistBuf != null) {
+            org.lwjgl.system.MemoryUtil.memFree(this.endFadeDistBuf.buffer);
+            this.endFadeDistBuf = null;
+        }
+        if (this.remapProjBuf != null) {
+            org.lwjgl.system.MemoryUtil.memFree(this.remapProjBuf.buffer);
+            this.remapProjBuf = null;
+        }
+        if (this.startFadeDistSqBuf != null) {
+            org.lwjgl.system.MemoryUtil.memFree(this.startFadeDistSqBuf.buffer);
+            this.startFadeDistSqBuf = null;
+        }
+        if (this.endFadeDistSqBuf != null) {
+            org.lwjgl.system.MemoryUtil.memFree(this.endFadeDistSqBuf.buffer);
+            this.endFadeDistSqBuf = null;
         }
 
         this.initialized = false;

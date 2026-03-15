@@ -1,6 +1,6 @@
-package com.braffolk.dhvulkan.mixin;
+package com.braffolk.dhvulkan.mixin.dh24;
 
-import com.braffolk.dhvulkan.duck.IVulkanGLProxy;
+import com.braffolk.dhvulkan.compat.Compat;
 import com.seibel.distanthorizons.api.enums.config.EDhApiGpuUploadMethod;
 import com.seibel.distanthorizons.core.render.glObject.GLProxy;
 import org.spongepowered.asm.mixin.Mixin;
@@ -31,7 +31,7 @@ public class MixinGLProxy {
 
     @Inject(method = "getInstance", at = @At("HEAD"), cancellable = true)
     private static void dhvulkan$skipGetInstance(CallbackInfoReturnable<GLProxy> cir) {
-        if (!IVulkanGLProxy.isVulkanModActive())
+        if (!Compat.isVulkanModActive())
             return;
 
         if (!dhvulkan$dummyCreated) {
@@ -76,7 +76,7 @@ public class MixinGLProxy {
 
     @Inject(method = "runningOnRenderThread", at = @At("HEAD"), cancellable = true)
     private static void dhvulkan$alwaysOnRenderThread(CallbackInfoReturnable<Boolean> cir) {
-        if (IVulkanGLProxy.isVulkanModActive()) {
+        if (Compat.isVulkanModActive()) {
             cir.setReturnValue(true);
         }
     }

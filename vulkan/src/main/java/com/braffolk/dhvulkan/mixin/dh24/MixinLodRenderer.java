@@ -1,8 +1,8 @@
-package com.braffolk.dhvulkan.mixin;
+package com.braffolk.dhvulkan.mixin.dh24;
 
-import com.braffolk.dhvulkan.IVulkanRenderDelegate;
-import com.braffolk.dhvulkan.duck.IVulkanGLProxy;
-import com.braffolk.dhvulkan.duck.IVulkanLodRenderer;
+import com.braffolk.dhvulkan.dh24.IVulkanRenderDelegate;
+import com.braffolk.dhvulkan.compat.Compat;
+import com.braffolk.dhvulkan.dh24.duck.IVulkanLodRenderer;
 import com.seibel.distanthorizons.api.methods.events.sharedParameterObjects.DhApiRenderParam;
 import com.seibel.distanthorizons.core.dataObjects.render.bufferBuilding.LodBufferContainer;
 import com.seibel.distanthorizons.core.render.RenderBufferHandler;
@@ -64,7 +64,15 @@ public class MixinLodRenderer implements IVulkanLodRenderer {
     public void dhvulkan$compositeVulkanFrame() {
         if (this.dhvulkan$vulkanDelegate != null && this.dhvulkan$lastVulkanRenderParams != null) {
             this.dhvulkan$vulkanDelegate.deferredComposite(this.dhvulkan$lastVulkanRenderParams);
-            this.dhvulkan$lastVulkanRenderParams = null;
+            // Don't null params yet — lateComposite (Phase 2b) still needs them.
+        }
+    }
+
+    @Override
+    public void dhvulkan$lateCompositeVulkanFrame() {
+        if (this.dhvulkan$vulkanDelegate != null && this.dhvulkan$lastVulkanRenderParams != null) {
+            this.dhvulkan$vulkanDelegate.lateComposite(this.dhvulkan$lastVulkanRenderParams);
+            this.dhvulkan$lastVulkanRenderParams = null; // Done with params for this frame.
         }
     }
 
@@ -76,7 +84,7 @@ public class MixinLodRenderer implements IVulkanLodRenderer {
      */
     @Inject(method = "createRenderObjects", at = @At("HEAD"), cancellable = true)
     private void dhvulkan$skipGLRenderObjectCreation(CallbackInfoReturnable<Boolean> cir) {
-        if (IVulkanGLProxy.isVulkanModActive()) {
+        if (Compat.isVulkanModActive()) {
             LodRenderer.LOGGER.info("[DH-VulkanMod] Skipping GL render object creation (VulkanMod active)");
             cir.setReturnValue(true); // signal success to caller
         }
@@ -91,7 +99,7 @@ public class MixinLodRenderer implements IVulkanLodRenderer {
     @Inject(method = "renderLodPass(Lcom/seibel/distanthorizons/core/render/renderer/RenderParams;Lcom/seibel/distanthorizons/core/wrapperInterfaces/minecraft/IProfilerWrapper;Z)V", at = @At("HEAD"), cancellable = true)
     private void dhvulkan$vulkanRenderPass(RenderParams renderParams, IProfilerWrapper profiler,
             boolean runningDeferredPass, CallbackInfo ci) {
-        if (!IVulkanGLProxy.isVulkanModActive()) {
+        if (!Compat.isVulkanModActive()) {
             return;
         }
 
@@ -142,10 +150,22 @@ public class MixinLodRenderer implements IVulkanLodRenderer {
             }
         }
 
-        // End frame — delegate handles SSAO, fog, depth compositing
+        // End frame — SSAO, Fog, Phase 1 composite (without MC depth),
+        // then restore MC state. Phase 2 (depth read + re-composite)
+        // happens at addCloudsPass @HEAD via MixinLevelRenderer.
         profiler.popPush("LOD Vulkan cleanup");
         this.dhvulkan$vulkanDelegate.endFrame(renderParams);
         this.dhvulkan$lastVulkanRenderParams = renderParams;
+
+        // Set the deferred composite hook for Phase 2a (addCloudsPass).
+        com.braffolk.dhvulkan.compat.Compat.setDeferredCompositeHook(() -> {
+            this.dhvulkan$compositeVulkanFrame();
+        });
+
+        // Set the late composite hook for Phase 2b (renderLevel @RETURN).
+        com.braffolk.dhvulkan.compat.Compat.setLateCompositeHook(() -> {
+            this.dhvulkan$lateCompositeVulkanFrame();
+        });
 
         profiler.pop();
         ci.cancel();
