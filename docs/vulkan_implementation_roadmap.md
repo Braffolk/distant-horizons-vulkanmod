@@ -105,7 +105,7 @@ Vulkan shaders under `vulkan/src/main/resources/shaders/vulkan/`:
 - [x] **Noise texture** — integrated into terrain fragment shader (`flat_shaded.frag`): procedural per-block dithering via `uNoiseEnabled`, `uNoiseSteps`, `uNoiseIntensity`, `uNoiseDropoff` uniforms populated from config
 - [x] **Fog** — Vulkan-native 2-pass post-process via `DhFogPipeline.java`, see details below
 - [x] **Earth curvature** — vertex shader curves terrain based on `uEarthRadius`
-- [x] **Wireframe debug** — needs `VK_POLYGON_MODE_LINE` pipeline variant
+- [ ] **Wireframe debug** — needs `VK_POLYGON_MODE_LINE` pipeline variant
 - [x] **Cloud rendering** — custom Vulkan cloud renderer with VBO mesh geometry, correct depth compositing against LOD terrain. Supports fast/fancy modes. VM 0.6+ only.
 
 ### SSAO Implementation Details
