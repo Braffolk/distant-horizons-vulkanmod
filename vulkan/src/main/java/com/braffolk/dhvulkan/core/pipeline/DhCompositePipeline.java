@@ -327,6 +327,18 @@ public class DhCompositePipeline {
             org.lwjgl.system.MemoryUtil.memFree(this.useMcDepthBuf.buffer);
             this.useMcDepthBuf = null;
         }
+        if (this.invMcMvmProjBuf != null) {
+            org.lwjgl.system.MemoryUtil.memFree(this.invMcMvmProjBuf.buffer);
+            this.invMcMvmProjBuf = null;
+        }
+        if (this.startFadeDistBuf != null) {
+            org.lwjgl.system.MemoryUtil.memFree(this.startFadeDistBuf.buffer);
+            this.startFadeDistBuf = null;
+        }
+        if (this.endFadeDistBuf != null) {
+            org.lwjgl.system.MemoryUtil.memFree(this.endFadeDistBuf.buffer);
+            this.endFadeDistBuf = null;
+        }
 
         this.initialized = false;
         LOGGER.info("[DH-Vulkan] DhCompositePipeline cleaned up.");

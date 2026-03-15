@@ -107,6 +107,9 @@ public class DhSsaoPipeline {
     private int height;
     private boolean initialized = false;
 
+    // Pre-allocated temp matrix to avoid per-frame heap allocation
+    private final Mat4f tempInvProj = new Mat4f();
+
     /**
      * Initialize the SSAO pipeline at the given framebuffer dimensions.
      * Must be called from the render thread.
@@ -271,9 +274,9 @@ public class DhSsaoPipeline {
         // ===================== //
 
         // Fill pass 1 uniforms
-        Mat4f invProj = new Mat4f(projectionMatrix);
-        invProj.invert();
-        setUniformMat4(this.pass1Uniforms, "uInvProj", invProj);
+        this.tempInvProj.set(projectionMatrix);
+        this.tempInvProj.invert();
+        setUniformMat4(this.pass1Uniforms, "uInvProj", this.tempInvProj);
         setUniformMat4(this.pass1Uniforms, "uProj", projectionMatrix);
         setUniformInt(this.pass1Uniforms, "uSampleCount", 4); // reduced from 6 for perf
         setUniformFloat(this.pass1Uniforms, "uRadius", 4.0f);

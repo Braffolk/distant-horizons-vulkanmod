@@ -675,11 +675,9 @@ public class VulkanRenderEngine implements VulkanBackend {
             //   dhNearClip = getNearClipPlaneInBlocks() + 16
             //   fadeStart = dhNearClip * 1.5
             //   fadeEnd = dhNearClip * 1.9
-            int renderDist = com.seibel.distanthorizons.core.dependencyInjection.SingletonInjector.INSTANCE
-                    .get(com.seibel.distanthorizons.core.wrapperInterfaces.minecraft.IMinecraftRenderWrapper.class)
-                    .getRenderDistance();
             var renderWrapper = com.seibel.distanthorizons.core.dependencyInjection.SingletonInjector.INSTANCE
                     .get(com.seibel.distanthorizons.core.wrapperInterfaces.minecraft.IMinecraftRenderWrapper.class);
+            int renderDist = renderWrapper.getRenderDistance();
             int vpW = renderWrapper.getTargetFramebufferViewportWidth();
             int vpH = renderWrapper.getTargetFramebufferViewportHeight();
             boolean lodOnly = Config.Client.Advanced.Debugging.lodOnlyMode.get();

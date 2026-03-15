@@ -119,6 +119,10 @@ public class DhFogPipeline {
     private int height;
     private boolean initialized = false;
 
+    // Pre-allocated temp matrices to avoid per-frame heap allocations
+    private final Mat4f tempMvpMatrix = new Mat4f();
+    private final Mat4f tempInvMvpMatrix = new Mat4f();
+
     public void init(int width, int height) {
         if (this.initialized)
             return;
@@ -287,11 +291,11 @@ public class DhFogPipeline {
         // ===================== //
 
         // Inverse model-view-projection for world position reconstruction
-        Mat4f mvpMatrix = new Mat4f(projectionMatrix);
-        mvpMatrix.multiply(modelViewMatrix);
-        Mat4f invMvpMatrix = new Mat4f(mvpMatrix);
-        invMvpMatrix.invert();
-        setUniformMat4(this.pass1Uniforms, "uInvMvmProj", invMvpMatrix);
+        this.tempMvpMatrix.set(projectionMatrix);
+        this.tempMvpMatrix.multiply(modelViewMatrix);
+        this.tempInvMvpMatrix.set(this.tempMvpMatrix);
+        this.tempInvMvpMatrix.invert();
+        setUniformMat4(this.pass1Uniforms, "uInvMvmProj", this.tempInvMvpMatrix);
 
         // Fog color
         Color fogColor;

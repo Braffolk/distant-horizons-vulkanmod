@@ -13,12 +13,15 @@ import net.vulkanmod.vulkan.VRenderSystem;
 import net.vulkanmod.vulkan.shader.GraphicsPipeline;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
+import org.joml.Matrix4f;
 import org.joml.Matrix4fStack;
 
 import com.mojang.blaze3d.platform.NativeImage;
 import com.mojang.blaze3d.systems.RenderSystem;
 import com.mojang.blaze3d.vertex.BufferBuilder;
 
+import java.lang.invoke.MethodHandle;
+import java.lang.invoke.MethodHandles;
 import java.lang.reflect.Method;
 
 /**
@@ -32,6 +35,10 @@ import java.lang.reflect.Method;
 public class VulkanCloudRenderer {
 
     private static final Logger LOGGER = LogManager.getLogger("DH-VulkanMod");
+
+    // Cached singleton — avoids per-frame SingletonInjector.INSTANCE.get()
+    private static final IMinecraftRenderWrapper MC_RENDER =
+            SingletonInjector.INSTANCE.get(IMinecraftRenderWrapper.class);
 
     // Cloud grid constants (same as VM)
     private static final int CELL_WIDTH = 12;
@@ -64,15 +71,19 @@ public class VulkanCloudRenderer {
     private CloudStatus prevCloudsType;
     private boolean needsRebuild = true;
 
-    // Reflection — VM 0.6 only
+    // Reflection — VM 0.6 only (converted to MethodHandles for performance)
     private boolean reflectionResolved = false;
     private boolean reflectionFailed = false;
     private GraphicsPipeline cloudsPipeline;
-    private java.lang.reflect.Constructor<?> vboConstructor;
-    private Method vboUploadMethod;
-    private Method vboBindMethod;
-    private Method vboDrawMethod;
-    private Method vboCloseMethod;
+    private MethodHandle vboConstructorHandle;
+    private MethodHandle vboUploadHandle;
+    private MethodHandle vboBindHandle;
+    private MethodHandle vboDrawHandle;
+    private MethodHandle vboCloseHandle;
+
+    // Reusable JOML matrices — avoids per-frame createJomlMatrix() allocations
+    private final Matrix4f reusableJomlProj = new Matrix4f();
+    private final Matrix4f reusableJomlModelView = new Matrix4f();
 
     // Config cache
     private boolean cloudRenderingEnabled = true;
@@ -116,15 +127,14 @@ public class VulkanCloudRenderer {
 
         try {
             renderClouds(level, mc, cloudHeight, partialTicks, mcProjection, mcModelView);
-        } catch (Exception e) {
+        } catch (Throwable e) {
             LOGGER.error("[DH-VulkanMod] Cloud rendering failed", e);
         }
     }
 
     private void renderClouds(ClientLevel level, Minecraft mc, int cloudHeight,
-                              float partialTicks, Mat4f mcProjection, Mat4f mcModelView) throws Exception {
-        IMinecraftRenderWrapper renderWrapper = SingletonInjector.INSTANCE.get(IMinecraftRenderWrapper.class);
-        var camPos = renderWrapper.getCameraExactPosition();
+                              float partialTicks, Mat4f mcProjection, Mat4f mcModelView) throws Throwable {
+        var camPos = MC_RENDER.getCameraExactPosition();
 
         int ticks = (int) (level.getGameTime() % Integer.MAX_VALUE);
         double timeOffset = (ticks + partialTicks) * 0.03F;
@@ -155,13 +165,13 @@ public class VulkanCloudRenderer {
 
         if (this.needsRebuild) {
             this.needsRebuild = false;
-            if (this.cloudVBO != null) this.vboCloseMethod.invoke(this.cloudVBO);
+            if (this.cloudVBO != null) this.vboCloseHandle.invoke(this.cloudVBO);
 
             Object cloudsMesh = buildCloudMesh(centerCellX, centerCellZ, centerY, cloudsType);
             if (cloudsMesh == null) { this.cloudVBO = null; return; }
 
-            this.cloudVBO = this.vboConstructor.newInstance(true);
-            this.vboUploadMethod.invoke(this.cloudVBO, cloudsMesh);
+            this.cloudVBO = this.vboConstructorHandle.invoke(true);
+            this.vboUploadHandle.invoke(this.cloudVBO, cloudsMesh);
         }
 
         if (this.cloudVBO == null) return;
@@ -172,13 +182,15 @@ public class VulkanCloudRenderer {
         float zTranslation = (float) (centerZ - (centerCellZ * CELL_WIDTH));
 
         // Restore MC's projection — critical for depth testing against combined depth buffer.
-        VRenderSystem.applyProjectionMatrix(mcProjection.createJomlMatrix());
+        copyToJoml(mcProjection, this.reusableJomlProj);
+        VRenderSystem.applyProjectionMatrix(this.reusableJomlProj);
 
         // Set up model-view: camera view + cloud translation.
         Matrix4fStack poseStack = RenderSystem.getModelViewStack();
         poseStack.pushMatrix();
         try {
-            poseStack.set(mcModelView.createJomlMatrix());
+            copyToJoml(mcModelView, this.reusableJomlModelView);
+            poseStack.set(this.reusableJomlModelView);
             poseStack.translate(-xTranslation, yTranslation, -zTranslation);
             VRenderSystem.applyModelViewMatrix(poseStack);
             VRenderSystem.calculateMVP();
@@ -214,14 +226,14 @@ public class VulkanCloudRenderer {
             // Fancy clouds: depth-only pre-pass
             if (!fastClouds) {
                 VRenderSystem.colorMask(false, false, false, false);
-                this.vboBindMethod.invoke(this.cloudVBO, pipeline);
-                this.vboDrawMethod.invoke(this.cloudVBO);
+                this.vboBindHandle.invoke(this.cloudVBO, pipeline);
+                this.vboDrawHandle.invoke(this.cloudVBO);
                 VRenderSystem.colorMask(true, true, true, true);
             }
 
             // Main draw
-            this.vboBindMethod.invoke(this.cloudVBO, pipeline);
-            this.vboDrawMethod.invoke(this.cloudVBO);
+            this.vboBindHandle.invoke(this.cloudVBO, pipeline);
+            this.vboDrawHandle.invoke(this.cloudVBO);
         } finally {
             poseStack.popMatrix();
             VRenderSystem.enableCull();
@@ -410,6 +422,7 @@ public class VulkanCloudRenderer {
     private void resolveReflection() {
         this.reflectionResolved = true;
         try {
+            MethodHandles.Lookup lookup = MethodHandles.lookup();
             Class<?> pipelineManagerClass = Class.forName("net.vulkanmod.render.PipelineManager");
 
             // Requires VM 0.6+ getCloudsPipeline()
@@ -421,25 +434,29 @@ public class VulkanCloudRenderer {
                 throw new RuntimeException("Cloud pipeline is null");
             }
 
-            // VM 0.6 VBO API
+            // VM 0.6 VBO API — convert to MethodHandles for performance
             Class<?> vboClass = Class.forName("net.vulkanmod.render.VBO");
-            this.vboConstructor = vboClass.getConstructor(boolean.class);
-            this.vboBindMethod = vboClass.getMethod("bind", GraphicsPipeline.class);
-            this.vboDrawMethod = vboClass.getMethod("draw");
+            this.vboConstructorHandle = lookup.unreflectConstructor(
+                    vboClass.getConstructor(boolean.class));
+            this.vboBindHandle = lookup.unreflect(
+                    vboClass.getMethod("bind", GraphicsPipeline.class));
+            this.vboDrawHandle = lookup.unreflect(
+                    vboClass.getMethod("draw"));
 
             // upload(MeshData) — name-based lookup because Fabric remaps class names
-            for (java.lang.reflect.Method m : vboClass.getMethods()) {
+            for (Method m : vboClass.getMethods()) {
                 if (m.getName().equals("upload") && m.getParameterCount() == 1) {
-                    this.vboUploadMethod = m;
+                    this.vboUploadHandle = lookup.unreflect(m);
                     break;
                 }
             }
-            if (this.vboUploadMethod == null) {
+            if (this.vboUploadHandle == null) {
                 throw new NoSuchMethodException("VBO.upload(MeshData) not found");
             }
-            this.vboCloseMethod = vboClass.getMethod("close");
+            this.vboCloseHandle = lookup.unreflect(
+                    vboClass.getMethod("close"));
 
-            LOGGER.info("[DH-VulkanMod] Cloud renderer reflection resolved (VM 0.6).");
+            LOGGER.info("[DH-VulkanMod] Cloud renderer MethodHandles resolved (VM 0.6).");
         } catch (Exception e) {
             LOGGER.info("[DH-VulkanMod] VM 0.6 cloud API not available, custom cloud renderer disabled. ({})", e.getMessage());
             this.reflectionFailed = true;
@@ -449,10 +466,18 @@ public class VulkanCloudRenderer {
     /** Reload cloud texture (called on resource reload). */
     public void resetBuffer() {
         if (this.cloudVBO != null) {
-            try { this.vboCloseMethod.invoke(this.cloudVBO); } catch (Exception ignored) {}
+            try { this.vboCloseHandle.invoke(this.cloudVBO); } catch (Throwable ignored) {}
             this.cloudVBO = null;
         }
         this.needsRebuild = true;
+    }
+
+    /** Copy DH Mat4f into a reusable JOML Matrix4f (column-major). */
+    private static void copyToJoml(Mat4f src, Matrix4f dst) {
+        dst.set(src.m00, src.m10, src.m20, src.m30,
+                src.m01, src.m11, src.m21, src.m31,
+                src.m02, src.m12, src.m22, src.m32,
+                src.m03, src.m13, src.m23, src.m33);
     }
 
     /** Full cleanup — release all resources. */

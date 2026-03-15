@@ -32,6 +32,18 @@ public final class Compat {
     private static java.lang.reflect.Field vulkanImageViewField;
     private static java.lang.reflect.Field vulkanImageLayoutField;
     private static java.lang.reflect.Field rendererCmdBufferField;
+
+    // Pre-allocated native memory for drawIndexed VM 0.4.2 path
+    // Avoids per-draw nmemAlloc/nmemFree (was ~400-1000× per frame)
+    private static final long drawBufPtr = org.lwjgl.system.MemoryUtil.nmemAllocChecked(8);
+    private static final long drawOffPtr = org.lwjgl.system.MemoryUtil.nmemAllocChecked(8);
+
+    // Cached method for setModelOffset (VM 0.6+ only)
+    private static java.lang.reflect.Method setModelOffsetMethod;
+    private static boolean setModelOffsetResolved = false;
+
+    // Reusable float[3] for getCloudColorRGB — avoids per-frame allocation
+    private static final float[] cloudColorResult = new float[3];
     private static java.lang.reflect.Field defaultMainPassAuxField;
 
     static {
@@ -203,14 +215,10 @@ public final class Compat {
         VertexBuffer vb = (VertexBuffer) vertexBuffer;
         IndexBuffer ib = (IndexBuffer) indexBuffer;
 
-        // Bind vertex buffer
-        long pBuf = org.lwjgl.system.MemoryUtil.nmemAllocChecked(8);
-        long pOff = org.lwjgl.system.MemoryUtil.nmemAllocChecked(8);
-        org.lwjgl.system.MemoryUtil.memPutLong(pBuf, vb.getId());
-        org.lwjgl.system.MemoryUtil.memPutLong(pOff, vb.getOffset());
-        org.lwjgl.vulkan.VK10.nvkCmdBindVertexBuffers(cmd, 0, 1, pBuf, pOff);
-        org.lwjgl.system.MemoryUtil.nmemFree(pBuf);
-        org.lwjgl.system.MemoryUtil.nmemFree(pOff);
+        // Bind vertex buffer — uses pre-allocated static native pointers
+        org.lwjgl.system.MemoryUtil.memPutLong(drawBufPtr, vb.getId());
+        org.lwjgl.system.MemoryUtil.memPutLong(drawOffPtr, vb.getOffset());
+        org.lwjgl.vulkan.VK10.nvkCmdBindVertexBuffers(cmd, 0, 1, drawBufPtr, drawOffPtr);
 
         // Bind index buffer with VK_INDEX_TYPE_UINT32 = 1
         org.lwjgl.vulkan.VK10.vkCmdBindIndexBuffer(cmd, ib.getId(), ib.getOffset(), 1);
@@ -814,27 +822,30 @@ public final class Compat {
             #if MC_VER < MC_1_21_3
             // MC 1.20.x - 1.21.1: returns Vec3
             net.minecraft.world.phys.Vec3 color = level.getCloudColor(partialTicks);
-            return new float[]{(float) color.x, (float) color.y, (float) color.z};
+            cloudColorResult[0] = (float) color.x;
+            cloudColorResult[1] = (float) color.y;
+            cloudColorResult[2] = (float) color.z;
             #elif MC_VER <= MC_1_21_10
             // MC 1.21.3 - 1.21.10: returns int (ARGB)
             int argb = level.getCloudColor(partialTicks);
-            float r = ((argb >> 16) & 0xFF) / 255.0f;
-            float g = ((argb >> 8) & 0xFF) / 255.0f;
-            float b = (argb & 0xFF) / 255.0f;
-            return new float[]{r, g, b};
+            cloudColorResult[0] = ((argb >> 16) & 0xFF) / 255.0f;
+            cloudColorResult[1] = ((argb >> 8) & 0xFF) / 255.0f;
+            cloudColorResult[2] = (argb & 0xFF) / 255.0f;
             #else
             // MC 1.21.11+: uses environmentAttributes
             int argb = level.environmentAttributes().getValue(
                     net.minecraft.world.attribute.EnvironmentAttributes.CLOUD_COLOR,
                     net.minecraft.core.BlockPos.ZERO);
-            float r = ((argb >> 16) & 0xFF) / 255.0f;
-            float g = ((argb >> 8) & 0xFF) / 255.0f;
-            float b = (argb & 0xFF) / 255.0f;
-            return new float[]{r, g, b};
+            cloudColorResult[0] = ((argb >> 16) & 0xFF) / 255.0f;
+            cloudColorResult[1] = ((argb >> 8) & 0xFF) / 255.0f;
+            cloudColorResult[2] = (argb & 0xFF) / 255.0f;
             #endif
         } catch (Exception e) {
-            return new float[]{1.0f, 1.0f, 1.0f}; // fallback white
+            cloudColorResult[0] = 1.0f;
+            cloudColorResult[1] = 1.0f;
+            cloudColorResult[2] = 1.0f;
         }
+        return cloudColorResult;
     }
 
     /**
@@ -887,11 +898,19 @@ public final class Compat {
      * Set VRenderSystem model offset. Only exists on VM 0.6.x.
      */
     public static void setModelOffset(float x, float y, float z) {
-        try {
-            java.lang.reflect.Method m = net.vulkanmod.vulkan.VRenderSystem.class.getMethod("setModelOffset", float.class, float.class, float.class);
-            m.invoke(null, x, y, z);
-        } catch (Exception ignored) {
-            // VM 0.4.2 doesn't have setModelOffset — no-op
+        if (!setModelOffsetResolved) {
+            setModelOffsetResolved = true;
+            try {
+                setModelOffsetMethod = net.vulkanmod.vulkan.VRenderSystem.class.getMethod(
+                        "setModelOffset", float.class, float.class, float.class);
+            } catch (Exception ignored) {
+                // VM 0.4.2 doesn't have setModelOffset — no-op
+            }
+        }
+        if (setModelOffsetMethod != null) {
+            try {
+                setModelOffsetMethod.invoke(null, x, y, z);
+            } catch (Exception ignored) {}
         }
     }
 
