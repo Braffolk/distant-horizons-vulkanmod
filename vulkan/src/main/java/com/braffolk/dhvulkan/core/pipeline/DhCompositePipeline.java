@@ -72,10 +72,13 @@ public class DhCompositePipeline {
     private MappedBuffer invProjBuf;
     private MappedBuffer mcProjBuf;
     private MappedBuffer invMcMvmProjBuf;
+    private MappedBuffer remapProjBuf;
     private MappedBuffer debugModeBuf;
     private MappedBuffer useMcDepthBuf;
     private MappedBuffer startFadeDistBuf;
     private MappedBuffer endFadeDistBuf;
+    private MappedBuffer startFadeDistSqBuf;
+    private MappedBuffer endFadeDistSqBuf;
 
     /**
      * Simple vertex format for the fullscreen quad: just vec2 position.
@@ -150,6 +153,9 @@ public class DhCompositePipeline {
         this.invMcMvmProjBuf = new MappedBuffer(64);
         Compat.addUniformWithBuffer(uboBuilder, "matrix4x4", "uInvMcMvmProj", 1, () -> this.invMcMvmProjBuf);
 
+        this.remapProjBuf = new MappedBuffer(64);
+        Compat.addUniformWithBuffer(uboBuilder, "matrix4x4", "uRemapProj", 1, () -> this.remapProjBuf);
+
         this.debugModeBuf = new MappedBuffer(4);
         this.debugModeBuf.putInt(0, 0);
         Compat.addUniformWithBuffer(uboBuilder, "int", "uDebugMode", 1, () -> this.debugModeBuf);
@@ -166,15 +172,26 @@ public class DhCompositePipeline {
         this.endFadeDistBuf.putFloat(0, 0);
         Compat.addUniformWithBuffer(uboBuilder, "float", "uEndFadeBlockDist", 1, () -> this.endFadeDistBuf);
 
+        this.startFadeDistSqBuf = new MappedBuffer(4);
+        this.startFadeDistSqBuf.putFloat(0, 0);
+        Compat.addUniformWithBuffer(uboBuilder, "float", "uStartFadeBlockDistSq", 1, () -> this.startFadeDistSqBuf);
+
+        this.endFadeDistSqBuf = new MappedBuffer(4);
+        this.endFadeDistSqBuf.putFloat(0, 0);
+        Compat.addUniformWithBuffer(uboBuilder, "float", "uEndFadeBlockDistSq", 1, () -> this.endFadeDistSqBuf);
+
         UBO mainUbo = uboBuilder.buildUBO(0, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT);
-        Compat.setUniformSuppliers(mainUbo, java.util.Map.of(
-                "uInvProj", this.invProjBuf,
-                "uMcProj", this.mcProjBuf,
-                "uInvMcMvmProj", this.invMcMvmProjBuf,
-                "uDebugMode", this.debugModeBuf,
-                "uUseMcDepth", this.useMcDepthBuf,
-                "uStartFadeBlockDist", this.startFadeDistBuf,
-                "uEndFadeBlockDist", this.endFadeDistBuf));
+        Compat.setUniformSuppliers(mainUbo, java.util.Map.ofEntries(
+                java.util.Map.entry("uInvProj", this.invProjBuf),
+                java.util.Map.entry("uMcProj", this.mcProjBuf),
+                java.util.Map.entry("uInvMcMvmProj", this.invMcMvmProjBuf),
+                java.util.Map.entry("uRemapProj", this.remapProjBuf),
+                java.util.Map.entry("uDebugMode", this.debugModeBuf),
+                java.util.Map.entry("uUseMcDepth", this.useMcDepthBuf),
+                java.util.Map.entry("uStartFadeBlockDist", this.startFadeDistBuf),
+                java.util.Map.entry("uEndFadeBlockDist", this.endFadeDistBuf),
+                java.util.Map.entry("uStartFadeBlockDistSq", this.startFadeDistSqBuf),
+                java.util.Map.entry("uEndFadeBlockDistSq", this.endFadeDistSqBuf)));
         ubos.add(mainUbo);
 
         // Image descriptors — DH color/depth + SSAO/fog debug + MC depth
@@ -229,6 +246,26 @@ public class DhCompositePipeline {
         }
         this.startFadeDistBuf.putFloat(0, startFadeDist);
         this.endFadeDistBuf.putFloat(0, endFadeDist);
+        this.startFadeDistSqBuf.putFloat(0, startFadeDist * startFadeDist);
+        this.endFadeDistSqBuf.putFloat(0, endFadeDist * endFadeDist);
+
+        // Compute fused remap matrix: uRemapProj = mcProj * invProj
+        // This saves one mat4×vec4 per pixel in the shader
+        if (invProjMatrix != null && mcProjMatrix != null) {
+            float[] remapProj = new float[16];
+            for (int row = 0; row < 4; row++) {
+                for (int col = 0; col < 4; col++) {
+                    float sum = 0;
+                    for (int k = 0; k < 4; k++) {
+                        sum += mcProjMatrix[k * 4 + row] * invProjMatrix[col * 4 + k];
+                    }
+                    remapProj[col * 4 + row] = sum;
+                }
+            }
+            for (int i = 0; i < 16; i++) {
+                this.remapProjBuf.putFloat(i * 4, remapProj[i]);
+            }
+        }
 
         // Bind DH framebuffer textures to the expected slots
         VTextureSelector.bindTexture(DH_COLOR_TEXTURE_SLOT, dhColorTexture);
@@ -338,6 +375,18 @@ public class DhCompositePipeline {
         if (this.endFadeDistBuf != null) {
             org.lwjgl.system.MemoryUtil.memFree(this.endFadeDistBuf.buffer);
             this.endFadeDistBuf = null;
+        }
+        if (this.remapProjBuf != null) {
+            org.lwjgl.system.MemoryUtil.memFree(this.remapProjBuf.buffer);
+            this.remapProjBuf = null;
+        }
+        if (this.startFadeDistSqBuf != null) {
+            org.lwjgl.system.MemoryUtil.memFree(this.startFadeDistSqBuf.buffer);
+            this.startFadeDistSqBuf = null;
+        }
+        if (this.endFadeDistSqBuf != null) {
+            org.lwjgl.system.MemoryUtil.memFree(this.endFadeDistSqBuf.buffer);
+            this.endFadeDistSqBuf = null;
         }
 
         this.initialized = false;

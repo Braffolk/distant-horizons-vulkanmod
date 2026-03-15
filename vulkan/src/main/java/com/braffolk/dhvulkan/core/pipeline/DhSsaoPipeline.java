@@ -110,6 +110,12 @@ public class DhSsaoPipeline {
     // Pre-allocated temp matrix to avoid per-frame heap allocation
     private final Mat4f tempInvProj = new Mat4f();
 
+    // SSAO sample count and pre-computed offsets
+    private static final int SSAO_SAMPLE_COUNT = 4;
+    private static final float GOLDEN_ANGLE = 2.39996323f;
+    // Pre-computed spiral offsets: 4 × vec4 = 64 bytes (stored as mat4 for VulkanMod compat)
+    private final float[] sampleOffsets = new float[SSAO_SAMPLE_COUNT * 4];
+
     /**
      * Initialize the SSAO pipeline at the given framebuffer dimensions.
      * Must be called from the render thread.
@@ -122,6 +128,7 @@ public class DhSsaoPipeline {
         this.width = width;
         this.height = height;
 
+        precomputeSampleOffsets();
         createQuadBuffers();
         createSsaoFramebuffer();
         createSsaoComputePipeline();
@@ -131,6 +138,26 @@ public class DhSsaoPipeline {
         Renderer.getInstance().addOnResizeCallback(this::onResize);
 
         this.initialized = true;
+    }
+
+    /**
+     * Pre-compute SSAO spiral sample offsets on CPU.
+     * Uses golden-angle distribution with linearly increasing radius.
+     * Eliminates per-sample sin/cos on GPU.
+     */
+    private void precomputeSampleOffsets() {
+        float radius = 4.0f; // must match uRadius in shader
+        float rStep = radius / SSAO_SAMPLE_COUNT;
+        float phase = 0.0f;
+        float r = rStep;
+        for (int i = 0; i < SSAO_SAMPLE_COUNT; i++) {
+            sampleOffsets[i * 4]     = (float) Math.sin(phase) * r;
+            sampleOffsets[i * 4 + 1] = (float) Math.cos(phase) * r;
+            sampleOffsets[i * 4 + 2] = 0.0f;
+            sampleOffsets[i * 4 + 3] = 0.0f;
+            r += rStep;
+            phase += GOLDEN_ANGLE;
+        }
     }
 
     // ==================== //
@@ -198,6 +225,15 @@ public class DhSsaoPipeline {
         addUniform(uboBuilder, this.pass1Uniforms, "float", "uMinLight", 1, 4);
         addUniform(uboBuilder, this.pass1Uniforms, "float", "uBias", 1, 4);
         addUniform(uboBuilder, this.pass1Uniforms, "float", "uFadeDistanceInBlocks", 1, 4);
+        // Pre-computed sample offsets: 4 × vec4 = 64 bytes (declared as mat4 for VulkanMod compat)
+        addUniform(uboBuilder, this.pass1Uniforms, "matrix4x4", "uSampleOffsets", 1, 64);
+        // Fill once at init — these never change
+        MappedBuffer offsetBuf = this.pass1Uniforms.get("uSampleOffsets");
+        if (offsetBuf != null) {
+            for (int i = 0; i < SSAO_SAMPLE_COUNT * 4; i++) {
+                offsetBuf.putFloat(i * 4, sampleOffsets[i]);
+            }
+        }
 
         UBO mainUbo = uboBuilder.buildUBO(0, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT);
         Compat.setUniformSuppliers(mainUbo, this.pass1Uniforms);
@@ -286,6 +322,7 @@ public class DhSsaoPipeline {
         setUniformFloat(this.pass1Uniforms, "uMinLight", 0.30f);
         setUniformFloat(this.pass1Uniforms, "uBias", 0.025f);
         setUniformFloat(this.pass1Uniforms, "uFadeDistanceInBlocks", 1600.0f);
+
 
         // Bind DH depth texture for sampling
         VTextureSelector.bindTexture(SSAO_DEPTH_TEXTURE_SLOT, dhDepthTexture);

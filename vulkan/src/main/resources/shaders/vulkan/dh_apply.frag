@@ -8,10 +8,13 @@ layout(std140, binding = 0) uniform CompositeUBO {
     mat4 uInvProj;          // inverse of DH's projection matrix (for view-space reconstruction)
     mat4 uMcProj;           // MC's projection matrix (for remapping DH depth → MC depth)
     mat4 uInvMcMvmProj;     // inverse of MC's modelview-projection matrix (for MC fragment distance)
+    mat4 uRemapProj;        // = uMcProj * uInvProj — fused unproject+reproject (1× mat4 instead of 2×)
     int uDebugMode;         // 0=off, 1=depth, 2=ssao, 3=fog_alpha, 4=fog_color, 5=normals, 6=mc_depth
     int uUseMcDepth;        // 0=no MC depth comparison, 1=use MC depth for fade
     float uStartFadeBlockDist;  // distance where DH fade begins (blocks)
     float uEndFadeBlockDist;    // distance where DH fade ends (blocks)
+    float uStartFadeBlockDistSq; // squared, for dot() instead of length()
+    float uEndFadeBlockDistSq;   // squared, for dot() instead of length()
 };
 
 layout(set = 0, binding = 1) uniform sampler2D gDhColorTexture;
@@ -37,11 +40,8 @@ vec3 reconstructViewPos(vec2 uv, float depth) {
  * with MC's projection.
  */
 float remapDepthDhToMc(vec2 uv, float dhDepth) {
-    // Unproject from DH clip space to view space
-    vec4 viewPos = uInvProj * vec4(vec3(uv, dhDepth) * 2.0 - 1.0, 1.0);
-    viewPos /= viewPos.w;
-    // Reproject to MC clip space
-    vec4 mcClip = uMcProj * viewPos;
+    // Single mat4 multiply: uRemapProj = uMcProj * uInvProj (pre-multiplied on CPU)
+    vec4 mcClip = uRemapProj * vec4(vec3(uv, dhDepth) * 2.0 - 1.0, 1.0);
     return (mcClip.z / mcClip.w) * 0.5 + 0.5;
 }
 
@@ -83,10 +83,11 @@ void main() {
             vec4 mcNdc = vec4(TexCoord * 2.0 - 1.0, mcDepth * 2.0 - 1.0, 1.0);
             vec4 mcViewPos = uInvMcMvmProj * mcNdc;
             mcViewPos /= mcViewPos.w;
-            float mcFragDist = length(mcViewPos.xyz);
+            // Use squared distance to avoid per-pixel sqrt
+            float mcFragDistSq = dot(mcViewPos.xyz, mcViewPos.xyz);
 
-            // smoothstep: 0 at start (show MC), 1 at end (show LOD)
-            fadeMultiplier = smoothstep(uStartFadeBlockDist, uEndFadeBlockDist, mcFragDist);
+            // smoothstep on squared values (thresholds pre-squared on CPU)
+            fadeMultiplier = smoothstep(uStartFadeBlockDistSq, uEndFadeBlockDistSq, mcFragDistSq);
             if (fadeMultiplier <= 0.0) {
                 discard;  // fully within MC terrain range
             }

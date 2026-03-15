@@ -79,16 +79,15 @@ void main() {
     // Only apply SSAO to LODs, not to the sky (depth == 1.0)
     if (fragmentDepth < 1.0) {
         float ao;
+        float fragmentDepthLinear = linearizeDepth(fragmentDepth);
         if (gBlurRadius > 0) {
-            float fragmentDepthLinear = linearizeDepth(fragmentDepth);
             ao = BilateralGaussianBlur(TexCoord, fragmentDepthLinear, 1.6);
         } else {
             ao = textureLod(gSSAOMap, TexCoord, 0).r;
         }
 
         // Fade out SSAO after 1600 blocks (not visible at that distance, saves perf)
-        float linearDist = linearizeDepth(fragmentDepth);
-        float distanceFade = smoothstep(1600.0, 2400.0, linearDist);
+        float distanceFade = smoothstep(1600.0, 2400.0, fragmentDepthLinear);
         ao = mix(ao, 1.0, distanceFade);
 
         if (uDebugMode != 0) {
