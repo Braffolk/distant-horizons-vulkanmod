@@ -1,3 +1,8 @@
+## v2.4.0-3.0.0+vm.2
+
+**Hotfix** — weather effects (rain, snow, particles) now render correctly in front of LODs on all GPUs. Previously, the Phase 2 composite was overwriting weather pixels with LOD colors on NVIDIA and potentially other non-MoltenVK drivers.
+
+
 ## v2.4.0-3.0.0+vm.1
 
 **Clouds, weather, and DH 3.0 support.** Clouds now render correctly behind and in front of LOD terrain. Weather effects (rain, snow) are no longer hidden behind LODs. Compatible with both DH 2.4.x and 3.0.x (nightly) from a single jar.

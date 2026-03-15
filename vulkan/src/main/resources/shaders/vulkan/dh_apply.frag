@@ -91,6 +91,13 @@ void main() {
             if (fadeMultiplier <= 0.0) {
                 discard;  // fully within MC terrain range
             }
+        } else {
+            // No MC terrain at this pixel (open sky behind LODs).
+            // Phase 1 already composited LODs here with depth 1.0.
+            // Weather/particles may have rendered on top since Phase 1.
+            // Do NOT redraw — discard to preserve whatever is currently on screen.
+            // This fixed rain and snow rendering on NVIDIA.
+            discard;
         }
     }
 
@@ -130,11 +137,16 @@ void main() {
     }
 
     if (uUseMcDepth != 0) {
-        // Phase 2b (with MC depth comparison): remap DH depth to MC-compatible depth.
-        // Clamp to 0.999 so LODs beyond MC's far plane still have depth < sky (1.0),
-        // ensuring clouds (depth ~1.0) fail the depth test against distant LODs.
-        float mcCompatibleDepth = remapDepthDhToMc(TexCoord, dhDepth);
-        gl_FragDepth = clamp(mcCompatibleDepth, 0.0, 0.999);
+        float mcDepth = texture(gMcDepthTexture, TexCoord).r;
+        if (mcDepth < 1.0) {
+            // MC terrain exists at this pixel — write remapped depth for fade transition.
+            float mcCompatibleDepth = remapDepthDhToMc(TexCoord, dhDepth);
+            gl_FragDepth = clamp(mcCompatibleDepth, 0.0, 0.999);
+        } else {
+            // No MC terrain (open sky) — write 1.0 so weather, particles, and
+            // other effects rendered after this composite pass freely via LEQUAL.
+            gl_FragDepth = 1.0;
+        }
     } else {
         // Phase 1 (without MC depth): write far-plane depth so MC terrain AND
         // weather both render freely on top via LEQUAL. LOD colors are still
