@@ -189,73 +189,42 @@ public final class DhConfigHelper {
      * Apply velocity-based reduction to the overdraw ratio.
      * At high speeds (elytra, spectator), the overdraw pulls closer to the camera
      * so MC terrain doesn't outrun DH terrain, preventing gaps.
-     * Uses reflection (cached) since these fields may not exist in all compiled DH jars.
+     *
+     * Uses MC's player velocity directly — works on all DH versions, no reflection needed.
+     * Matches DH base's behavior: speed thresholds of 10-100 blocks/sec.
      */
-    // Cached reflection handles for velocity reduction — resolved once, reused every frame
-    private static boolean velocityReflectionResolved = false;
-    private static boolean velocityReflectionAvailable = false;
-    private static java.lang.reflect.Field reduceConfigField;
-    private static java.lang.reflect.Method reduceConfigGetMethod;
-    private static java.lang.reflect.Field clientApiInstanceField;
-    private static java.lang.reflect.Field cameraSpeedField;
-    private static java.lang.reflect.Method getAverageMethod;
+    private static double speedAverage = 0.0;
+    private static final double SPEED_SMOOTH_FACTOR = 0.1; // EMA alpha — lower = smoother
+    private static boolean velocityDiagLogged = false;
 
-    private static void resolveVelocityReflection() {
-        if (velocityReflectionResolved) return;
-        velocityReflectionResolved = true;
-        try {
-            Class<?> culling = Class.forName("com.seibel.distanthorizons.core.config.Config$Client$Advanced$Graphics$Culling");
-            reduceConfigField = culling.getDeclaredField("reduceOverdrawWithFastMovement");
-
-            Class<?> clientApiClass = Class.forName("com.seibel.distanthorizons.core.api.internal.ClientApi");
-            clientApiInstanceField = clientApiClass.getDeclaredField("INSTANCE");
-            cameraSpeedField = clientApiClass.getDeclaredField("cameraSpeedRollingAverage");
-
-            // Pre-resolve method handles
-            Object configEntry = reduceConfigField.get(null);
-            reduceConfigGetMethod = configEntry.getClass().getMethod("get");
-
-            Object clientApi = clientApiInstanceField.get(null);
-            if (clientApi != null) {
-                Object rollingAvg = cameraSpeedField.get(clientApi);
-                if (rollingAvg != null) {
-                    getAverageMethod = rollingAvg.getClass().getMethod("getAverage");
-                }
-            }
-            velocityReflectionAvailable = (reduceConfigGetMethod != null);
-        } catch (Exception e) {
-            velocityReflectionAvailable = false;
-        }
-    }
+    private static final org.apache.logging.log4j.Logger LOGGER =
+            org.apache.logging.log4j.LogManager.getLogger("DH-VulkanMod");
 
     public static float applyVelocityReduction(float overdraw) {
-        resolveVelocityReflection();
-        if (!velocityReflectionAvailable) return overdraw;
-
         try {
-            Object configEntry = reduceConfigField.get(null);
-            Boolean reduceEnabled = (Boolean) reduceConfigGetMethod.invoke(configEntry);
-            if (!reduceEnabled) return overdraw;
+            var mc = net.minecraft.client.Minecraft.getInstance();
+            if (mc == null || mc.player == null) return overdraw;
 
-            Object clientApi = clientApiInstanceField.get(null);
-            if (clientApi == null) return overdraw;
+            // getDeltaMovement() returns blocks/tick — convert to blocks/sec (×20 tps)
+            var delta = mc.player.getDeltaMovement();
+            double currentSpeed = Math.sqrt(delta.x * delta.x + delta.y * delta.y + delta.z * delta.z) * 20.0;
 
-            Object rollingAvg = cameraSpeedField.get(clientApi);
-            if (rollingAvg == null) return overdraw;
+            // Exponential moving average for smooth transitions
+            speedAverage = speedAverage * (1.0 - SPEED_SMOOTH_FACTOR) + currentSpeed * SPEED_SMOOTH_FACTOR;
 
-            // Lazily resolve getAverage if it wasn't available during init
-            if (getAverageMethod == null) {
-                getAverageMethod = rollingAvg.getClass().getMethod("getAverage");
-            }
-
-            double avgSpeed = (Double) getAverageMethod.invoke(rollingAvg);
-            if (avgSpeed >= DYNAMIC_MIN_SPEED) {
-                float speedRange = (float) ((DYNAMIC_MAX_SPEED - avgSpeed) / DYNAMIC_MAX_SPEED);
+            if (speedAverage >= DYNAMIC_MIN_SPEED) {
+                float speedRange = (float) ((DYNAMIC_MAX_SPEED - speedAverage) / DYNAMIC_MAX_SPEED);
                 speedRange = Math.max(speedRange, DYNAMIC_MIN_OVERDRAW_RATIO);
                 overdraw *= speedRange;
+
+                if (!velocityDiagLogged) {
+                    velocityDiagLogged = true;
+                    LOGGER.info("[DH-VulkanMod] Velocity overdraw active: speed={}, overdraw={}",
+                            String.format("%.1f", speedAverage), String.format("%.3f", overdraw));
+                }
             }
         } catch (Exception e) {
-            // Silently ignore
+            // Safely ignore — player not available yet
         }
         return overdraw;
     }
@@ -320,10 +289,9 @@ public final class DhConfigHelper {
         double tanHalfFov = Math.tan(fov / 180.0 * Math.PI / 2.0);
         nearClipPlane = (float) (nearClipPlane / Math.sqrt(1.0 + tanHalfFov * tanHalfFov * (aspectRatio * aspectRatio + 1.0)));
 
-        // When close to ground (no height override), cap to prevent near clip becoming visible
-        if (heightOverride == -1.0f) {
-            nearClipPlane = Math.min(nearClipPlane, 7.5f);
-        }
+        // NOTE: DH base applies Math.min(nearClipPlane, 7.5f) only for the PROJECTION
+        // MATRIX near clip plane (in createLodProjectionMatrix), NOT for uClipDistance
+        // or fade distances. We do NOT cap here — DH handles the projection cap internally.
 
         return nearClipPlane;
     }

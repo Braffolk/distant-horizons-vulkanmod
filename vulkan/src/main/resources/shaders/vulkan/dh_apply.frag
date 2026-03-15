@@ -5,10 +5,13 @@ layout(location = 0) out vec4 fragColor;
 
 // UBO at binding 0
 layout(std140, binding = 0) uniform CompositeUBO {
-    mat4 uInvProj;    // inverse of DH's projection matrix (for view-space reconstruction)
-    mat4 uMcProj;     // MC's projection matrix (for remapping DH depth → MC depth)
-    int uDebugMode;   // 0=off, 1=depth, 2=ssao, 3=fog_alpha, 4=fog_color, 5=normals, 6=mc_depth
-    int uUseMcDepth;  // 0=no MC depth comparison, 1=discard where MC terrain is closer
+    mat4 uInvProj;          // inverse of DH's projection matrix (for view-space reconstruction)
+    mat4 uMcProj;           // MC's projection matrix (for remapping DH depth → MC depth)
+    mat4 uInvMcMvmProj;     // inverse of MC's modelview-projection matrix (for MC fragment distance)
+    int uDebugMode;         // 0=off, 1=depth, 2=ssao, 3=fog_alpha, 4=fog_color, 5=normals, 6=mc_depth
+    int uUseMcDepth;        // 0=no MC depth comparison, 1=use MC depth for fade
+    float uStartFadeBlockDist;  // distance where DH fade begins (blocks)
+    float uEndFadeBlockDist;    // distance where DH fade ends (blocks)
 };
 
 layout(set = 0, binding = 1) uniform sampler2D gDhColorTexture;
@@ -70,17 +73,30 @@ void main() {
         discard;
     }
 
-    // MC depth comparison: if MC rendered terrain at this pixel, discard the LOD.
+    // MC depth comparison with distance-based fade (matching DH base's vanillaFade.frag).
+    // Instead of a hard discard, smoothly fade LODs based on MC fragment distance.
+    float fadeMultiplier = 1.0;
     if (uUseMcDepth != 0) {
         float mcDepth = texture(gMcDepthTexture, TexCoord).r;
-        if (mcDepth < 0.9999) {
-            discard;  // MC terrain exists here → hide LOD
+        if (mcDepth < 1.0) {
+            // MC terrain exists — calculate view-space distance for fade
+            vec4 mcNdc = vec4(TexCoord * 2.0 - 1.0, mcDepth * 2.0 - 1.0, 1.0);
+            vec4 mcViewPos = uInvMcMvmProj * mcNdc;
+            mcViewPos /= mcViewPos.w;
+            float mcFragDist = length(mcViewPos.xyz);
+
+            // smoothstep: 0 at start (show MC), 1 at end (show LOD)
+            fadeMultiplier = smoothstep(uStartFadeBlockDist, uEndFadeBlockDist, mcFragDist);
+            if (fadeMultiplier <= 0.0) {
+                discard;  // fully within MC terrain range
+            }
         }
     }
 
     if (uDebugMode == 0) {
-        // Normal rendering
+        // Normal rendering — apply distance fade for MC/DH transition
         fragColor = texture(gDhColorTexture, TexCoord);
+        fragColor *= fadeMultiplier;  // premultiplied alpha: scale RGB+A together
     }
     else if (uDebugMode == 1) {
         // Depth visualization: reconstruct view-space Z, map to grayscale

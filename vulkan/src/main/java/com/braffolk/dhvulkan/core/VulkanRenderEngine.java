@@ -51,6 +51,7 @@ public class VulkanRenderEngine implements VulkanBackend {
     private final Mat4f tempInvProj = new Mat4f();
     private final float[] tempInvProjArray = new float[16];
     private final float[] tempMcProjArray = new float[16];
+    private final float[] tempInvMcMvmProjArray = new float[16];
 
 
 
@@ -660,12 +661,51 @@ public class VulkanRenderEngine implements VulkanBackend {
             this.tempMcProjArray[14] = uniforms.mcProjectionMatrix.m23;
             this.tempMcProjArray[15] = uniforms.mcProjectionMatrix.m33;
 
+            // uInvMcMvmProj = inverse of MC's combined modelview-projection matrix
+            // Used for reconstructing MC fragment world position for distance fade
+            this.tempCombinedMatrix.set(uniforms.mcProjectionMatrix);
+            this.tempCombinedMatrix.multiply(uniforms.dhModelViewMatrix);
+            this.tempCombinedMatrix.invert();
+            this.tempInvMcMvmProjArray[0] = tempCombinedMatrix.m00;
+            this.tempInvMcMvmProjArray[1] = tempCombinedMatrix.m10;
+            this.tempInvMcMvmProjArray[2] = tempCombinedMatrix.m20;
+            this.tempInvMcMvmProjArray[3] = tempCombinedMatrix.m30;
+            this.tempInvMcMvmProjArray[4] = tempCombinedMatrix.m01;
+            this.tempInvMcMvmProjArray[5] = tempCombinedMatrix.m11;
+            this.tempInvMcMvmProjArray[6] = tempCombinedMatrix.m21;
+            this.tempInvMcMvmProjArray[7] = tempCombinedMatrix.m31;
+            this.tempInvMcMvmProjArray[8] = tempCombinedMatrix.m02;
+            this.tempInvMcMvmProjArray[9] = tempCombinedMatrix.m12;
+            this.tempInvMcMvmProjArray[10] = tempCombinedMatrix.m22;
+            this.tempInvMcMvmProjArray[11] = tempCombinedMatrix.m32;
+            this.tempInvMcMvmProjArray[12] = tempCombinedMatrix.m03;
+            this.tempInvMcMvmProjArray[13] = tempCombinedMatrix.m13;
+            this.tempInvMcMvmProjArray[14] = tempCombinedMatrix.m23;
+            this.tempInvMcMvmProjArray[15] = tempCombinedMatrix.m33;
+
+            // Fade distances — matches DH base's VanillaFadeShader.onApplyUniforms():
+            //   dhNearClip = getNearClipPlaneInBlocks() + 16
+            //   fadeStart = dhNearClip * 1.5
+            //   fadeEnd = dhNearClip * 1.9
+            int renderDist = com.seibel.distanthorizons.core.dependencyInjection.SingletonInjector.INSTANCE
+                    .get(com.seibel.distanthorizons.core.wrapperInterfaces.minecraft.IMinecraftRenderWrapper.class)
+                    .getRenderDistance();
+            var renderWrapper = com.seibel.distanthorizons.core.dependencyInjection.SingletonInjector.INSTANCE
+                    .get(com.seibel.distanthorizons.core.wrapperInterfaces.minecraft.IMinecraftRenderWrapper.class);
+            int vpW = renderWrapper.getTargetFramebufferViewportWidth();
+            int vpH = renderWrapper.getTargetFramebufferViewportHeight();
+            boolean lodOnly = Config.Client.Advanced.Debugging.lodOnlyMode.get();
+            float dhNearClipDistance = DhConfigHelper.getNearClipPlaneInBlocks(renderDist, vpW, vpH, lodOnly) + 16f;
+            float fadeStartDist = dhNearClipDistance * 1.5f;
+            float fadeEndDist = dhNearClipDistance * 1.9f;
+
             this.compositePipeline.render(
                     this.dhFramebuffer.getFramebuffer().getColorAttachment(),
                     this.dhFramebuffer.getFramebuffer().getDepthAttachment(),
                     ssaoTex, fogTex,
                     mcDepthTexture,
-                    debugMode, this.tempInvProjArray, this.tempMcProjArray);
+                    debugMode, this.tempInvProjArray, this.tempMcProjArray,
+                    this.tempInvMcMvmProjArray, fadeStartDist, fadeEndDist);
         }
     }
 

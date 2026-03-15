@@ -71,8 +71,11 @@ public class DhCompositePipeline {
     // Persistent uniform buffers
     private MappedBuffer invProjBuf;
     private MappedBuffer mcProjBuf;
+    private MappedBuffer invMcMvmProjBuf;
     private MappedBuffer debugModeBuf;
     private MappedBuffer useMcDepthBuf;
+    private MappedBuffer startFadeDistBuf;
+    private MappedBuffer endFadeDistBuf;
 
     /**
      * Simple vertex format for the fullscreen quad: just vec2 position.
@@ -144,6 +147,9 @@ public class DhCompositePipeline {
         this.mcProjBuf = new MappedBuffer(64);
         Compat.addUniformWithBuffer(uboBuilder, "matrix4x4", "uMcProj", 1, () -> this.mcProjBuf);
 
+        this.invMcMvmProjBuf = new MappedBuffer(64);
+        Compat.addUniformWithBuffer(uboBuilder, "matrix4x4", "uInvMcMvmProj", 1, () -> this.invMcMvmProjBuf);
+
         this.debugModeBuf = new MappedBuffer(4);
         this.debugModeBuf.putInt(0, 0);
         Compat.addUniformWithBuffer(uboBuilder, "int", "uDebugMode", 1, () -> this.debugModeBuf);
@@ -152,12 +158,23 @@ public class DhCompositePipeline {
         this.useMcDepthBuf.putInt(0, 0);
         Compat.addUniformWithBuffer(uboBuilder, "int", "uUseMcDepth", 1, () -> this.useMcDepthBuf);
 
+        this.startFadeDistBuf = new MappedBuffer(4);
+        this.startFadeDistBuf.putFloat(0, 0);
+        Compat.addUniformWithBuffer(uboBuilder, "float", "uStartFadeBlockDist", 1, () -> this.startFadeDistBuf);
+
+        this.endFadeDistBuf = new MappedBuffer(4);
+        this.endFadeDistBuf.putFloat(0, 0);
+        Compat.addUniformWithBuffer(uboBuilder, "float", "uEndFadeBlockDist", 1, () -> this.endFadeDistBuf);
+
         UBO mainUbo = uboBuilder.buildUBO(0, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT);
         Compat.setUniformSuppliers(mainUbo, java.util.Map.of(
                 "uInvProj", this.invProjBuf,
                 "uMcProj", this.mcProjBuf,
+                "uInvMcMvmProj", this.invMcMvmProjBuf,
                 "uDebugMode", this.debugModeBuf,
-                "uUseMcDepth", this.useMcDepthBuf));
+                "uUseMcDepth", this.useMcDepthBuf,
+                "uStartFadeBlockDist", this.startFadeDistBuf,
+                "uEndFadeBlockDist", this.endFadeDistBuf));
         ubos.add(mainUbo);
 
         // Image descriptors — DH color/depth + SSAO/fog debug + MC depth
@@ -186,7 +203,8 @@ public class DhCompositePipeline {
     public void render(VulkanImage dhColorTexture, VulkanImage dhDepthTexture,
             VulkanImage ssaoTexture, VulkanImage fogTexture,
             VulkanImage mcDepthTexture,
-            int debugMode, float[] invProjMatrix, float[] mcProjMatrix) {
+            int debugMode, float[] invProjMatrix, float[] mcProjMatrix,
+            float[] invMcMvmProjMatrix, float startFadeDist, float endFadeDist) {
         if (!this.initialized) {
             return;
         }
@@ -204,6 +222,13 @@ public class DhCompositePipeline {
                 this.mcProjBuf.putFloat(i * 4, mcProjMatrix[i]);
             }
         }
+        if (invMcMvmProjMatrix != null && invMcMvmProjMatrix.length == 16) {
+            for (int i = 0; i < 16; i++) {
+                this.invMcMvmProjBuf.putFloat(i * 4, invMcMvmProjMatrix[i]);
+            }
+        }
+        this.startFadeDistBuf.putFloat(0, startFadeDist);
+        this.endFadeDistBuf.putFloat(0, endFadeDist);
 
         // Bind DH framebuffer textures to the expected slots
         VTextureSelector.bindTexture(DH_COLOR_TEXTURE_SLOT, dhColorTexture);
