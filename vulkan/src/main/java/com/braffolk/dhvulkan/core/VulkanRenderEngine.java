@@ -588,15 +588,17 @@ public class VulkanRenderEngine implements VulkanBackend {
             }
 
             Compat.rebindMainTarget();
-            this.runComposite(uniforms, mcDepthR32F);
 
-            // VM 0.6: clouds render in MC's render pass, depth-testing against combined depth.
-            // VM 0.4.2: clouds were already rendered in endFrame() via DH framebuffer.
+            // Clouds render BEFORE composite so the composite draws LODs on top (GL_ALWAYS).
+            // Phase 2's discard (where mcDepth >= 1.0) preserves clouds at open-sky LOD pixels.
+            // This matches NONE mode's order in endFrame().
             if (this.cloudRenderer.isAvailable()) {
                 this.profiler.begin(DhFrameProfiler.PHASE_CLOUDS);
                 this.cloudRenderer.renderIfEnabled(uniforms.partialTicks, uniforms.mcProjectionMatrix, uniforms.dhModelViewMatrix);
                 this.profiler.end(DhFrameProfiler.PHASE_CLOUDS);
             }
+
+            this.runComposite(uniforms, mcDepthR32F);
         } catch (Exception e) {
             LOGGER.error("[DH-Vulkan] Phase 2 composite error", e);
             try {
