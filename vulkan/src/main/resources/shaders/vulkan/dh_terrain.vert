@@ -22,7 +22,9 @@ layout(location = 2) out vec4 vPos;
 // Uniforms — shared with fragment shader
 layout(set = 0, binding = 0) uniform DhUniforms {
     mat4 uCombinedMatrix;
+#ifndef USE_PUSH_CONSTANTS
     vec3 uModelOffset;
+#endif
     float uWorldYOffset;
     float uMircoOffset;
     float uEarthRadius;
@@ -34,6 +36,12 @@ layout(set = 0, binding = 0) uniform DhUniforms {
     float uNoiseIntensity;
     int uNoiseDropoff;
 };
+
+#ifdef USE_PUSH_CONSTANTS
+layout(push_constant) uniform PushData {
+    vec3 uModelOffset;
+};
+#endif
 
 // Lightmap sampler
 layout(set = 0, binding = 1) uniform sampler2D uLightMap;

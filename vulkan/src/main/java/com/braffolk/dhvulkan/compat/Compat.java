@@ -362,6 +362,67 @@ public final class Compat {
         #endif
     }
 
+    // ========================= //
+    // Push Constants            //
+    // ========================= //
+
+    /**
+     * Compile-time constant: true on VM 0.6.1+, false on VM 0.4.2.
+     * Used at init time only (shader preprocessing, pipeline creation).
+     */
+    public static boolean hasPushConstants() {
+        #if MC_VER >= MC_1_21_1
+        return true;
+        #else
+        return false;
+        #endif
+    }
+
+    /**
+     * Build a push constant block and attach it to the pipeline builder.
+     * On VM 0.4.2: no-op (push constants not supported).
+     *
+     * @param pipelineBuilder the Pipeline.Builder being constructed
+     * @param type   uniform type string (e.g. "float")
+     * @param name   uniform name (e.g. "uModelOffset")
+     * @param count  element count (e.g. 3 for vec3)
+     * @param bufferSupplier supplier for the MappedBuffer backing this uniform
+     */
+    public static void buildAndSetPushConstants(
+            net.vulkanmod.vulkan.shader.Pipeline.Builder pipelineBuilder,
+            String type, String name, int count,
+            java.util.function.Supplier<net.vulkanmod.vulkan.util.MappedBuffer> bufferSupplier) {
+        #if MC_VER >= MC_1_21_1
+        net.vulkanmod.vulkan.shader.layout.AlignedStruct.Builder pcBuilder =
+                new net.vulkanmod.vulkan.shader.layout.AlignedStruct.Builder();
+        net.vulkanmod.vulkan.shader.layout.Uniform.Info info =
+                net.vulkanmod.vulkan.shader.layout.Uniform.createUniformInfo(type, name, count);
+        info.setBufferSupplier(bufferSupplier);
+        pcBuilder.addUniformInfo(info);
+        try {
+            java.lang.reflect.Field pcField =
+                    net.vulkanmod.vulkan.shader.Pipeline.Builder.class.getDeclaredField("pushConstants");
+            pcField.setAccessible(true);
+            pcField.set(pipelineBuilder, pcBuilder.buildPushConstant());
+        } catch (Exception e) {
+            throw new RuntimeException("[DH-Vulkan] Failed to set push constants on pipeline builder", e);
+        }
+        #endif
+    }
+
+    /**
+     * Per-draw state application:
+     * - VM 0.6.1: issues vkCmdPushConstants (12 bytes, zero-copy to cmd buffer)
+     * - VM 0.4.2: full uploadAndBindUBOs (descriptor set alloc + UBO copy)
+     */
+    public static void applyPerDrawState(net.vulkanmod.vulkan.shader.GraphicsPipeline pipeline) {
+        #if MC_VER >= MC_1_21_1
+        Renderer.getInstance().pushConstants(pipeline);
+        #else
+        Renderer.getInstance().uploadAndBindUBOs(pipeline);
+        #endif
+    }
+
     /**
      * On VM 0.4.2, Uniform.setSupplier() in the constructor only resolves MC's
      * built-in uniforms (ModelViewMat etc). Custom DH uniforms have values=null.

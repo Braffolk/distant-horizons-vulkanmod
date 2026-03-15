@@ -334,8 +334,7 @@ public class VulkanRenderEngine implements VulkanBackend {
     public void setModelOffset(Vec3f modelOffset) {
         if (this.initFailed)
             return;
-        this.renderContext.setUniformVec3f("uModelOffset", modelOffset);
-        this.renderContext.uploadAndBindUBOs();
+        this.renderContext.setModelOffset(modelOffset);
     }
 
     @Override
@@ -355,6 +354,7 @@ public class VulkanRenderEngine implements VulkanBackend {
                     if (quadCount > this.quadIndexBufferCapacity) {
                         this.ensureQuadIndexBuffer(quadCount + 1024);
                     }
+                    this.renderContext.applyPerDrawState();
                     this.renderContext.drawIndexed(stale.vkBuffer, this.quadIndexBuffer, indexCount);
                     this.drawCount++;
                 } catch (Exception e) {
@@ -401,6 +401,7 @@ public class VulkanRenderEngine implements VulkanBackend {
             }
 
             // THE draw call
+            this.renderContext.applyPerDrawState();
             this.renderContext.drawIndexed(cached.vkBuffer, this.quadIndexBuffer, indexCount);
 
         } catch (Exception e) {
@@ -477,6 +478,10 @@ public class VulkanRenderEngine implements VulkanBackend {
             com.seibel.distanthorizons.api.enums.config.EDhApiMcRenderingFadeMode fadeMode = DhConfigHelper.vanillaFadeMode();
             if (fadeMode == com.seibel.distanthorizons.api.enums.config.EDhApiMcRenderingFadeMode.NONE) {
                 // NONE: only composite, no Phase 2b re-composite.
+                // Render clouds BEFORE composite so LODs draw on top (no depth available in NONE mode).
+                if (this.cloudRenderer.isAvailable()) {
+                    this.cloudRenderer.renderIfEnabled(uniforms.partialTicks, uniforms.mcProjectionMatrix, uniforms.dhModelViewMatrix);
+                }
                 VulkanImage mcDepthForComposite = DhVulkanConfig.get().vulkanRenderMode == 6 && this.depthReaderPipeline != null
                         ? this.depthReaderPipeline.getCachedDepthTexture()
                         : null;
@@ -534,10 +539,7 @@ public class VulkanRenderEngine implements VulkanBackend {
 
         com.seibel.distanthorizons.api.enums.config.EDhApiMcRenderingFadeMode fadeMode = DhConfigHelper.vanillaFadeMode();
         if (fadeMode == com.seibel.distanthorizons.api.enums.config.EDhApiMcRenderingFadeMode.NONE) {
-            // NONE: Phase 1 was the only composite. Just render clouds (VM 0.6 only).
-            if (this.frameReady && this.cloudRenderer.isAvailable()) {
-                this.cloudRenderer.renderIfEnabled(uniforms.partialTicks, uniforms.mcProjectionMatrix, uniforms.dhModelViewMatrix);
-            }
+            // NONE: clouds already rendered in endFrame before composite. Nothing to do.
             return;
         }
 

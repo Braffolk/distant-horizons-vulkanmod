@@ -36,9 +36,9 @@ public class VulkanCloudRenderer {
 
     private static final Logger LOGGER = LogManager.getLogger("DH-VulkanMod");
 
-    // Cached singleton — avoids per-frame SingletonInjector.INSTANCE.get()
-    private static final IMinecraftRenderWrapper MC_RENDER =
-            SingletonInjector.INSTANCE.get(IMinecraftRenderWrapper.class);
+    // Lazy-initialized — SingletonInjector may not have it registered at class load time
+    private static IMinecraftRenderWrapper MC_RENDER;
+    private static boolean mcRenderResolved = false;
 
     // Cloud grid constants (same as VM)
     private static final int CELL_WIDTH = 12;
@@ -134,6 +134,11 @@ public class VulkanCloudRenderer {
 
     private void renderClouds(ClientLevel level, Minecraft mc, int cloudHeight,
                               float partialTicks, Mat4f mcProjection, Mat4f mcModelView) throws Throwable {
+        if (!mcRenderResolved) {
+            MC_RENDER = SingletonInjector.INSTANCE.get(IMinecraftRenderWrapper.class);
+            mcRenderResolved = true;
+        }
+        if (MC_RENDER == null) return;
         var camPos = MC_RENDER.getCameraExactPosition();
 
         int ticks = (int) (level.getGameTime() % Integer.MAX_VALUE);

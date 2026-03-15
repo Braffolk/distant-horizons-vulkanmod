@@ -21,7 +21,9 @@ layout(location = 0) out vec4 fragColor;
 // Uniforms — shared with vertex shader
 layout(set = 0, binding = 0) uniform DhUniforms {
     mat4 uCombinedMatrix;
+#ifndef USE_PUSH_CONSTANTS
     vec3 uModelOffset;
+#endif
     float uWorldYOffset;
     float uMircoOffset;
     float uEarthRadius;
