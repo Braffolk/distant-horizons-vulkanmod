@@ -75,8 +75,6 @@ public class VulkanRenderEngine implements VulkanBackend {
     private DhDepthReaderPipeline depthReaderPipeline;
     /** Cached MC depth texture read at beginFrame() for use in deferredComposite() */
     private VulkanImage cachedMcDepthTexture = null;
-    /** One-time flag for diagnostic depth read log */
-    private boolean depthReadLogged = false;
     /** Cloud renderer -- renders clouds after DH composite with correct depth */
     private final VulkanCloudRenderer cloudRenderer = new VulkanCloudRenderer();
 
@@ -563,12 +561,6 @@ public class VulkanRenderEngine implements VulkanBackend {
             if (this.depthReaderPipeline != null) {
                 mcDepthR32F = this.depthReaderPipeline.readDepth(mcDepth);
                 this.cachedMcDepthTexture = mcDepthR32F;
-
-                if (!this.depthReadLogged) {
-                    LOGGER.info("[DH-Vulkan] MC depth read: {}x{} fmt={}",
-                            mcDepth.width, mcDepth.height, mcDepth.format);
-                    this.depthReadLogged = true;
-                }
             }
 
             Compat.rebindMainTarget();
@@ -610,15 +602,8 @@ public class VulkanRenderEngine implements VulkanBackend {
         }
     }
 
-    private boolean compositeDrawLogged = false;
     private void runComposite(RenderUniforms uniforms, VulkanImage mcDepthTexture) {
         if (this.compositePipeline != null && this.dhFramebuffer != null) {
-            if (!compositeDrawLogged) {
-                LOGGER.info("[DH-Vulkan] runComposite executing (mcDepth={}, frameReady={})",
-                        mcDepthTexture != null ? (mcDepthTexture.width + "x" + mcDepthTexture.height) : "null",
-                        this.frameReady);
-                compositeDrawLogged = true;
-            }
             int debugMode = DhVulkanConfig.get().vulkanRenderMode;
             VulkanImage ssaoTex = this.ssaoPipeline != null ? this.ssaoPipeline.getIntermediateTexture() : null;
             VulkanImage fogTex = this.fogPipeline != null ? this.fogPipeline.getIntermediateTexture() : null;

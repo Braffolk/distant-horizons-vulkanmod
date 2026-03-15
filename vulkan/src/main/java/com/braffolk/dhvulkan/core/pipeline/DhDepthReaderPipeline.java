@@ -23,7 +23,7 @@ import net.vulkanmod.vulkan.shader.PipelineState;
 import net.vulkanmod.vulkan.shader.descriptor.ImageDescriptor;
 import net.vulkanmod.vulkan.shader.descriptor.UBO;
 import net.vulkanmod.vulkan.shader.layout.AlignedStruct;
-import net.vulkanmod.vulkan.texture.VTextureSelector;
+
 import net.vulkanmod.vulkan.texture.VulkanImage;
 
 import java.io.BufferedReader;
@@ -72,7 +72,7 @@ public class DhDepthReaderPipeline {
     private net.vulkanmod.vulkan.util.MappedBuffer dummyBuf;
     private int width, height;
     private boolean initialized = false;
-    private boolean diagLogged = false;
+
 
     private static final com.seibel.distanthorizons.core.logging.DhLogger LOGGER = new com.seibel.distanthorizons.core.logging.DhLoggerBuilder()
             .build();
@@ -153,26 +153,6 @@ public class DhDepthReaderPipeline {
         // Prepare depth-only view (does NOT restore — stays set through upload)
         Compat.prepareMcDepthForSampling(MC_DEPTH_READ_SLOT, mcDepth);
 
-        // One-shot diagnostics: log the depth image state at the point of sampling
-        if (!this.diagLogged) {
-            try {
-                int currentLayout = mcDepth.getCurrentLayout();
-                long imageView = mcDepth.getImageView();
-                long sampler = mcDepth.getSampler();
-                VulkanImage slotImage = VTextureSelector.getImage(MC_DEPTH_READ_SLOT);
-                boolean slotMatch = (slotImage == mcDepth);
-                long slotView = slotImage != null ? slotImage.getImageView() : 0;
-                LOGGER.info("[DH-Vulkan] DEPTH DIAG: mcDepth.currentLayout={} format={} aspect={} " +
-                        "imageView={} sampler={} slot3match={} slot3view={}",
-                        currentLayout, mcDepth.format, mcDepth.aspect,
-                        imageView, sampler, slotMatch, slotView);
-                LOGGER.info("[DH-Vulkan] DEPTH DIAG: boundRenderPass={} width={}x{}",
-                        Renderer.getInstance().getBoundRenderPass() != null ? "ACTIVE" : "null",
-                        mcDepth.width, mcDepth.height);
-            } catch (Exception e) {
-                LOGGER.error("[DH-Vulkan] DEPTH DIAG failed", e);
-            }
-        }
 
         // Save/set state
         boolean prevCull = VRenderSystem.cull;
@@ -185,16 +165,6 @@ public class DhDepthReaderPipeline {
         Renderer.getInstance().bindGraphicsPipeline(this.pipeline);
         Renderer.getInstance().uploadAndBindUBOs(this.pipeline);
 
-        // Log post-upload state (after descriptor set is written)
-        if (!this.diagLogged) {
-            try {
-                int layoutAfter = mcDepth.getCurrentLayout();
-                LOGGER.info("[DH-Vulkan] DEPTH DIAG post-upload: mcDepth.currentLayout={}", layoutAfter);
-                this.diagLogged = true;
-            } catch (Exception e) {
-                LOGGER.error("[DH-Vulkan] DEPTH DIAG post-upload failed", e);
-            }
-        }
 
         Compat.draw(this.quadVertexBuffer, 3);
         Renderer.getInstance().endRenderPass();

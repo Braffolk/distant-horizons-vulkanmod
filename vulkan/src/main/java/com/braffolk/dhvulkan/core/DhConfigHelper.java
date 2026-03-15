@@ -33,14 +33,6 @@ public final class DhConfigHelper {
         throw new IllegalArgumentException("[DH-VulkanMod] Config value is not a Number: " + value);
     }
 
-    /** Safely read any Number config entry as double. */
-    public static double toDouble(Object value) {
-        if (value instanceof Number) {
-            return ((Number) value).doubleValue();
-        }
-        throw new IllegalArgumentException("[DH-VulkanMod] Config value is not a Number: " + value);
-    }
-
     // ========================= //
     // Terrain config accessors  //
     // ========================= //

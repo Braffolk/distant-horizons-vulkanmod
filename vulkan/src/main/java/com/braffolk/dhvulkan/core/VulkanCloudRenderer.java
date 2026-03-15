@@ -82,7 +82,6 @@ public class VulkanCloudRenderer {
     private int configRefreshCounter = 0;
     private static final int CONFIG_REFRESH_INTERVAL = 60;
 
-    private boolean cloudDiagLogged = false;
 
     public void renderIfEnabled(float partialTicks, Mat4f mcProjection, Mat4f mcModelView) {
         // Periodic config check (not every frame)
@@ -95,21 +94,18 @@ public class VulkanCloudRenderer {
             }
         }
         if (!this.cloudRenderingEnabled) {
-            if (!cloudDiagLogged) { LOGGER.info("[DH-Vulkan] CLOUD DIAG: disabled by config"); cloudDiagLogged = true; }
             return;
         }
 
         Minecraft mc = Minecraft.getInstance();
         ClientLevel level = mc.level;
         if (level == null) {
-            if (!cloudDiagLogged) { LOGGER.info("[DH-Vulkan] CLOUD DIAG: level is null"); cloudDiagLogged = true; }
             return;
         }
 
         // Check cloud height from dimension
         int cloudHeight = Compat.getCloudHeight(level);
         if (cloudHeight < 0) {
-            if (!cloudDiagLogged) { LOGGER.info("[DH-Vulkan] CLOUD DIAG: cloudHeight={} (negative, skipping)", cloudHeight); cloudDiagLogged = true; }
             return;
         }
 
@@ -118,7 +114,6 @@ public class VulkanCloudRenderer {
             resolveReflection();
         }
         if (this.reflectionFailed) {
-            if (!cloudDiagLogged) { LOGGER.info("[DH-Vulkan] CLOUD DIAG: reflection failed"); cloudDiagLogged = true; }
             return;
         }
 
@@ -126,15 +121,8 @@ public class VulkanCloudRenderer {
         if (!this.textureLoaded) {
             loadCloudTexture();
             if (!this.textureLoaded) {
-                if (!cloudDiagLogged) { LOGGER.info("[DH-Vulkan] CLOUD DIAG: texture not loaded"); cloudDiagLogged = true; }
                 return;
             }
-        }
-
-        if (!cloudDiagLogged) {
-            LOGGER.info("[DH-Vulkan] CLOUD DIAG: all checks passed, rendering clouds. height={} boundRP={}",
-                    cloudHeight, Renderer.getInstance().getBoundRenderPass() != null ? "ACTIVE" : "null");
-            cloudDiagLogged = true;
         }
 
         try {
