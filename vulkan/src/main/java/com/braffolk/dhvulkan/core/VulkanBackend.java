@@ -64,10 +64,24 @@ public interface VulkanBackend {
     void deferredComposite(RenderUniforms uniforms);
 
     /**
+     * Late re-composite: called from renderLevel @RETURN, AFTER terrain + weather.
+     * Re-composites DH LODs with real MC depth for SINGLE/DOUBLE fade modes.
+     */
+    void lateComposite(RenderUniforms uniforms);
+
+    /**
      * Queue a VBO for deferred GPU buffer free on the next render frame.
      * Thread-safe -- called from DH's worker threads.
      */
     void queueDataFree(VkVertexData data);
+
+    /**
+     * Read MC's depth buffer and cache it for the current frame's composite.
+     * Must be called at renderLevel @RETURN — after MC has fully rendered
+     * terrain/translucent/weather, when the swapchain depth is in a known
+     * Vulkan image layout that supports sampling.
+     */
+    void readAndCacheMcDepth();
 
     /** Clean up all Vulkan resources */
     void cleanup();

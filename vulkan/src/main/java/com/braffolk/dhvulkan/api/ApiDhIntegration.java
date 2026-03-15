@@ -27,6 +27,11 @@ public class ApiDhIntegration implements DhIntegration {
     }
 
     @Override
+    public VulkanBackend getBackend() {
+        return this.backend;
+    }
+
+    @Override
     public String getName() {
         return "DH 3.0 API";
     }

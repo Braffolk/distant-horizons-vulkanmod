@@ -107,6 +107,16 @@ public class Dh24RenderDelegate implements IVulkanRenderDelegate {
     }
 
     @Override
+    public void lateComposite(DhApiRenderParam renderParam) {
+        this.cachedUniforms.dhProjectionMatrix.set(renderParam.dhProjectionMatrix);
+        this.cachedUniforms.dhModelViewMatrix.set(renderParam.dhModelViewMatrix);
+        this.cachedUniforms.mcProjectionMatrix.set(renderParam.mcProjectionMatrix);
+        this.cachedUniforms.worldYOffset = renderParam.worldYOffset;
+        this.cachedUniforms.partialTicks = renderParam.partialTicks;
+        this.backend.lateComposite(this.cachedUniforms);
+    }
+
+    @Override
     public void freeBuffer(GLVertexBuffer vbo) {
         int vboId = System.identityHashCode(vbo);
         VkVertexData data = this.vertexDataCache.remove(vboId);

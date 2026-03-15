@@ -72,6 +72,10 @@ public class VulkanRenderEngine implements VulkanBackend {
     private DhFogPipeline fogPipeline;
     /** Depth reader -- copies MC depth to R32F for sampling on NVIDIA */
     private DhDepthReaderPipeline depthReaderPipeline;
+    /** Cached MC depth texture read at beginFrame() for use in deferredComposite() */
+    private VulkanImage cachedMcDepthTexture = null;
+    /** One-time flag for diagnostic depth read log */
+    private boolean depthReadLogged = false;
     /** Cloud renderer -- renders clouds after DH composite with correct depth */
     private final VulkanCloudRenderer cloudRenderer = new VulkanCloudRenderer();
 
@@ -435,9 +439,57 @@ public class VulkanRenderEngine implements VulkanBackend {
             return;
 
         try {
-            // End DH's render pass if still active (may have been ended by deferredComposite)
+            // End DH's render pass — transitions attachments to SHADER_READ_ONLY
+            Renderer.getInstance().endRenderPass();
+
+            // SSAO post-process (between LOD render and composite)
+            if (this.ssaoPipeline != null && DhConfigHelper.ssaoEnabled()) {
+                try {
+                    this.tempCombinedMatrix.set(uniforms.dhProjectionMatrix);
+                    this.ssaoPipeline.render(this.dhFramebuffer, this.tempCombinedMatrix);
+                } catch (Exception e) {
+                    LOGGER.error("[DH-Vulkan] SSAO render failed", e);
+                }
+            }
+
+            // Fog post-process (after SSAO, before composite)
+            if (this.fogPipeline != null && DhConfigHelper.dhFogEnabled()) {
+                try {
+                    this.tempCombinedMatrix.set(uniforms.dhModelViewMatrix);
+                    this.tempInvProj.set(uniforms.dhProjectionMatrix);
+                    this.fogPipeline.render(this.dhFramebuffer,
+                            this.tempCombinedMatrix,
+                            this.tempInvProj,
+                            uniforms.partialTicks);
+                } catch (Exception e) {
+                    LOGGER.error("[DH-Vulkan] Fog render failed", e);
+                }
+            }
+
+            // End any render pass left by SSAO/Fog, then rebind MC
             Renderer.getInstance().endRenderPass();
             Compat.rebindMainTarget();
+
+            // Phase 1 composite: draw LODs WITHOUT MC depth comparison.
+            // MC terrain hasn't rendered yet (DH fires at prepareChunkRenders @HEAD).
+            // For debug mode 6: use cached depth from previous frame (acceptable for debug).
+            // For normal rendering: null depth — Phase 2b at renderLevel @RETURN
+            // will re-composite with real MC depth for SINGLE/DOUBLE modes.
+            com.seibel.distanthorizons.api.enums.config.EDhApiMcRenderingFadeMode fadeMode = DhConfigHelper.vanillaFadeMode();
+            if (fadeMode == com.seibel.distanthorizons.api.enums.config.EDhApiMcRenderingFadeMode.NONE) {
+                // NONE: only composite, no Phase 2b re-composite.
+                VulkanImage mcDepthForComposite = DhVulkanConfig.get().vulkanRenderMode == 6 && this.depthReaderPipeline != null
+                        ? this.depthReaderPipeline.getCachedDepthTexture()
+                        : null;
+                this.runComposite(uniforms, mcDepthForComposite);
+            } else if (DhVulkanConfig.get().vulkanRenderMode != 6) {
+                // SINGLE/DOUBLE normal: draw LOD colors with depth=1.0 (shader handles it).
+                // Phase 2b (lateComposite at renderLevel @RETURN) re-composites with
+                // real MC depth AND proper gl_FragDepth writes.
+                this.runComposite(uniforms, null);
+            }
+            // SINGLE/DOUBLE + mode 6: skip Phase 1 entirely —
+            // lateComposite alone handles debug via depth reader (matches vm.5).
 
             // Restore MC render state
             VRenderSystem.cull = this.savedCullState;
@@ -458,76 +510,104 @@ public class VulkanRenderEngine implements VulkanBackend {
 
     @Override
     public void deferredComposite(RenderUniforms uniforms) {
+        // Phase 2a: called from addCloudsPass @HEAD — AFTER MC terrain.
+        // Only renders clouds. Depth reading is in lateComposite (renderLevel @RETURN).
+
         if (!this.frameReady)
             return;
 
         try {
-            // End DH's render pass
+            this.cloudRenderer.renderIfEnabled(uniforms.partialTicks, uniforms.mcProjectionMatrix);
+        } catch (Exception e) {
+            LOGGER.error("[DH-Vulkan] deferredComposite error", e);
+        }
+    }
+
+    /**
+     * Phase 2b: called from renderLevel @RETURN — AFTER terrain AND weather.
+     * 
+     * Only reads and caches MC depth for debug mode 6 visualization.
+     * Does NOT re-composite LODs — Phase 1 already composited LOD colors
+     * with gl_FragDepth=1.0, letting MC terrain and weather render on top
+     * via rasterizer depth testing. Re-compositing here would overwrite
+     * weather (rain/snow) because the depth check can't detect weather pixels.
+     */
+    @Override
+    public void lateComposite(RenderUniforms uniforms) {
+        com.seibel.distanthorizons.api.enums.config.EDhApiMcRenderingFadeMode fadeMode = DhConfigHelper.vanillaFadeMode();
+
+        if (!this.depthReadLogged) {
+            LOGGER.info("[DH-Vulkan] lateComposite called: fadeMode={}, frameReady={}", fadeMode, this.frameReady);
+        }
+
+        if (fadeMode == com.seibel.distanthorizons.api.enums.config.EDhApiMcRenderingFadeMode.NONE) {
+            return;
+        }
+
+        if (!this.frameReady)
+            return;
+
+        // Read and cache MC depth for debug mode 6 (next frame's Phase 1 uses cached depth)
+        try {
+            VulkanImage mcDepth = Compat.getSwapChainDepthAttachment();
             Renderer.getInstance().endRenderPass();
 
-            // SSAO post-process
-            if (this.ssaoPipeline != null && DhConfigHelper.ssaoEnabled()) {
-                try {
-                    this.tempCombinedMatrix.set(uniforms.dhProjectionMatrix);
-                    this.ssaoPipeline.render(this.dhFramebuffer, this.tempCombinedMatrix);
-                } catch (Exception e) {
-                    LOGGER.error("[DH-Vulkan] SSAO render failed", e);
-                }
-            }
+            if (this.depthReaderPipeline != null) {
+                this.cachedMcDepthTexture = this.depthReaderPipeline.readDepth(mcDepth);
 
-            // Fog post-process
-            if (this.fogPipeline != null && DhConfigHelper.dhFogEnabled()) {
-                try {
-                    this.tempCombinedMatrix.set(uniforms.dhModelViewMatrix);
-                    this.tempInvProj.set(uniforms.dhProjectionMatrix);
-                    this.fogPipeline.render(this.dhFramebuffer,
-                            this.tempCombinedMatrix,
-                            this.tempInvProj,
-                            uniforms.partialTicks);
-                } catch (Exception e) {
-                    LOGGER.error("[DH-Vulkan] Fog render failed", e);
-                }
-            }
-
-            // End any render pass left by SSAO/Fog, then rebind MC
-            Renderer.getInstance().endRenderPass();
-
-            // Read MC depth for depth-compared composite (fade mode support)
-            com.seibel.distanthorizons.api.enums.config.EDhApiMcRenderingFadeMode fadeMode = DhConfigHelper.vanillaFadeMode();
-            VulkanImage mcDepthTexture = null;
-            if (fadeMode != com.seibel.distanthorizons.api.enums.config.EDhApiMcRenderingFadeMode.NONE
-                    || DhVulkanConfig.get().vulkanRenderMode == 6) {
-                try {
-                    VulkanImage mcDepth = Compat.getSwapChainDepthAttachment();
-                    if (this.depthReaderPipeline != null) {
-                        mcDepthTexture = this.depthReaderPipeline.readDepth(mcDepth);
-                    }
-                } catch (Exception e) {
-                    LOGGER.error("[DH-Vulkan] MC depth read failed, compositing without depth", e);
+                if (!this.depthReadLogged) {
+                    LOGGER.info("[DH-Vulkan] MC depth read: {}x{} fmt={}",
+                            mcDepth.width, mcDepth.height, mcDepth.format);
+                    this.depthReadLogged = true;
                 }
             }
 
             Compat.rebindMainTarget();
-            this.runComposite(uniforms, mcDepthTexture);
-
-            // Render clouds AFTER composite — MC's depth buffer now has both
-            // MC terrain and DH LOD depth, so clouds depth-test correctly.
-            this.cloudRenderer.renderIfEnabled(uniforms.partialTicks, uniforms.mcProjectionMatrix);
+            // No runComposite() — Phase 1 already handled LOD compositing.
+            // Re-compositing here would overwrite weather pixels.
         } catch (Exception e) {
-            LOGGER.error("[DH-Vulkan] deferredComposite error, falling back to no-depth", e);
+            LOGGER.error("[DH-Vulkan] lateComposite error", e);
             try {
                 Renderer.getInstance().endRenderPass();
                 Compat.rebindMainTarget();
-                this.runComposite(uniforms, null);
-                this.cloudRenderer.renderIfEnabled(uniforms.partialTicks, uniforms.mcProjectionMatrix);
             } catch (Exception e2) {
-                LOGGER.error("[DH-Vulkan] Fallback composite also failed", e2);
+                LOGGER.error("[DH-Vulkan] Recovery also failed", e2);
             }
         }
     }
 
+    @Override
+    public void readAndCacheMcDepth() {
+        if (!this.initialized || this.initFailed || this.depthReaderPipeline == null)
+            return;
+
+        com.seibel.distanthorizons.api.enums.config.EDhApiMcRenderingFadeMode fadeMode = DhConfigHelper.vanillaFadeMode();
+        if (fadeMode == com.seibel.distanthorizons.api.enums.config.EDhApiMcRenderingFadeMode.NONE
+                && DhVulkanConfig.get().vulkanRenderMode != 6) {
+            return; // no need to read depth
+        }
+
+        try {
+            VulkanImage mcDepth = Compat.getSwapChainDepthAttachment();
+            Renderer.getInstance().endRenderPass();
+
+            this.cachedMcDepthTexture = this.depthReaderPipeline.readDepth(mcDepth);
+
+            Compat.rebindMainTarget();
+        } catch (Exception e) {
+            LOGGER.error("[DH-Vulkan] readAndCacheMcDepth failed", e);
+        }
+    }
+
+    private boolean compositeDrawLogged = false;
     private void runComposite(RenderUniforms uniforms, VulkanImage mcDepthTexture) {
         if (this.compositePipeline != null && this.dhFramebuffer != null) {
+            if (!compositeDrawLogged) {
+                LOGGER.info("[DH-Vulkan] runComposite executing (mcDepth={}, frameReady={})",
+                        mcDepthTexture != null ? (mcDepthTexture.width + "x" + mcDepthTexture.height) : "null",
+                        this.frameReady);
+                compositeDrawLogged = true;
+            }
             int debugMode = DhVulkanConfig.get().vulkanRenderMode;
             VulkanImage ssaoTex = this.ssaoPipeline != null ? this.ssaoPipeline.getIntermediateTexture() : null;
             VulkanImage fogTex = this.fogPipeline != null ? this.fogPipeline.getIntermediateTexture() : null;

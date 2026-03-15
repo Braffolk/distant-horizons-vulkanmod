@@ -12,6 +12,9 @@ public interface DhIntegration {
     /** Called once at mod init to set up this integration path */
     void initialize(VulkanBackend backend);
 
+    /** Get the underlying Vulkan backend */
+    VulkanBackend getBackend();
+
     /** Human-readable name for logging */
     String getName();
 }

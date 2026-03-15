@@ -15,12 +15,19 @@ public class Dh24Integration implements DhIntegration {
 
     private static final Logger LOGGER = LogManager.getLogger("DH-VulkanMod");
     private Dh24RenderDelegate delegate;
+    private VulkanBackend backend;
     private boolean wired = false;
 
     @Override
     public void initialize(VulkanBackend backend) {
+        this.backend = backend;
         this.delegate = new Dh24RenderDelegate(backend);
         LOGGER.info("[DH-VulkanMod] DH 2.4 integration initialized. Delegate ready for wiring.");
+    }
+
+    @Override
+    public VulkanBackend getBackend() {
+        return this.backend;
     }
 
     /**

@@ -69,6 +69,12 @@ public interface IVulkanRenderDelegate {
     void deferredComposite(DhApiRenderParam renderParam);
 
     /**
+     * Late re-composite: called from renderLevel @RETURN, AFTER terrain + weather.
+     * Re-composites DH LODs with real MC depth for SINGLE/DOUBLE fade modes.
+     */
+    void lateComposite(DhApiRenderParam renderParam);
+
+    /**
      * Free the cached Vulkan buffer associated with a GLVertexBuffer.
      * Must be called on the RENDER THREAD only (e.g. from cleanup() or
      * beginFrame()).

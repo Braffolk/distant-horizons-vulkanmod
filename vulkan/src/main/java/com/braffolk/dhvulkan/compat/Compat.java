@@ -30,6 +30,7 @@ public final class Compat {
 
     private static java.lang.reflect.Field vulkanImageIdField;
     private static java.lang.reflect.Field vulkanImageViewField;
+    private static java.lang.reflect.Field vulkanImageLayoutField;
     private static java.lang.reflect.Field rendererCmdBufferField;
     private static java.lang.reflect.Field defaultMainPassAuxField;
 
@@ -41,6 +42,10 @@ public final class Compat {
         try {
             vulkanImageViewField = VulkanImage.class.getDeclaredField("mainImageView");
             vulkanImageViewField.setAccessible(true);
+        } catch (Exception ignored) {}
+        try {
+            vulkanImageLayoutField = VulkanImage.class.getDeclaredField("currentLayout");
+            vulkanImageLayoutField.setAccessible(true);
         } catch (Exception ignored) {}
         try {
             rendererCmdBufferField = Renderer.class.getDeclaredField("currentCmdBuffer");
@@ -70,6 +75,42 @@ public final class Compat {
     /** @return true if VulkanMod is loaded (no GL context available) */
     public static boolean isVulkanModActive() {
         return VULKANMOD_ACTIVE;
+    }
+
+    // ========================= //
+    // Deferred composite hook   //
+    // ========================= //
+
+    /**
+     * Static hook for Phase 2 deferred composite.
+     * Set by MixinLodRenderer (dh24 module), called by MixinLevelRenderer (shared module).
+     * This bridges the module boundary without requiring shared code to import dh24 types.
+     */
+    private static Runnable deferredCompositeHook;
+
+    public static void setDeferredCompositeHook(Runnable hook) {
+        deferredCompositeHook = hook;
+    }
+
+    public static void runDeferredCompositeHook() {
+        Runnable hook = deferredCompositeHook;
+        if (hook != null) hook.run();
+    }
+
+    /**
+     * Static hook for Phase 2b late re-composite.
+     * Set by MixinLodRenderer (dh24 module), called by MixinLevelRenderer (shared module)
+     * at renderLevel @RETURN.
+     */
+    private static Runnable lateCompositeHook;
+
+    public static void setLateCompositeHook(Runnable hook) {
+        lateCompositeHook = hook;
+    }
+
+    public static void runLateCompositeHook() {
+        Runnable hook = lateCompositeHook;
+        if (hook != null) hook.run();
     }
 
     // ========================= //
@@ -391,16 +432,20 @@ public final class Compat {
      * Prepare MC's depth texture for sampling by setting the depth-only
      * image view on combined D+S formats and binding to the given slot.
      * <p>
+     * vm.5 logic: only create a depth-only view for combined depth+stencil
+     * formats (D24S8, D32S8). For depth-only formats like D32_SFLOAT (Mac),
+     * the default mainImageView already has DEPTH_BIT aspect — just bind directly.
+     * <p>
      * IMPORTANT: Does NOT restore the original view — you MUST call
      * {@link #restoreMcDepthView()} after the draw completes.
-     * This is necessary because VTextureSelector.bindTexture only records
-     * the image reference; the actual descriptor is written later during
-     * uploadAndBindUBOs, which reads mainImageView at that point.
      */
     public static void prepareMcDepthForSampling(int slot, VulkanImage depthImage) {
         int VK_IMAGE_ASPECT_STENCIL_BIT = 4;
         int VK_IMAGE_ASPECT_DEPTH_BIT = 2;
 
+        // vm.5 logic: only create depth-only view for combined D+S formats
+        // (aspect has stencil bit set). D32_SFLOAT (aspect=2, no stencil)
+        // works fine with the default mainImageView.
         if ((depthImage.aspect & VK_IMAGE_ASPECT_STENCIL_BIT) != 0) {
             try {
                 long imageId = (long) vulkanImageIdField.get(depthImage);
@@ -410,13 +455,14 @@ public final class Compat {
                         org.lwjgl.vulkan.VK10.vkDestroyImageView(
                                 net.vulkanmod.vulkan.Vulkan.getVkDevice(), depthOnlyView, null);
                     }
+                    // vm.5 used the 5-param overload which maps to createImageView(id, viewType=1, format, aspect, arrayLayers=0→1, baseMip=0, mips)
                     depthOnlyView = VulkanImage.createImageView(
                             imageId, depthImage.format,
                             VK_IMAGE_ASPECT_DEPTH_BIT,
-                            0 /* VK_IMAGE_VIEW_TYPE_2D */, depthImage.mipLevels);
+                            1, depthImage.mipLevels);
                     lastDepthImageId = imageId;
-                    LOGGER.info("[DH-Vulkan] Created depth-only view for D+S format={} (view={})",
-                            depthImage.format, depthOnlyView);
+                    LOGGER.info("[DH-Vulkan] Created depth-only view for D+S format={} aspect={} (view={})",
+                            depthImage.format, depthImage.aspect, depthOnlyView);
                 }
 
                 savedOriginalView = (long) vulkanImageViewField.get(depthImage);
@@ -424,15 +470,99 @@ public final class Compat {
                 vulkanImageViewField.setLong(depthImage, depthOnlyView);
 
                 VTextureSelector.bindTexture(slot, depthImage);
-                // DO NOT restore here — descriptor set write happens later
             } catch (Exception e) {
                 LOGGER.error("[DH-Vulkan] Failed to create depth-only view, binding as-is", e);
                 savedDepthImage = null;
                 VTextureSelector.bindTexture(slot, depthImage);
             }
         } else {
+            // D32_SFLOAT or other depth-only formats — just bind directly
             savedDepthImage = null;
             VTextureSelector.bindTexture(slot, depthImage);
+        }
+    }
+
+    /** Check if a VkFormat is a depth or depth-stencil format. */
+    private static boolean isDepthFormat(int format) {
+        // VK_FORMAT_D16_UNORM = 124
+        // VK_FORMAT_X8_D24_UNORM_PACK32 = 125
+        // VK_FORMAT_D32_SFLOAT = 126
+        // VK_FORMAT_S8_UINT = 127 (stencil only, not depth)
+        // VK_FORMAT_D16_UNORM_S8_UINT = 128
+        // VK_FORMAT_D24_UNORM_S8_UINT = 129
+        // VK_FORMAT_D32_SFLOAT_S8_UINT = 130
+        return format >= 124 && format <= 130 && format != 127;
+    }
+
+    /**
+     * Force-set the currentLayout field on a VulkanImage via reflection.
+     * <p>
+     * VulkanMod's render pass finalLayout transitions update the GPU layout
+     * but do NOT update the software-tracked currentLayout field. This causes
+     * transitionImageLayout() to skip barriers on subsequent frames
+     * (it returns early when currentLayout == newLayout).
+     * <p>
+     * After endRenderPass, the depth attachment's GPU layout is
+     * DEPTH_STENCIL_ATTACHMENT_OPTIMAL (render pass finalLayout), but
+     * currentLayout may still say SHADER_READ_ONLY_OPTIMAL from our
+     * previous frame's transition. Calling this forces currentLayout to
+     * match the actual GPU state so the next transition works correctly.
+     */
+    public static void forceDepthLayout(VulkanImage depthImage) {
+        if (vulkanImageLayoutField == null) return;
+        try {
+            vulkanImageLayoutField.setInt(depthImage,
+                    org.lwjgl.vulkan.VK10.VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL);
+        } catch (Exception e) {
+            LOGGER.error("[DH-Vulkan] Failed to force depth layout", e);
+        }
+    }
+
+    /**
+     * Transition MC's depth image to SHADER_READ_ONLY_OPTIMAL for sampling.
+     * <p>
+     * Must be called AFTER endRenderPass() (depth is no longer an active
+     * attachment) and BEFORE any render pass that samples the depth image.
+     * <p>
+     * Since VulkanMod's render pass endRenderPass() transitions depth to
+     * DEPTH_STENCIL_ATTACHMENT_OPTIMAL (layout 3) but may not update the
+     * software-tracked currentLayout field consistently, we first force
+     * currentLayout to match the actual GPU state, then transition.
+     */
+    public static void transitionDepthForSampling(VulkanImage depthImage) {
+        try {
+            // Force currentLayout to match actual GPU state after endRenderPass.
+            // The render pass finalLayout puts depth in DEPTH_STENCIL_ATTACHMENT_OPTIMAL (3).
+            forceDepthLayout(depthImage);
+
+            // Now transition from DEPTH_STENCIL_ATTACHMENT (3) → SHADER_READ_ONLY (5)
+            org.lwjgl.vulkan.VkCommandBuffer cmd = Renderer.getCommandBuffer();
+            try (org.lwjgl.system.MemoryStack stack = org.lwjgl.system.MemoryStack.stackPush()) {
+                depthImage.transitionImageLayout(stack, cmd,
+                        org.lwjgl.vulkan.VK10.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+            }
+        } catch (Exception e) {
+            LOGGER.error("[DH-Vulkan] Failed to transition depth for sampling", e);
+        }
+    }
+
+    /**
+     * Transition MC's depth image back to DEPTH_STENCIL_ATTACHMENT_OPTIMAL
+     * after sampling is complete, so MC can use it as a depth attachment again.
+     * <p>
+     * Must be called AFTER the depth-reading render pass has ended and
+     * BEFORE rebindMainTarget() starts a new render pass with the depth
+     * as an attachment.
+     */
+    public static void transitionDepthForAttachment(VulkanImage depthImage) {
+        try {
+            org.lwjgl.vulkan.VkCommandBuffer cmd = Renderer.getCommandBuffer();
+            try (org.lwjgl.system.MemoryStack stack = org.lwjgl.system.MemoryStack.stackPush()) {
+                depthImage.transitionImageLayout(stack, cmd,
+                        org.lwjgl.vulkan.VK10.VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL);
+            }
+        } catch (Exception e) {
+            LOGGER.error("[DH-Vulkan] Failed to transition depth for attachment", e);
         }
     }
 

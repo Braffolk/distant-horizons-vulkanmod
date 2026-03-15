@@ -64,7 +64,15 @@ public class MixinLodRenderer implements IVulkanLodRenderer {
     public void dhvulkan$compositeVulkanFrame() {
         if (this.dhvulkan$vulkanDelegate != null && this.dhvulkan$lastVulkanRenderParams != null) {
             this.dhvulkan$vulkanDelegate.deferredComposite(this.dhvulkan$lastVulkanRenderParams);
-            this.dhvulkan$lastVulkanRenderParams = null;
+            // Don't null params yet — lateComposite (Phase 2b) still needs them.
+        }
+    }
+
+    @Override
+    public void dhvulkan$lateCompositeVulkanFrame() {
+        if (this.dhvulkan$vulkanDelegate != null && this.dhvulkan$lastVulkanRenderParams != null) {
+            this.dhvulkan$vulkanDelegate.lateComposite(this.dhvulkan$lastVulkanRenderParams);
+            this.dhvulkan$lastVulkanRenderParams = null; // Done with params for this frame.
         }
     }
 
@@ -142,15 +150,22 @@ public class MixinLodRenderer implements IVulkanLodRenderer {
             }
         }
 
-        // Composite DH onto MC — must happen BEFORE endFrame restores state
-        // and BEFORE MC renders weather/particles. This matches DH core's
-        // applyToMcTexture() → runRenderPassCleanup() order.
-        profiler.popPush("LOD Vulkan composite");
-        this.dhvulkan$vulkanDelegate.deferredComposite(renderParams);
-
-        // End frame — restores MC render state
+        // End frame — SSAO, Fog, Phase 1 composite (without MC depth),
+        // then restore MC state. Phase 2 (depth read + re-composite)
+        // happens at addCloudsPass @HEAD via MixinLevelRenderer.
         profiler.popPush("LOD Vulkan cleanup");
         this.dhvulkan$vulkanDelegate.endFrame(renderParams);
+        this.dhvulkan$lastVulkanRenderParams = renderParams;
+
+        // Set the deferred composite hook for Phase 2a (addCloudsPass).
+        com.braffolk.dhvulkan.compat.Compat.setDeferredCompositeHook(() -> {
+            this.dhvulkan$compositeVulkanFrame();
+        });
+
+        // Set the late composite hook for Phase 2b (renderLevel @RETURN).
+        com.braffolk.dhvulkan.compat.Compat.setLateCompositeHook(() -> {
+            this.dhvulkan$lateCompositeVulkanFrame();
+        });
 
         profiler.pop();
         ci.cancel();

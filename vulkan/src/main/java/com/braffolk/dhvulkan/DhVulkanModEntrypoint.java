@@ -103,4 +103,17 @@ public class DhVulkanModEntrypoint implements ClientModInitializer {
     public static DhIntegration getActiveIntegration() {
         return activeIntegration;
     }
+
+    /**
+     * Called from MixinLevelRenderer at renderLevel @RETURN to read MC's depth
+     * buffer while the swapchain depth is in a known-good Vulkan image layout.
+     * The result is cached and used by the next deferredComposite() call.
+     */
+    public static void readAndCacheMcDepth() {
+        if (activeIntegration == null) return;
+        VulkanBackend backend = activeIntegration.getBackend();
+        if (backend != null) {
+            backend.readAndCacheMcDepth();
+        }
+    }
 }

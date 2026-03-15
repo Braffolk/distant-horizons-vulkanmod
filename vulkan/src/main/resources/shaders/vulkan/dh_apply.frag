@@ -112,11 +112,17 @@ void main() {
         fragColor = texture(gDhColorTexture, TexCoord);
     }
 
-    // Remap DH depth to MC-compatible depth for correct occlusion against MC terrain.
-    // DH uses dhProjectionMatrix with extended near/far clip planes.
-    // Clamp to 0.999 so LODs beyond MC's far plane still have depth < sky (1.0),
-    // ensuring clouds (which get depth ~1.0 or are frustum-clipped at MC's far plane)
-    // correctly fail the depth test against distant LODs.
-    float mcCompatibleDepth = remapDepthDhToMc(TexCoord, dhDepth);
-    gl_FragDepth = clamp(mcCompatibleDepth, 0.0, 0.999);
+    if (uUseMcDepth != 0) {
+        // Phase 2b (with MC depth comparison): remap DH depth to MC-compatible depth.
+        // Clamp to 0.999 so LODs beyond MC's far plane still have depth < sky (1.0),
+        // ensuring clouds (depth ~1.0) fail the depth test against distant LODs.
+        float mcCompatibleDepth = remapDepthDhToMc(TexCoord, dhDepth);
+        gl_FragDepth = clamp(mcCompatibleDepth, 0.0, 0.999);
+    } else {
+        // Phase 1 (without MC depth): write far-plane depth so MC terrain AND
+        // weather both render freely on top via LEQUAL. LOD colors are still
+        // blended onto the swapchain — only the depth is transparent.
+        // Phase 2b re-composites with proper depth after weather renders.
+        gl_FragDepth = 1.0;
+    }
 }

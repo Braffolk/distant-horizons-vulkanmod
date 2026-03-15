@@ -72,6 +72,7 @@ public class DhDepthReaderPipeline {
     private net.vulkanmod.vulkan.util.MappedBuffer dummyBuf;
     private int width, height;
     private boolean initialized = false;
+    private boolean diagLogged = false;
 
     private static final com.seibel.distanthorizons.core.logging.DhLogger LOGGER = new com.seibel.distanthorizons.core.logging.DhLoggerBuilder()
             .build();
@@ -152,6 +153,27 @@ public class DhDepthReaderPipeline {
         // Prepare depth-only view (does NOT restore — stays set through upload)
         Compat.prepareMcDepthForSampling(MC_DEPTH_READ_SLOT, mcDepth);
 
+        // One-shot diagnostics: log the depth image state at the point of sampling
+        if (!this.diagLogged) {
+            try {
+                int currentLayout = mcDepth.getCurrentLayout();
+                long imageView = mcDepth.getImageView();
+                long sampler = mcDepth.getSampler();
+                VulkanImage slotImage = VTextureSelector.getImage(MC_DEPTH_READ_SLOT);
+                boolean slotMatch = (slotImage == mcDepth);
+                long slotView = slotImage != null ? slotImage.getImageView() : 0;
+                LOGGER.info("[DH-Vulkan] DEPTH DIAG: mcDepth.currentLayout={} format={} aspect={} " +
+                        "imageView={} sampler={} slot3match={} slot3view={}",
+                        currentLayout, mcDepth.format, mcDepth.aspect,
+                        imageView, sampler, slotMatch, slotView);
+                LOGGER.info("[DH-Vulkan] DEPTH DIAG: boundRenderPass={} width={}x{}",
+                        Renderer.getInstance().getBoundRenderPass() != null ? "ACTIVE" : "null",
+                        mcDepth.width, mcDepth.height);
+            } catch (Exception e) {
+                LOGGER.error("[DH-Vulkan] DEPTH DIAG failed", e);
+            }
+        }
+
         // Save/set state
         boolean prevCull = VRenderSystem.cull;
         boolean prevBlend = PipelineState.blendInfo.enabled;
@@ -162,6 +184,18 @@ public class DhDepthReaderPipeline {
         Compat.beginRenderPass(this.renderPass, this.framebuffer);
         Renderer.getInstance().bindGraphicsPipeline(this.pipeline);
         Renderer.getInstance().uploadAndBindUBOs(this.pipeline);
+
+        // Log post-upload state (after descriptor set is written)
+        if (!this.diagLogged) {
+            try {
+                int layoutAfter = mcDepth.getCurrentLayout();
+                LOGGER.info("[DH-Vulkan] DEPTH DIAG post-upload: mcDepth.currentLayout={}", layoutAfter);
+                this.diagLogged = true;
+            } catch (Exception e) {
+                LOGGER.error("[DH-Vulkan] DEPTH DIAG post-upload failed", e);
+            }
+        }
+
         Compat.draw(this.quadVertexBuffer, 3);
         Renderer.getInstance().endRenderPass();
 
@@ -172,6 +206,17 @@ public class DhDepthReaderPipeline {
         VRenderSystem.cull = prevCull;
         PipelineState.blendInfo.enabled = prevBlend;
 
+        return this.framebuffer.getColorAttachment();
+    }
+
+    /**
+     * Returns the cached R32F depth texture from the last readDepth() call.
+     * This texture persists between frames (only recreated on resize),
+     * so it can be used in the NEXT frame's composite for 1-frame-delayed
+     * MC depth comparison.
+     */
+    public VulkanImage getCachedDepthTexture() {
+        if (!this.initialized || this.framebuffer == null) return null;
         return this.framebuffer.getColorAttachment();
     }
 

@@ -17,4 +17,6 @@ public interface IVulkanLodRenderer {
     DhApiRenderParam dhvulkan$getLastVulkanRenderParams();
 
     void dhvulkan$compositeVulkanFrame();
+
+    void dhvulkan$lateCompositeVulkanFrame();
 }
