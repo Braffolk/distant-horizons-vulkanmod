@@ -1,6 +1,10 @@
-## v2.4.0-3.0.0+vm.2 - NVIDIA weather effects and fast clouds hotfix
+## v2.4.0-3.0.0+vm.2 - NVIDIA weather effects, SSAO smoothing, and rendering fixes
 
 **Hotfix** — weather effects (rain, snow, particles) now render correctly in front of LODs on all GPUs. Fast clouds no longer render on top of LODs. Previously, the Phase 2 composite was overwriting weather pixels with LOD colors on NVIDIA and potentially other non-MoltenVK drivers.
+
+- **SSAO smoothing** — enabled the bilateral Gaussian blur on SSAO output. Previously the blur was disabled (radius 0), causing visibly grainy/noisy ambient occlusion.
+- **Z-fighting fix (NONE mode)** — added small depth bias to LOD depth output in NONE fade mode, preventing z-fighting at the MC/LOD overlap boundary.
+- **High-altitude LOD gap fix** — LOD clip distance now uses 3D distance instead of XZ-only. Previously, flying high and looking down created a visible gap between MC terrain and LODs because the cylindrical XZ clip didn't match MC's spherical render distance.
 
 
 ## v2.4.0-3.0.0+vm.1
