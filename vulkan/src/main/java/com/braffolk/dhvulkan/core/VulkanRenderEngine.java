@@ -507,7 +507,14 @@ public class VulkanRenderEngine implements VulkanBackend {
                 this.runComposite(uniforms, mcDepthForComposite);
                 this.profiler.end(DhFrameProfiler.PHASE_COMPOSITE);
             } else if (DhVulkanConfig.get().vulkanRenderMode != 6) {
-                // SINGLE/DOUBLE normal: draw LOD colors with depth=1.0 (shader handles it).
+                // SINGLE/DOUBLE normal: render clouds first, then Phase 1 composite.
+                // Clouds render BEFORE composite so LODs draw on top via alpha blend,
+                // naturally occluding clouds behind tall LOD mountains.
+                if (this.cloudRenderer.isAvailable()) {
+                    this.profiler.begin(DhFrameProfiler.PHASE_CLOUDS);
+                    this.cloudRenderer.renderIfEnabled(uniforms.partialTicks, uniforms.mcProjectionMatrix, uniforms.dhModelViewMatrix);
+                    this.profiler.end(DhFrameProfiler.PHASE_CLOUDS);
+                }
                 this.profiler.begin(DhFrameProfiler.PHASE_COMPOSITE);
                 this.runComposite(uniforms, null);
                 this.profiler.end(DhFrameProfiler.PHASE_COMPOSITE);
@@ -535,52 +542,31 @@ public class VulkanRenderEngine implements VulkanBackend {
 
     @Override
     public void deferredComposite(RenderUniforms uniforms) {
-        // Fallback: called from addCloudsPass @HEAD if that hook fires.
-        // On VulkanMod 0.6.1, addCloudsPass does NOT exist — all work is done
-        // in lateComposite (renderLevel @RETURN) instead.
-        // This is kept for compatibility with VM versions that DO call addCloudsPass.
-        if (!this.frameReady) return;
-        // If this fires, skip lateComposite's work by marking phase2 done.
-        this.phase2Done = true;
-        doPhase2(uniforms);
+        // Not used — addCloudsPass/renderClouds mixin hooks don't fire in VulkanMod
+        // (MC 1.21.11 Frame Graph prevents method-level injection).
+        // Phase 2 runs exclusively via lateComposite.
     }
 
     /**
-     * Called from renderLevel @RETURN — AFTER terrain, weather, everything.
-     * 
-     * On VulkanMod 0.6.1, this is the ONLY hook that fires (addCloudsPass doesn't exist).
-     * Does: read MC depth, re-composite LODs with depth comparison, render clouds.
+     * Phase 2: re-composite LODs at renderLevel @RETURN (after terrain + weather).
+     * Reads MC depth and re-composites LODs with per-pixel depth comparison.
+     * Open-sky LOD pixels are discarded (shader) to preserve weather.
+     * Clouds are NOT rendered here — they render in endFrame before Phase 1.
      */
     @Override
     public void lateComposite(RenderUniforms uniforms) {
-        if (this.phase2Done) {
-            this.phase2Done = false;
-            return; // Already handled by deferredComposite
-        }
+        if (!this.frameReady) return;
 
         com.seibel.distanthorizons.api.enums.config.EDhApiMcRenderingFadeMode fadeMode = DhConfigHelper.vanillaFadeMode();
         if (fadeMode == com.seibel.distanthorizons.api.enums.config.EDhApiMcRenderingFadeMode.NONE) {
-            // NONE: clouds already rendered in endFrame before composite. Nothing to do.
             return;
         }
 
-        if (!this.frameReady) return;
-        doPhase2(uniforms);
-    }
-
-    private boolean phase2Done = false;
-
-    /**
-     * Phase 2: read MC depth, re-composite LODs with depth comparison, render clouds.
-     * Called from whichever hook fires first (deferredComposite or lateComposite).
-     */
-    private void doPhase2(RenderUniforms uniforms) {
         this.profiler.begin(DhFrameProfiler.PHASE_PHASE2);
         try {
             VulkanImage mcDepth = Compat.getSwapChainDepthAttachment();
             Renderer.getInstance().endRenderPass();
 
-            // Read MC depth into sampleable R32F
             VulkanImage mcDepthR32F = null;
             if (this.depthReaderPipeline != null) {
                 mcDepthR32F = this.depthReaderPipeline.readDepth(mcDepth);
@@ -588,15 +574,6 @@ public class VulkanRenderEngine implements VulkanBackend {
             }
 
             Compat.rebindMainTarget();
-
-            // Clouds render BEFORE composite so the composite draws LODs on top (GL_ALWAYS).
-            // Phase 2's discard (where mcDepth >= 1.0) preserves clouds at open-sky LOD pixels.
-            // This matches NONE mode's order in endFrame().
-            if (this.cloudRenderer.isAvailable()) {
-                this.profiler.begin(DhFrameProfiler.PHASE_CLOUDS);
-                this.cloudRenderer.renderIfEnabled(uniforms.partialTicks, uniforms.mcProjectionMatrix, uniforms.dhModelViewMatrix);
-                this.profiler.end(DhFrameProfiler.PHASE_CLOUDS);
-            }
 
             this.runComposite(uniforms, mcDepthR32F);
         } catch (Exception e) {

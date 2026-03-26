@@ -304,6 +304,7 @@ public class DhCompositePipeline {
         VRenderSystem.depthMask = true;
         // GL_ALWAYS: the shader handles depth comparison via the MC depth texture.
         // The depth test always passes, but depth WRITES still happen via gl_FragDepth.
+        // Open-sky LOD pixels are discarded in the shader to preserve weather.
         VRenderSystem.depthFun = 519; // GL_ALWAYS
         // Premultiplied alpha blending: DH's color buffer is already
         // alpha-premultiplied from DH's own transparent pass blending,

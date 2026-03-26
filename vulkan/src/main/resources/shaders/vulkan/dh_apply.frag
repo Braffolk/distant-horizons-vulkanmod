@@ -139,19 +139,18 @@ void main() {
     if (uUseMcDepth != 0) {
         float mcDepth = texture(gMcDepthTexture, TexCoord).r;
         if (mcDepth < 1.0) {
-            // MC terrain exists at this pixel — write remapped depth for fade transition.
+            // MC terrain exists — write remapped depth for fade transition.
             float mcCompatibleDepth = remapDepthDhToMc(TexCoord, dhDepth);
             gl_FragDepth = clamp(mcCompatibleDepth, 0.0, 0.999);
         } else {
-            // No MC terrain (open sky) — write 1.0 so weather, particles, and
-            // other effects rendered after this composite pass freely via LEQUAL.
+            // Open sky — but we already discarded above, so this is unreachable
+            // when uUseMcDepth is set. Safety fallback.
             gl_FragDepth = 1.0;
         }
     } else {
         // Phase 1 (without MC depth): write far-plane depth so MC terrain AND
         // weather both render freely on top via LEQUAL. LOD colors are still
         // blended onto the swapchain — only the depth is transparent.
-        // Phase 2b re-composites with proper depth after weather renders.
         gl_FragDepth = 1.0;
     }
 }

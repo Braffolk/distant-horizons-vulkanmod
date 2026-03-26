@@ -36,7 +36,8 @@ public class VulkanCloudRenderer {
 
     private static final Logger LOGGER = LogManager.getLogger("DH-VulkanMod");
 
-    // Lazy-initialized — SingletonInjector may not have it registered at class load time
+    // Lazy-initialized — SingletonInjector may not have it registered at class load
+    // time
     private static IMinecraftRenderWrapper MC_RENDER;
     private static boolean mcRenderResolved = false;
 
@@ -103,26 +104,33 @@ public class VulkanCloudRenderer {
         if (--this.configRefreshCounter <= 0) {
             this.configRefreshCounter = CONFIG_REFRESH_INTERVAL;
             try {
-                this.cloudRenderingEnabled = Config.Client.Advanced.Graphics.GenericRendering.enableCloudRendering.get();
+                this.cloudRenderingEnabled = Config.Client.Advanced.Graphics.GenericRendering.enableCloudRendering
+                        .get();
             } catch (Exception e) {
                 this.cloudRenderingEnabled = true;
             }
         }
-        if (!this.cloudRenderingEnabled) return;
+        if (!this.cloudRenderingEnabled)
+            return;
 
         Minecraft mc = Minecraft.getInstance();
         ClientLevel level = mc.level;
-        if (level == null) return;
+        if (level == null)
+            return;
 
         int cloudHeight = Compat.getCloudHeight(level);
-        if (cloudHeight < 0) return;
+        if (cloudHeight < 0)
+            return;
 
-        if (!this.reflectionResolved) resolveReflection();
-        if (this.reflectionFailed) return;
+        if (!this.reflectionResolved)
+            resolveReflection();
+        if (this.reflectionFailed)
+            return;
 
         if (!this.textureLoaded) {
             loadCloudTexture();
-            if (!this.textureLoaded) return;
+            if (!this.textureLoaded)
+                return;
         }
 
         try {
@@ -133,12 +141,13 @@ public class VulkanCloudRenderer {
     }
 
     private void renderClouds(ClientLevel level, Minecraft mc, int cloudHeight,
-                              float partialTicks, Mat4f mcProjection, Mat4f mcModelView) throws Throwable {
+            float partialTicks, Mat4f mcProjection, Mat4f mcModelView) throws Throwable {
         if (!mcRenderResolved) {
             MC_RENDER = SingletonInjector.INSTANCE.get(IMinecraftRenderWrapper.class);
             mcRenderResolved = true;
         }
-        if (MC_RENDER == null) return;
+        if (MC_RENDER == null)
+            return;
         var camPos = MC_RENDER.getCameraExactPosition();
 
         int ticks = (int) (level.getGameTime() % Integer.MAX_VALUE);
@@ -151,9 +160,12 @@ public class VulkanCloudRenderer {
         int centerCellZ = (int) Math.floor(centerZ / CELL_WIDTH);
 
         byte yState;
-        if (centerY < -4.0f) yState = Y_BELOW_CLOUDS;
-        else if (centerY > 0.0f) yState = Y_ABOVE_CLOUDS;
-        else yState = Y_INSIDE_CLOUDS;
+        if (centerY < -4.0f)
+            yState = Y_BELOW_CLOUDS;
+        else if (centerY > 0.0f)
+            yState = Y_ABOVE_CLOUDS;
+        else
+            yState = Y_INSIDE_CLOUDS;
 
         CloudStatus cloudsType = mc.options.getCloudsType();
 
@@ -170,23 +182,29 @@ public class VulkanCloudRenderer {
 
         if (this.needsRebuild) {
             this.needsRebuild = false;
-            if (this.cloudVBO != null) this.vboCloseHandle.invoke(this.cloudVBO);
+            if (this.cloudVBO != null)
+                this.vboCloseHandle.invoke(this.cloudVBO);
 
             Object cloudsMesh = buildCloudMesh(centerCellX, centerCellZ, centerY, cloudsType);
-            if (cloudsMesh == null) { this.cloudVBO = null; return; }
+            if (cloudsMesh == null) {
+                this.cloudVBO = null;
+                return;
+            }
 
             this.cloudVBO = this.vboConstructorHandle.invoke(true);
             this.vboUploadHandle.invoke(this.cloudVBO, cloudsMesh);
         }
 
-        if (this.cloudVBO == null) return;
+        if (this.cloudVBO == null)
+            return;
 
         // --- Rendering ---
         float xTranslation = (float) (centerX - (centerCellX * CELL_WIDTH));
         float yTranslation = (float) centerY;
         float zTranslation = (float) (centerZ - (centerCellZ * CELL_WIDTH));
 
-        // Restore MC's projection — critical for depth testing against combined depth buffer.
+        // Restore MC's projection — critical for depth testing against combined depth
+        // buffer.
         copyToJoml(mcProjection, this.reusableJomlProj);
         VRenderSystem.applyProjectionMatrix(this.reusableJomlProj);
 
@@ -216,6 +234,8 @@ public class VulkanCloudRenderer {
                     org.lwjgl.opengl.GL11.GL_ZERO);
             VRenderSystem.enableDepthTest();
             VRenderSystem.depthFunc(org.lwjgl.opengl.GL11.GL_LEQUAL);
+            // Clouds depth-TEST (hide behind terrain/LODs) but do NOT depth-WRITE.
+            // This prevents cloud depth from blocking weather/particles rendered later.
             VRenderSystem.depthMask = true;
             VRenderSystem.setPolygonModeGL(org.lwjgl.opengl.GL11.GL_FILL);
             VRenderSystem.setPrimitiveTopologyGL(org.lwjgl.opengl.GL11.GL_TRIANGLES);
@@ -248,11 +268,11 @@ public class VulkanCloudRenderer {
     }
 
     // ========================= //
-    // Cloud mesh generation     //
+    // Cloud mesh generation //
     // ========================= //
 
     private Object buildCloudMesh(int centerCellX, int centerCellZ,
-                                  double cloudY, CloudStatus cloudsType) {
+            double cloudY, CloudStatus cloudsType) {
         final float upFaceBrightness = 1.0f;
         final float xDirBrightness = 0.9f;
         final float downFaceBrightness = 0.7f;
@@ -353,7 +373,7 @@ public class VulkanCloudRenderer {
     }
 
     // ========================= //
-    // Cloud texture loading     //
+    // Cloud texture loading //
     // ========================= //
 
     private void loadCloudTexture() {
@@ -383,13 +403,18 @@ public class VulkanCloudRenderer {
             for (int x = 0; x < this.cloudGridWidth; x++) {
                 int idx = z * this.cloudGridWidth + x;
                 int pixel = this.cloudPixels[idx];
-                if (!hasAlpha(pixel)) continue;
+                if (!hasAlpha(pixel))
+                    continue;
 
                 byte faces = (byte) (DIR_NEG_Y_BIT | DIR_POS_Y_BIT);
-                if (pixel != getTexelWrapped(x - 1, z)) faces |= DIR_NEG_X_BIT;
-                if (pixel != getTexelWrapped(x + 1, z)) faces |= DIR_POS_X_BIT;
-                if (pixel != getTexelWrapped(x, z - 1)) faces |= DIR_NEG_Z_BIT;
-                if (pixel != getTexelWrapped(x, z + 1)) faces |= DIR_POS_Z_BIT;
+                if (pixel != getTexelWrapped(x - 1, z))
+                    faces |= DIR_NEG_X_BIT;
+                if (pixel != getTexelWrapped(x + 1, z))
+                    faces |= DIR_POS_X_BIT;
+                if (pixel != getTexelWrapped(x, z - 1))
+                    faces |= DIR_NEG_Z_BIT;
+                if (pixel != getTexelWrapped(x, z + 1))
+                    faces |= DIR_POS_Z_BIT;
                 renderFaces[idx] = faces;
             }
         }
@@ -421,7 +446,7 @@ public class VulkanCloudRenderer {
     }
 
     // ========================= //
-    // Reflection resolution     //
+    // Reflection resolution //
     // ========================= //
 
     private void resolveReflection() {
@@ -463,7 +488,8 @@ public class VulkanCloudRenderer {
 
             LOGGER.info("[DH-VulkanMod] Cloud renderer MethodHandles resolved (VM 0.6).");
         } catch (Exception e) {
-            LOGGER.info("[DH-VulkanMod] VM 0.6 cloud API not available, custom cloud renderer disabled. ({})", e.getMessage());
+            LOGGER.info("[DH-VulkanMod] VM 0.6 cloud API not available, custom cloud renderer disabled. ({})",
+                    e.getMessage());
             this.reflectionFailed = true;
         }
     }
@@ -471,7 +497,10 @@ public class VulkanCloudRenderer {
     /** Reload cloud texture (called on resource reload). */
     public void resetBuffer() {
         if (this.cloudVBO != null) {
-            try { this.vboCloseHandle.invoke(this.cloudVBO); } catch (Throwable ignored) {}
+            try {
+                this.vboCloseHandle.invoke(this.cloudVBO);
+            } catch (Throwable ignored) {
+            }
             this.cloudVBO = null;
         }
         this.needsRebuild = true;

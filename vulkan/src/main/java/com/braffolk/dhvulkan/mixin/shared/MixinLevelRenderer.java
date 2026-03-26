@@ -11,46 +11,53 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 /**
  * Mixin into Minecraft's {@link LevelRenderer}.
  *
- * At {@code addCloudsPass @HEAD}:
- * 1. Triggers Phase 2 deferred composite via Compat hook — reads MC depth
- *    (terrain has rendered by now) and re-composites DH LODs with per-pixel
- *    depth comparison. Also renders DH clouds after composite.
- * 2. Optionally cancels vanilla cloud rendering when DH overrides it.
+ * Phase 2 deferred composite runs at renderLevel @RETURN (after weather).
+ * The composite uses GL_LEQUAL depth test so it won't overwrite weather pixels
+ * (weather writes depth < 1.0, Phase 2 writes gl_FragDepth = 1.0 at open-sky
+ * LODs, so LEQUAL fails and weather is preserved).
  *
- * This hook fires AFTER terrain but BEFORE weather, so the weather fix
- * (from d46c003) is preserved.
+ * Cloud cancellation hooks at addCloudsPass/renderClouds (require=0).
  */
 @Mixin(LevelRenderer.class)
 public class MixinLevelRenderer {
 
+    /**
+     * Cancel vanilla clouds when DH overrides them (1.20.6 hook).
+     */
     @Inject(method = "addCloudsPass", at = @At("HEAD"), cancellable = true, require = 0)
-    private void dhvulkan$deferredCompositeAndClouds(CallbackInfo ci) {
+    private void dhvulkan$cancelVanillaClouds120(CallbackInfo ci) {
         if (!Compat.isVulkanModActive()) return;
-
-        // Phase 2a: read MC depth + render clouds
-        Compat.runDeferredCompositeHook();
-
-        // Cancel vanilla clouds when DH overrides them
         try {
             if (Config.Client.Advanced.Graphics.overrideVanillaGraphicsSettings.get()) {
                 ci.cancel();
             }
-        } catch (Exception e) {
-            // Config not yet available — let vanilla clouds render
-        }
+        } catch (Exception e) {}
     }
 
     /**
-     * Phase 2b: late re-composite at renderLevel @RETURN.
-     * This fires AFTER terrain + weather + everything else in renderLevel.
-     * Re-composites DH LODs with real MC depth for SINGLE/DOUBLE fade modes.
-     * Same hook point as vm.5's deferredComposite.
+     * Cancel vanilla clouds when DH overrides them (1.21.11 hook).
+     */
+    @Inject(method = "renderClouds", at = @At("HEAD"), cancellable = true, require = 0)
+    private void dhvulkan$cancelVanillaClouds121(CallbackInfo ci) {
+        if (!Compat.isVulkanModActive()) return;
+        try {
+            if (Config.Client.Advanced.Graphics.overrideVanillaGraphicsSettings.get()) {
+                ci.cancel();
+            }
+        } catch (Exception e) {}
+    }
+
+    /**
+     * Phase 2: deferred composite at renderLevel @RETURN.
+     * Fires AFTER terrain + weather + everything.
+     * Uses GL_LEQUAL depth test so weather pixels (depth < 1.0) are preserved —
+     * the composite writes gl_FragDepth = 1.0 at open-sky LODs, which fails
+     * LEQUAL against weather's depth.
      */
     @Inject(method = "renderLevel", at = @At("RETURN"))
     private void dhvulkan$lateComposite(CallbackInfo ci) {
         if (!Compat.isVulkanModActive()) return;
-
-        // Phase 2b: re-composite with real MC depth
         Compat.runLateCompositeHook();
     }
+
 }
