@@ -507,14 +507,7 @@ public class VulkanRenderEngine implements VulkanBackend {
                 this.runComposite(uniforms, mcDepthForComposite);
                 this.profiler.end(DhFrameProfiler.PHASE_COMPOSITE);
             } else if (DhVulkanConfig.get().vulkanRenderMode != 6) {
-                // SINGLE/DOUBLE normal: render clouds first, then Phase 1 composite.
-                // Clouds render BEFORE composite so LODs draw on top via alpha blend,
-                // naturally occluding clouds behind tall LOD mountains.
-                if (this.cloudRenderer.isAvailable()) {
-                    this.profiler.begin(DhFrameProfiler.PHASE_CLOUDS);
-                    this.cloudRenderer.renderIfEnabled(uniforms.partialTicks, uniforms.mcProjectionMatrix, uniforms.dhModelViewMatrix);
-                    this.profiler.end(DhFrameProfiler.PHASE_CLOUDS);
-                }
+                // SINGLE/DOUBLE normal: draw LOD colors with depth=1.0 (shader handles it).
                 this.profiler.begin(DhFrameProfiler.PHASE_COMPOSITE);
                 this.runComposite(uniforms, null);
                 this.profiler.end(DhFrameProfiler.PHASE_COMPOSITE);
@@ -550,8 +543,9 @@ public class VulkanRenderEngine implements VulkanBackend {
     /**
      * Phase 2: re-composite LODs at renderLevel @RETURN (after terrain + weather).
      * Reads MC depth and re-composites LODs with per-pixel depth comparison.
-     * Open-sky LOD pixels are discarded (shader) to preserve weather.
-     * Clouds are NOT rendered here — they render in endFrame before Phase 1.
+     * Open-sky LOD pixels write their LOD depth into the MC depth buffer, but output
+     * alpha=0 so weather colors are preserved.
+     * Finally, clouds are rendered and depth-test against the fully updated MC+LOD depth buffer.
      */
     @Override
     public void lateComposite(RenderUniforms uniforms) {
@@ -575,7 +569,16 @@ public class VulkanRenderEngine implements VulkanBackend {
 
             Compat.rebindMainTarget();
 
+            // Run Phase 2 first: this writes LOD depth into the MC depth buffer for open-sky pixels
             this.runComposite(uniforms, mcDepthR32F);
+
+            // Now the depth buffer contains both MC terrain depth AND LOD depth.
+            // Clouds can accurately depth test against BOTH!
+            if (this.cloudRenderer.isAvailable()) {
+                this.profiler.begin(DhFrameProfiler.PHASE_CLOUDS);
+                this.cloudRenderer.renderIfEnabled(uniforms.partialTicks, uniforms.mcProjectionMatrix, uniforms.dhModelViewMatrix);
+                this.profiler.end(DhFrameProfiler.PHASE_CLOUDS);
+            }
         } catch (Exception e) {
             LOGGER.error("[DH-Vulkan] Phase 2 composite error", e);
             try {

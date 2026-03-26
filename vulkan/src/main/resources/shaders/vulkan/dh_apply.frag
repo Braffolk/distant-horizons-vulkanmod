@@ -27,7 +27,8 @@ layout(set = 0, binding = 5) uniform sampler2D gMcDepthTexture;
  * Reconstruct view-space position from DH depth using DH's inverse projection.
  */
 vec3 reconstructViewPos(vec2 uv, float depth) {
-    vec3 clipPos = vec3(uv, depth) * 2.0 - 1.0;
+    // Vulkan NDC: X,Y in [-1, 1], Z in [0, 1]
+    vec3 clipPos = vec3(uv * 2.0 - 1.0, depth);
     vec4 viewPos = uInvProj * vec4(clipPos, 1.0);
     return viewPos.xyz / viewPos.w;
 }
@@ -40,9 +41,11 @@ vec3 reconstructViewPos(vec2 uv, float depth) {
  * with MC's projection.
  */
 float remapDepthDhToMc(vec2 uv, float dhDepth) {
+    // Vulkan NDC: X,Y in [-1, 1], Z in [0, 1]
     // Single mat4 multiply: uRemapProj = uMcProj * uInvProj (pre-multiplied on CPU)
-    vec4 mcClip = uRemapProj * vec4(vec3(uv, dhDepth) * 2.0 - 1.0, 1.0);
-    return (mcClip.z / mcClip.w) * 0.5 + 0.5;
+    vec4 mcClip = uRemapProj * vec4(uv * 2.0 - 1.0, dhDepth, 1.0);
+    // Vulkan clip space Z/W is already in [0, 1], so we return it directly
+    return mcClip.z / mcClip.w;
 }
 
 /**
@@ -93,11 +96,12 @@ void main() {
             }
         } else {
             // No MC terrain at this pixel (open sky behind LODs).
-            // Phase 1 already composited LODs here with depth 1.0.
-            // Weather/particles may have rendered on top since Phase 1.
-            // Do NOT redraw — discard to preserve whatever is currently on screen.
-            // This fixed rain and snow rendering on NVIDIA.
-            discard;
+            // We want to write LOD depth so clouds can accurately depth-test
+            // against LOD mountains! 
+            // BUT we must NOT overwrite weather/particles that are already on screen.
+            // By emitting alpha=0, Phase 2's blending leaves the color buffer completely 
+            // unchanged (weather is preserved), but it still writes gl_FragDepth!
+            fadeMultiplier = 0.0;
         }
     }
 
@@ -138,15 +142,12 @@ void main() {
 
     if (uUseMcDepth != 0) {
         float mcDepth = texture(gMcDepthTexture, TexCoord).r;
-        if (mcDepth < 1.0) {
-            // MC terrain exists — write remapped depth for fade transition.
-            float mcCompatibleDepth = remapDepthDhToMc(TexCoord, dhDepth);
-            gl_FragDepth = clamp(mcCompatibleDepth, 0.0, 0.999);
-        } else {
-            // Open sky — but we already discarded above, so this is unreachable
-            // when uUseMcDepth is set. Safety fallback.
-            gl_FragDepth = 1.0;
-        }
+        
+        // Write MC-compatible LOD depth for ALL DH pixels in Phase 2.
+        // If mcDepth < 1.0, this handles the fade transition.
+        // If mcDepth >= 1.0, this updates the MC depth buffer so clouds can depth-test!
+        float mcCompatibleDepth = remapDepthDhToMc(TexCoord, dhDepth);
+        gl_FragDepth = clamp(mcCompatibleDepth, 0.0, 1.0);
     } else {
         // Phase 1 (without MC depth): write far-plane depth so MC terrain AND
         // weather both render freely on top via LEQUAL. LOD colors are still
