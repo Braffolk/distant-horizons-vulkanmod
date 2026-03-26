@@ -95,5 +95,5 @@ void main()
 
     gl_Position = uCombinedMatrix * vec4(vertexWorldPos, 1.0);
 
-    gl_ClipDistance[0] = length(vertexWorldPos.xz) - uClipDistance;
+    gl_ClipDistance[0] = length(vertexWorldPos) - uClipDistance;
 }
