@@ -314,7 +314,7 @@ public class DhSsaoPipeline {
         this.tempInvProj.invert();
         setUniformMat4(this.pass1Uniforms, "uInvProj", this.tempInvProj);
         setUniformMat4(this.pass1Uniforms, "uProj", projectionMatrix);
-        setUniformInt(this.pass1Uniforms, "uSampleCount", 4); // reduced from 6 for perf
+        setUniformInt(this.pass1Uniforms, "uSampleCount", 4);
         setUniformFloat(this.pass1Uniforms, "uRadius", 4.0f);
         // Tuned down vs GL path — MC projection gives sharper depth gradients
         // than DH projection, producing stronger occlusion from correct normals.
@@ -354,9 +354,9 @@ public class DhSsaoPipeline {
         // Pass 2: Blur + Apply //
         // ====================== //
 
-        // Fill pass 2 uniforms (use full resolution for blur sampling)
+        // Fill pass 2 uniforms
         setUniformVec2(this.pass2Uniforms, "gViewSize", this.width, this.height);
-        setUniformInt(this.pass2Uniforms, "gBlurRadius", 0); // skip blur — bilinear filtering suffices
+        setUniformInt(this.pass2Uniforms, "gBlurRadius", 2); // 5×5 depth-aware bilateral blur
         setUniformFloat(this.pass2Uniforms, "gNear", 0.05f); // MC default near clip
         setUniformFloat(this.pass2Uniforms, "gFar", (float) RenderUtil.getFarClipPlaneDistanceInBlocks());
         setUniformInt(this.pass2Uniforms, "uDebugMode", 0);
