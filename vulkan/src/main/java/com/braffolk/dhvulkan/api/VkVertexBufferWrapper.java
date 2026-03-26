@@ -31,6 +31,20 @@ public class VkVertexBufferWrapper implements IVertexBufferWrapper {
 
     @Override
     public void upload(ByteBuffer buffer, int vertexCount) {
+        uploadVertexBufferImpl(buffer, vertexCount);
+    }
+
+    // DH 3.0 renamed upload() to uploadVertexBuffer() and added uploadIndexBuffer()
+    // Both must exist for cross-version compatibility
+    public void uploadVertexBuffer(ByteBuffer buffer, int vertexCount) {
+        uploadVertexBufferImpl(buffer, vertexCount);
+    }
+
+    public void uploadIndexBuffer(ByteBuffer buffer, int vertexCount) {
+        // No-op — we use a shared IBO (useSingleIbo() = true in VkRenderApiDefinition)
+    }
+
+    private void uploadVertexBufferImpl(ByteBuffer buffer, int vertexCount) {
         if (this.vertexData == null) {
             this.vertexData = new VkVertexData(id);
         }

@@ -113,6 +113,17 @@ public class VkRenderApiDefinition extends AbstractDhRenderApiDefinition {
             backend.beginFrame();
             backend.fillUniforms(this.cachedUniforms);
             this.frameActive = true;
+
+            // Set up the late composite hook for SINGLE/DOUBLE Phase 2.
+            // MixinLevelRenderer fires at renderLevel @RETURN → Compat.runLateCompositeHook().
+            // In DH 2.4, this hook is set by MixinLodRenderer. In DH 3.0, the 2.4 mixin
+            // doesn't fire, so we set it here to ensure Phase 2 + clouds work in both paths.
+            // Note: no frameActive guard — runRenderPassCleanup sets it false before this fires.
+            // VulkanRenderEngine.lateComposite() has its own frameReady guard.
+            com.braffolk.dhvulkan.compat.Compat.setLateCompositeHook(() -> {
+                toUniforms(renderParams, this.cachedUniforms);
+                backend.lateComposite(this.cachedUniforms);
+            });
         }
 
         @Override
@@ -162,13 +173,22 @@ public class VkRenderApiDefinition extends AbstractDhRenderApiDefinition {
 
         private static void resolveFields() {
             if (reflectionResolved) return;
+            // DH 3.0 renamed vbos → vboOpaqueWrappers, vbosTransparent → vboTransparentWrappers
+            // Try new names first, fall back to old for DH 2.4 compat
             try {
-                vbosField = LodBufferContainer.class.getDeclaredField("vbos");
+                vbosField = LodBufferContainer.class.getDeclaredField("vboOpaqueWrappers");
                 vbosField.setAccessible(true);
-                vbosTransparentField = LodBufferContainer.class.getDeclaredField("vbosTransparent");
+                vbosTransparentField = LodBufferContainer.class.getDeclaredField("vboTransparentWrappers");
                 vbosTransparentField.setAccessible(true);
             } catch (NoSuchFieldException e) {
-                throw new RuntimeException("[DH-VulkanMod] LodBufferContainer missing vbos field", e);
+                try {
+                    vbosField = LodBufferContainer.class.getDeclaredField("vbos");
+                    vbosField.setAccessible(true);
+                    vbosTransparentField = LodBufferContainer.class.getDeclaredField("vbosTransparent");
+                    vbosTransparentField.setAccessible(true);
+                } catch (NoSuchFieldException e2) {
+                    throw new RuntimeException("[DH-VulkanMod] LodBufferContainer missing vbos field (tried both 2.4 and 3.0 names)", e2);
+                }
             }
             reflectionResolved = true;
         }

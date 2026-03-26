@@ -110,6 +110,33 @@ public class DhSsaoPipeline {
     // Pre-allocated temp matrix to avoid per-frame heap allocation
     private final Mat4f tempInvProj = new Mat4f();
 
+    // Cached method handle for RenderUtil.getFarClipPlaneDistanceInBlocks()
+    // DH 2.4 returns int, DH 3.0 returns float — JVM treats return type as part
+    // of the method signature, so we must resolve at runtime via reflection.
+    private static java.lang.reflect.Method farClipMethod;
+    private static boolean farClipMethodResolved = false;
+
+    private static float getFarClipSafe() {
+        if (!farClipMethodResolved) {
+            farClipMethodResolved = true;
+            try {
+                // Try float first (DH 3.0)
+                farClipMethod = RenderUtil.class.getMethod("getFarClipPlaneDistanceInBlocks");
+            } catch (NoSuchMethodException e) {
+                farClipMethod = null;
+            }
+        }
+        if (farClipMethod != null) {
+            try {
+                Object result = farClipMethod.invoke(null);
+                return ((Number) result).floatValue();
+            } catch (Exception e) {
+                // fall through
+            }
+        }
+        return 2400.0f; // safe default
+    }
+
     // SSAO sample count and pre-computed offsets
     private static final int SSAO_SAMPLE_COUNT = 4;
     private static final float GOLDEN_ANGLE = 2.39996323f;
@@ -358,7 +385,7 @@ public class DhSsaoPipeline {
         setUniformVec2(this.pass2Uniforms, "gViewSize", this.width, this.height);
         setUniformInt(this.pass2Uniforms, "gBlurRadius", 2); // 5×5 depth-aware bilateral blur
         setUniformFloat(this.pass2Uniforms, "gNear", 0.05f); // MC default near clip
-        setUniformFloat(this.pass2Uniforms, "gFar", (float) RenderUtil.getFarClipPlaneDistanceInBlocks());
+        setUniformFloat(this.pass2Uniforms, "gFar", getFarClipSafe());
         setUniformInt(this.pass2Uniforms, "uDebugMode", 0);
 
         // Bind raw SSAO texture + DH depth for the apply pass
