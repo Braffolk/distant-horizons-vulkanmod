@@ -154,8 +154,10 @@ void main() {
         if (uIsNoneMode != 0) {
             // In NONE mode, MC terrain doesn't overlap LODs. 
             // Write the true LOD depth so Phase 1 accurately occludes clouds!
+            // Small bias pushes LODs slightly behind MC terrain to prevent z-fighting
+            // at the overlap boundary (MC terrain wins at equal depth).
             float mcCompatibleDepth = remapDepthDhToMc(TexCoord, dhDepth);
-            gl_FragDepth = clamp(mcCompatibleDepth, 0.0, 1.0);
+            gl_FragDepth = clamp(mcCompatibleDepth + 0.0001, 0.0, 1.0);
         } else {
             // For SINGLE/DOUBLE, we must write far-plane depth so MC terrain AND
             // weather both render freely on top via LEQUAL (prevents intense Z-fighting 
