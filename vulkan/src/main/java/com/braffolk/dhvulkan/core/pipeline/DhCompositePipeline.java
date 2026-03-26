@@ -75,6 +75,7 @@ public class DhCompositePipeline {
     private MappedBuffer remapProjBuf;
     private MappedBuffer debugModeBuf;
     private MappedBuffer useMcDepthBuf;
+    private MappedBuffer isNoneModeBuf;
     private MappedBuffer startFadeDistBuf;
     private MappedBuffer endFadeDistBuf;
     private MappedBuffer startFadeDistSqBuf;
@@ -164,6 +165,10 @@ public class DhCompositePipeline {
         this.useMcDepthBuf.putInt(0, 0);
         Compat.addUniformWithBuffer(uboBuilder, "int", "uUseMcDepth", 1, () -> this.useMcDepthBuf);
 
+        this.isNoneModeBuf = new MappedBuffer(4);
+        this.isNoneModeBuf.putInt(0, 0);
+        Compat.addUniformWithBuffer(uboBuilder, "int", "uIsNoneMode", 1, () -> this.isNoneModeBuf);
+
         this.startFadeDistBuf = new MappedBuffer(4);
         this.startFadeDistBuf.putFloat(0, 0);
         Compat.addUniformWithBuffer(uboBuilder, "float", "uStartFadeBlockDist", 1, () -> this.startFadeDistBuf);
@@ -191,7 +196,8 @@ public class DhCompositePipeline {
                 java.util.Map.entry("uStartFadeBlockDist", this.startFadeDistBuf),
                 java.util.Map.entry("uEndFadeBlockDist", this.endFadeDistBuf),
                 java.util.Map.entry("uStartFadeBlockDistSq", this.startFadeDistSqBuf),
-                java.util.Map.entry("uEndFadeBlockDistSq", this.endFadeDistSqBuf)));
+                java.util.Map.entry("uEndFadeBlockDistSq", this.endFadeDistSqBuf),
+                java.util.Map.entry("uIsNoneMode", this.isNoneModeBuf)));
         ubos.add(mainUbo);
 
         // Image descriptors — DH color/depth + SSAO/fog debug + MC depth
@@ -220,7 +226,7 @@ public class DhCompositePipeline {
     public void render(VulkanImage dhColorTexture, VulkanImage dhDepthTexture,
             VulkanImage ssaoTexture, VulkanImage fogTexture,
             VulkanImage mcDepthTexture,
-            int debugMode, float[] invProjMatrix, float[] mcProjMatrix,
+            int debugMode, boolean isNoneMode, float[] invProjMatrix, float[] mcProjMatrix,
             float[] invMcMvmProjMatrix, float startFadeDist, float endFadeDist) {
         if (!this.initialized) {
             return;
@@ -229,6 +235,7 @@ public class DhCompositePipeline {
         // Update uniforms
         this.debugModeBuf.putInt(0, debugMode);
         this.useMcDepthBuf.putInt(0, mcDepthTexture != null ? 1 : 0);
+        this.isNoneModeBuf.putInt(0, isNoneMode ? 1 : 0);
         if (invProjMatrix != null && invProjMatrix.length == 16) {
             for (int i = 0; i < 16; i++) {
                 this.invProjBuf.putFloat(i * 4, invProjMatrix[i]);

@@ -494,18 +494,20 @@ public class VulkanRenderEngine implements VulkanBackend {
             com.seibel.distanthorizons.api.enums.config.EDhApiMcRenderingFadeMode fadeMode = DhConfigHelper.vanillaFadeMode();
             if (fadeMode == com.seibel.distanthorizons.api.enums.config.EDhApiMcRenderingFadeMode.NONE) {
                 // NONE: only composite, no Phase 2b re-composite.
-                // Render clouds BEFORE composite so LODs draw on top (no depth available in NONE mode).
-                if (this.cloudRenderer.isAvailable()) {
-                    this.profiler.begin(DhFrameProfiler.PHASE_CLOUDS);
-                    this.cloudRenderer.renderIfEnabled(uniforms.partialTicks, uniforms.mcProjectionMatrix, uniforms.dhModelViewMatrix);
-                    this.profiler.end(DhFrameProfiler.PHASE_CLOUDS);
-                }
                 this.profiler.begin(DhFrameProfiler.PHASE_COMPOSITE);
                 VulkanImage mcDepthForComposite = DhVulkanConfig.get().vulkanRenderMode == 6 && this.depthReaderPipeline != null
                         ? this.depthReaderPipeline.getCachedDepthTexture()
                         : null;
                 this.runComposite(uniforms, mcDepthForComposite);
                 this.profiler.end(DhFrameProfiler.PHASE_COMPOSITE);
+
+                // Render clouds AFTER composite so they accurately depth test against MC terrain and DH LODs.
+                // (In NONE mode, Phase 1 composite writes true LOD depth).
+                if (this.cloudRenderer.isAvailable()) {
+                    this.profiler.begin(DhFrameProfiler.PHASE_CLOUDS);
+                    this.cloudRenderer.renderIfEnabled(uniforms.partialTicks, uniforms.mcProjectionMatrix, uniforms.dhModelViewMatrix);
+                    this.profiler.end(DhFrameProfiler.PHASE_CLOUDS);
+                }
             } else if (DhVulkanConfig.get().vulkanRenderMode != 6) {
                 // SINGLE/DOUBLE normal: draw LOD colors with depth=1.0 (shader handles it).
                 this.profiler.begin(DhFrameProfiler.PHASE_COMPOSITE);
@@ -694,12 +696,13 @@ public class VulkanRenderEngine implements VulkanBackend {
             float fadeStartDist = dhNearClipDistance * 1.5f;
             float fadeEndDist = dhNearClipDistance * 1.9f;
 
+            boolean isNoneMode = DhConfigHelper.vanillaFadeMode() == com.seibel.distanthorizons.api.enums.config.EDhApiMcRenderingFadeMode.NONE;
             this.compositePipeline.render(
                     this.dhFramebuffer.getFramebuffer().getColorAttachment(),
                     this.dhFramebuffer.getFramebuffer().getDepthAttachment(),
                     ssaoTex, fogTex,
                     mcDepthTexture,
-                    debugMode, this.tempInvProjArray, this.tempMcProjArray,
+                    debugMode, isNoneMode, this.tempInvProjArray, this.tempMcProjArray,
                     this.tempInvMcMvmProjArray, fadeStartDist, fadeEndDist);
         }
     }

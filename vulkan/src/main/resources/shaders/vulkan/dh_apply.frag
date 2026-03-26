@@ -11,6 +11,7 @@ layout(std140, binding = 0) uniform CompositeUBO {
     mat4 uRemapProj;        // = uMcProj * uInvProj — fused unproject+reproject (1× mat4 instead of 2×)
     int uDebugMode;         // 0=off, 1=depth, 2=ssao, 3=fog_alpha, 4=fog_color, 5=normals, 6=mc_depth
     int uUseMcDepth;        // 0=no MC depth comparison, 1=use MC depth for fade
+    int uIsNoneMode;        // 1=NONE mode (no overlap), 0=SINGLE/DOUBLE phase 1
     float uStartFadeBlockDist;  // distance where DH fade begins (blocks)
     float uEndFadeBlockDist;    // distance where DH fade ends (blocks)
     float uStartFadeBlockDistSq; // squared, for dot() instead of length()
@@ -149,9 +150,17 @@ void main() {
         float mcCompatibleDepth = remapDepthDhToMc(TexCoord, dhDepth);
         gl_FragDepth = clamp(mcCompatibleDepth, 0.0, 1.0);
     } else {
-        // Phase 1 (without MC depth): write far-plane depth so MC terrain AND
-        // weather both render freely on top via LEQUAL. LOD colors are still
-        // blended onto the swapchain — only the depth is transparent.
-        gl_FragDepth = 1.0;
+        // Phase 1 (without MC depth):
+        if (uIsNoneMode != 0) {
+            // In NONE mode, MC terrain doesn't overlap LODs. 
+            // Write the true LOD depth so Phase 1 accurately occludes clouds!
+            float mcCompatibleDepth = remapDepthDhToMc(TexCoord, dhDepth);
+            gl_FragDepth = clamp(mcCompatibleDepth, 0.0, 1.0);
+        } else {
+            // For SINGLE/DOUBLE, we must write far-plane depth so MC terrain AND
+            // weather both render freely on top via LEQUAL (prevents intense Z-fighting 
+            // during MC solid/translucent passes). LOD colors are strictly blended.
+            gl_FragDepth = 1.0;
+        }
     }
 }
