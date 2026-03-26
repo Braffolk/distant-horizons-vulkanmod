@@ -110,9 +110,10 @@ public class DhSsaoPipeline {
     // Pre-allocated temp matrix to avoid per-frame heap allocation
     private final Mat4f tempInvProj = new Mat4f();
 
-    // Cached method handle for RenderUtil.getFarClipPlaneDistanceInBlocks()
-    // DH 2.4 returns int, DH 3.0 returns float — JVM treats return type as part
-    // of the method signature, so we must resolve at runtime via reflection.
+    // [DH 2.4 COMPAT] RenderUtil.getFarClipPlaneDistanceInBlocks() returns int in
+    // DH 2.4 but float in DH 3.0. JVM treats return type as part of the method
+    // signature, so we resolve via reflection to support both.
+    // When dropping DH 2.4: replace with direct call to RenderUtil.getFarClipPlaneDistanceInBlocks().
     private static java.lang.reflect.Method farClipMethod;
     private static boolean farClipMethodResolved = false;
 
@@ -120,7 +121,6 @@ public class DhSsaoPipeline {
         if (!farClipMethodResolved) {
             farClipMethodResolved = true;
             try {
-                // Try float first (DH 3.0)
                 farClipMethod = RenderUtil.class.getMethod("getFarClipPlaneDistanceInBlocks");
             } catch (NoSuchMethodException e) {
                 farClipMethod = null;

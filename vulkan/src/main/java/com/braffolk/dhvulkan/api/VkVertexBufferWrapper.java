@@ -8,10 +8,14 @@ import org.lwjgl.system.MemoryUtil;
 import java.nio.ByteBuffer;
 
 /**
- * Vulkan implementation of DH 3.0's VBO wrapper.
- * DH creates one of these per LOD section via the factory method
- * and calls upload() to push vertex data. We store the data as
- * VkVertexData which our VulkanBackend can draw.
+ * Vulkan implementation of DH's VBO wrapper (IVertexBufferWrapper).
+ * DH creates one per LOD section and calls uploadVertexBuffer() (DH 3.0)
+ * or upload() (DH 2.4) to push vertex data.
+ *
+ * Cross-version notes:
+ *   - upload()             → [DH 2.4 COMPAT] old method name, delegates to impl
+ *   - uploadVertexBuffer() → DH 3.0 method name
+ *   - uploadIndexBuffer()  → DH 3.0 no-op (we use shared IBO)
  */
 public class VkVertexBufferWrapper implements IVertexBufferWrapper {
 
@@ -29,19 +33,20 @@ public class VkVertexBufferWrapper implements IVertexBufferWrapper {
         this.id = nextId++;
     }
 
+    // [DH 2.4 COMPAT] DH 2.4 calls upload(); DH 3.0 calls uploadVertexBuffer().
+    // Remove this method when dropping DH 2.4 support.
     @Override
     public void upload(ByteBuffer buffer, int vertexCount) {
         uploadVertexBufferImpl(buffer, vertexCount);
     }
 
-    // DH 3.0 renamed upload() to uploadVertexBuffer() and added uploadIndexBuffer()
-    // Both must exist for cross-version compatibility
+    // DH 3.0 interface methods
     public void uploadVertexBuffer(ByteBuffer buffer, int vertexCount) {
         uploadVertexBufferImpl(buffer, vertexCount);
     }
 
     public void uploadIndexBuffer(ByteBuffer buffer, int vertexCount) {
-        // No-op — we use a shared IBO (useSingleIbo() = true in VkRenderApiDefinition)
+        // No-op — we use a shared IBO (useSingleIbo() returns true)
     }
 
     private void uploadVertexBufferImpl(ByteBuffer buffer, int vertexCount) {

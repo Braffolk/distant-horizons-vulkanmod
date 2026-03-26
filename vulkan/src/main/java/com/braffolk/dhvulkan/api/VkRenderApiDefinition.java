@@ -161,8 +161,9 @@ public class VkRenderApiDefinition extends AbstractDhRenderApiDefinition {
         // Cached to avoid per-container allocation in the render loop
         private final Vec3f reusableModelPos = new Vec3f(0, 0, 0);
 
-        // Cached reflection fields — type of vbos differs between DH versions
-        // (GLVertexBuffer[] in 2.4 vs IVertexBufferWrapper[] in 3.0)
+        // Cached reflection fields for VBO arrays in LodBufferContainer.
+        // DH 3.0: vboOpaqueWrappers / vboTransparentWrappers
+        // [DH 2.4 COMPAT]: vbos / vbosTransparent
         private static java.lang.reflect.Field vbosField;
         private static java.lang.reflect.Field vbosTransparentField;
         private static boolean reflectionResolved = false;
@@ -173,14 +174,14 @@ public class VkRenderApiDefinition extends AbstractDhRenderApiDefinition {
 
         private static void resolveFields() {
             if (reflectionResolved) return;
-            // DH 3.0 renamed vbos → vboOpaqueWrappers, vbosTransparent → vboTransparentWrappers
-            // Try new names first, fall back to old for DH 2.4 compat
+            // DH 3.0 field names (preferred)
             try {
                 vbosField = LodBufferContainer.class.getDeclaredField("vboOpaqueWrappers");
                 vbosField.setAccessible(true);
                 vbosTransparentField = LodBufferContainer.class.getDeclaredField("vboTransparentWrappers");
                 vbosTransparentField.setAccessible(true);
             } catch (NoSuchFieldException e) {
+                // [DH 2.4 COMPAT] Old field names — remove this catch block when dropping 2.4
                 try {
                     vbosField = LodBufferContainer.class.getDeclaredField("vbos");
                     vbosField.setAccessible(true);
