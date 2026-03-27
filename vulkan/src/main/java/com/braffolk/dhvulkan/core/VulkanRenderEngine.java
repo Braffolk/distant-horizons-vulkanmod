@@ -494,18 +494,20 @@ public class VulkanRenderEngine implements VulkanBackend {
             com.seibel.distanthorizons.api.enums.config.EDhApiMcRenderingFadeMode fadeMode = DhConfigHelper.vanillaFadeMode();
             if (fadeMode == com.seibel.distanthorizons.api.enums.config.EDhApiMcRenderingFadeMode.NONE) {
                 // NONE: only composite, no Phase 2b re-composite.
-                // Render clouds BEFORE composite so LODs draw on top (no depth available in NONE mode).
-                if (this.cloudRenderer.isAvailable()) {
-                    this.profiler.begin(DhFrameProfiler.PHASE_CLOUDS);
-                    this.cloudRenderer.renderIfEnabled(uniforms.partialTicks, uniforms.mcProjectionMatrix, uniforms.dhModelViewMatrix);
-                    this.profiler.end(DhFrameProfiler.PHASE_CLOUDS);
-                }
                 this.profiler.begin(DhFrameProfiler.PHASE_COMPOSITE);
                 VulkanImage mcDepthForComposite = DhVulkanConfig.get().vulkanRenderMode == 6 && this.depthReaderPipeline != null
                         ? this.depthReaderPipeline.getCachedDepthTexture()
                         : null;
                 this.runComposite(uniforms, mcDepthForComposite);
                 this.profiler.end(DhFrameProfiler.PHASE_COMPOSITE);
+
+                // Render clouds AFTER composite so they accurately depth test against MC terrain and DH LODs.
+                // (In NONE mode, Phase 1 composite writes true LOD depth).
+                if (this.cloudRenderer.isAvailable()) {
+                    this.profiler.begin(DhFrameProfiler.PHASE_CLOUDS);
+                    this.cloudRenderer.renderIfEnabled(uniforms.partialTicks, uniforms.mcProjectionMatrix, uniforms.dhModelViewMatrix);
+                    this.profiler.end(DhFrameProfiler.PHASE_CLOUDS);
+                }
             } else if (DhVulkanConfig.get().vulkanRenderMode != 6) {
                 // SINGLE/DOUBLE normal: draw LOD colors with depth=1.0 (shader handles it).
                 this.profiler.begin(DhFrameProfiler.PHASE_COMPOSITE);
@@ -535,52 +537,32 @@ public class VulkanRenderEngine implements VulkanBackend {
 
     @Override
     public void deferredComposite(RenderUniforms uniforms) {
-        // Fallback: called from addCloudsPass @HEAD if that hook fires.
-        // On VulkanMod 0.6.1, addCloudsPass does NOT exist — all work is done
-        // in lateComposite (renderLevel @RETURN) instead.
-        // This is kept for compatibility with VM versions that DO call addCloudsPass.
-        if (!this.frameReady) return;
-        // If this fires, skip lateComposite's work by marking phase2 done.
-        this.phase2Done = true;
-        doPhase2(uniforms);
+        // Not used — addCloudsPass/renderClouds mixin hooks don't fire in VulkanMod
+        // (MC 1.21.11 Frame Graph prevents method-level injection).
+        // Phase 2 runs exclusively via lateComposite.
     }
 
     /**
-     * Called from renderLevel @RETURN — AFTER terrain, weather, everything.
-     * 
-     * On VulkanMod 0.6.1, this is the ONLY hook that fires (addCloudsPass doesn't exist).
-     * Does: read MC depth, re-composite LODs with depth comparison, render clouds.
+     * Phase 2: re-composite LODs at renderLevel @RETURN (after terrain + weather).
+     * Reads MC depth and re-composites LODs with per-pixel depth comparison.
+     * Open-sky LOD pixels write their LOD depth into the MC depth buffer, but output
+     * alpha=0 so weather colors are preserved.
+     * Finally, clouds are rendered and depth-test against the fully updated MC+LOD depth buffer.
      */
     @Override
     public void lateComposite(RenderUniforms uniforms) {
-        if (this.phase2Done) {
-            this.phase2Done = false;
-            return; // Already handled by deferredComposite
-        }
+        if (!this.frameReady) return;
 
         com.seibel.distanthorizons.api.enums.config.EDhApiMcRenderingFadeMode fadeMode = DhConfigHelper.vanillaFadeMode();
         if (fadeMode == com.seibel.distanthorizons.api.enums.config.EDhApiMcRenderingFadeMode.NONE) {
-            // NONE: clouds already rendered in endFrame before composite. Nothing to do.
             return;
         }
 
-        if (!this.frameReady) return;
-        doPhase2(uniforms);
-    }
-
-    private boolean phase2Done = false;
-
-    /**
-     * Phase 2: read MC depth, re-composite LODs with depth comparison, render clouds.
-     * Called from whichever hook fires first (deferredComposite or lateComposite).
-     */
-    private void doPhase2(RenderUniforms uniforms) {
         this.profiler.begin(DhFrameProfiler.PHASE_PHASE2);
         try {
             VulkanImage mcDepth = Compat.getSwapChainDepthAttachment();
             Renderer.getInstance().endRenderPass();
 
-            // Read MC depth into sampleable R32F
             VulkanImage mcDepthR32F = null;
             if (this.depthReaderPipeline != null) {
                 mcDepthR32F = this.depthReaderPipeline.readDepth(mcDepth);
@@ -588,10 +570,12 @@ public class VulkanRenderEngine implements VulkanBackend {
             }
 
             Compat.rebindMainTarget();
+
+            // Run Phase 2 first: this writes LOD depth into the MC depth buffer for open-sky pixels
             this.runComposite(uniforms, mcDepthR32F);
 
-            // VM 0.6: clouds render in MC's render pass, depth-testing against combined depth.
-            // VM 0.4.2: clouds were already rendered in endFrame() via DH framebuffer.
+            // Now the depth buffer contains both MC terrain depth AND LOD depth.
+            // Clouds can accurately depth test against BOTH!
             if (this.cloudRenderer.isAvailable()) {
                 this.profiler.begin(DhFrameProfiler.PHASE_CLOUDS);
                 this.cloudRenderer.renderIfEnabled(uniforms.partialTicks, uniforms.mcProjectionMatrix, uniforms.dhModelViewMatrix);
@@ -712,12 +696,13 @@ public class VulkanRenderEngine implements VulkanBackend {
             float fadeStartDist = dhNearClipDistance * 1.5f;
             float fadeEndDist = dhNearClipDistance * 1.9f;
 
+            boolean isNoneMode = DhConfigHelper.vanillaFadeMode() == com.seibel.distanthorizons.api.enums.config.EDhApiMcRenderingFadeMode.NONE;
             this.compositePipeline.render(
                     this.dhFramebuffer.getFramebuffer().getColorAttachment(),
                     this.dhFramebuffer.getFramebuffer().getDepthAttachment(),
                     ssaoTex, fogTex,
                     mcDepthTexture,
-                    debugMode, this.tempInvProjArray, this.tempMcProjArray,
+                    debugMode, isNoneMode, this.tempInvProjArray, this.tempMcProjArray,
                     this.tempInvMcMvmProjArray, fadeStartDist, fadeEndDist);
         }
     }

@@ -11,6 +11,7 @@ layout(std140, binding = 0) uniform CompositeUBO {
     mat4 uRemapProj;        // = uMcProj * uInvProj — fused unproject+reproject (1× mat4 instead of 2×)
     int uDebugMode;         // 0=off, 1=depth, 2=ssao, 3=fog_alpha, 4=fog_color, 5=normals, 6=mc_depth
     int uUseMcDepth;        // 0=no MC depth comparison, 1=use MC depth for fade
+    int uIsNoneMode;        // 1=NONE mode (no overlap), 0=SINGLE/DOUBLE phase 1
     float uStartFadeBlockDist;  // distance where DH fade begins (blocks)
     float uEndFadeBlockDist;    // distance where DH fade ends (blocks)
     float uStartFadeBlockDistSq; // squared, for dot() instead of length()
@@ -27,7 +28,8 @@ layout(set = 0, binding = 5) uniform sampler2D gMcDepthTexture;
  * Reconstruct view-space position from DH depth using DH's inverse projection.
  */
 vec3 reconstructViewPos(vec2 uv, float depth) {
-    vec3 clipPos = vec3(uv, depth) * 2.0 - 1.0;
+    // Vulkan NDC: X,Y in [-1, 1], Z in [0, 1]
+    vec3 clipPos = vec3(uv * 2.0 - 1.0, depth);
     vec4 viewPos = uInvProj * vec4(clipPos, 1.0);
     return viewPos.xyz / viewPos.w;
 }
@@ -40,9 +42,11 @@ vec3 reconstructViewPos(vec2 uv, float depth) {
  * with MC's projection.
  */
 float remapDepthDhToMc(vec2 uv, float dhDepth) {
+    // Vulkan NDC: X,Y in [-1, 1], Z in [0, 1]
     // Single mat4 multiply: uRemapProj = uMcProj * uInvProj (pre-multiplied on CPU)
-    vec4 mcClip = uRemapProj * vec4(vec3(uv, dhDepth) * 2.0 - 1.0, 1.0);
-    return (mcClip.z / mcClip.w) * 0.5 + 0.5;
+    vec4 mcClip = uRemapProj * vec4(uv * 2.0 - 1.0, dhDepth, 1.0);
+    // Vulkan clip space Z/W is already in [0, 1], so we return it directly
+    return mcClip.z / mcClip.w;
 }
 
 /**
@@ -93,11 +97,12 @@ void main() {
             }
         } else {
             // No MC terrain at this pixel (open sky behind LODs).
-            // Phase 1 already composited LODs here with depth 1.0.
-            // Weather/particles may have rendered on top since Phase 1.
-            // Do NOT redraw — discard to preserve whatever is currently on screen.
-            // This fixed rain and snow rendering on NVIDIA.
-            discard;
+            // We want to write LOD depth so clouds can accurately depth-test
+            // against LOD mountains! 
+            // BUT we must NOT overwrite weather/particles that are already on screen.
+            // By emitting alpha=0, Phase 2's blending leaves the color buffer completely 
+            // unchanged (weather is preserved), but it still writes gl_FragDepth!
+            fadeMultiplier = 0.0;
         }
     }
 
@@ -138,20 +143,26 @@ void main() {
 
     if (uUseMcDepth != 0) {
         float mcDepth = texture(gMcDepthTexture, TexCoord).r;
-        if (mcDepth < 1.0) {
-            // MC terrain exists at this pixel — write remapped depth for fade transition.
+        
+        // Write MC-compatible LOD depth for ALL DH pixels in Phase 2.
+        // If mcDepth < 1.0, this handles the fade transition.
+        // If mcDepth >= 1.0, this updates the MC depth buffer so clouds can depth-test!
+        float mcCompatibleDepth = remapDepthDhToMc(TexCoord, dhDepth);
+        gl_FragDepth = clamp(mcCompatibleDepth, 0.0, 1.0);
+    } else {
+        // Phase 1 (without MC depth):
+        if (uIsNoneMode != 0) {
+            // In NONE mode, MC terrain doesn't overlap LODs. 
+            // Write the true LOD depth so Phase 1 accurately occludes clouds!
+            // Small bias pushes LODs slightly behind MC terrain to prevent z-fighting
+            // at the overlap boundary (MC terrain wins at equal depth).
             float mcCompatibleDepth = remapDepthDhToMc(TexCoord, dhDepth);
-            gl_FragDepth = clamp(mcCompatibleDepth, 0.0, 0.999);
+            gl_FragDepth = clamp(mcCompatibleDepth + 0.0001, 0.0, 1.0);
         } else {
-            // No MC terrain (open sky) — write 1.0 so weather, particles, and
-            // other effects rendered after this composite pass freely via LEQUAL.
+            // For SINGLE/DOUBLE, we must write far-plane depth so MC terrain AND
+            // weather both render freely on top via LEQUAL (prevents intense Z-fighting 
+            // during MC solid/translucent passes). LOD colors are strictly blended.
             gl_FragDepth = 1.0;
         }
-    } else {
-        // Phase 1 (without MC depth): write far-plane depth so MC terrain AND
-        // weather both render freely on top via LEQUAL. LOD colors are still
-        // blended onto the swapchain — only the depth is transparent.
-        // Phase 2b re-composites with proper depth after weather renders.
-        gl_FragDepth = 1.0;
     }
 }
