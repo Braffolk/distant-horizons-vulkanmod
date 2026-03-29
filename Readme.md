@@ -34,7 +34,7 @@ See [docs/vulkan_implementation_roadmap.md](docs/vulkan_implementation_roadmap.m
 
 - **Minecraft:** 1.20.6 or 1.21.11
 - **Mod loader:** Fabric
-- **VulkanMod** must be installed (0.4.2 for MC 1.20.6, 0.6.1 for MC 1.21.11)
+- **VulkanMod** must be installed (0.4.2 for MC 1.20.6, 0.6.2 for MC 1.21.11)
 - **Distant Horizons** 2.4.0+ or 3.0.0+ must be installed
 
 > This is not the official Distant Horizons mod. For the original, see the [GitLab](https://gitlab.com/distant-horizons-team/distant-horizons) or [CurseForge](https://www.curseforge.com/minecraft/mc-mods/distant-horizons) pages.

@@ -1,3 +1,5 @@
+## v2.4.0-3.0.0+vm.3
+
 ## v2.4.0-3.0.0+vm.2 - NVIDIA weather effects, SSAO smoothing, and rendering fixes
 
 **Hotfix** — weather effects (rain, snow, particles) now render correctly in front of LODs on all GPUs. Fast clouds no longer render on top of LODs. Previously, the Phase 2 composite was overwriting weather pixels with LOD colors on NVIDIA and potentially other non-MoltenVK drivers.
