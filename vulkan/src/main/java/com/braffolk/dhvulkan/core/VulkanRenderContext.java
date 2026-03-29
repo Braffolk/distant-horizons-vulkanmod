@@ -155,6 +155,11 @@ public class VulkanRenderContext {
             vertSource = vertSource.replaceFirst("(#version 450)", "$1\n#define USE_PUSH_CONSTANTS");
             fragSource = fragSource.replaceFirst("(#version 450)", "$1\n#define USE_PUSH_CONSTANTS");
         }
+        
+        // Enable Beryl Compat if active
+        if (Compat.isBerylActive()) {
+            fragSource = fragSource.replaceFirst("(#version 450)", "$1\n#define BERYL_COMPAT");
+        }
 
         Pipeline.Builder builder = new Pipeline.Builder(DH_TERRAIN_FORMAT);
         builder.compileShaders("dh_terrain", vertSource, fragSource);
@@ -192,6 +197,20 @@ public class VulkanRenderContext {
         addDhUniform(uboBuilder, "int", "uNoiseSteps", 1, 4);
         addDhUniform(uboBuilder, "float", "uNoiseIntensity", 1, 4);
         addDhUniform(uboBuilder, "int", "uNoiseDropoff", 1, 4);
+        
+        // Beryl Compat uniforms
+        // We always define them in the VBO for safety. Beryl sets them via reflection.
+        addDhUniform(uboBuilder, "float", "uBerylFogFactor", 1, 4);
+        addDhUniform(uboBuilder, "float", "uBerylLightIntensity", 1, 4);
+        addDhUniform(uboBuilder, "float", "uBerylNightMultiplier", 1, 4);
+        addDhUniform(uboBuilder, "float", "uBerylLightVisibility", 1, 4);
+        addDhUniform(uboBuilder, "float", "uBerylMinAmbientLight", 1, 4);
+        addDhUniform(uboBuilder, "float", "uBerylAmbientLightFactor", 1, 4);
+        addDhUniform(uboBuilder, "float", "uBerylLightDir", 3, 16); // std140 vec3
+        addDhUniform(uboBuilder, "float", "uBerylFogColor", 3, 16);
+        addDhUniform(uboBuilder, "float", "uBerylLightColor", 3, 16);
+        addDhUniform(uboBuilder, "float", "uBerylSkyColor", 3, 16);
+        addDhUniform(uboBuilder, "float", "uBerylUpVector", 3, 16);
 
         UBO mainUbo = uboBuilder.buildUBO(0, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT);
         // VM 0.4.2: uniforms' setSupplier() auto-lookup only finds MC's built-in
@@ -329,6 +348,9 @@ public class VulkanRenderContext {
      * before any draw calls.
      */
     public void uploadAndBindUBOs() {
+        if (Compat.isBerylActive()) {
+            Compat.updateBerylCompatUniforms(this.uniformBuffers, 1.0f);
+        }
         Renderer.getInstance().uploadAndBindUBOs(this.terrainPipeline);
     }
 

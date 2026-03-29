@@ -15,6 +15,7 @@ import com.braffolk.dhvulkan.core.pipeline.DhCompositePipeline;
 import com.braffolk.dhvulkan.core.pipeline.DhDepthReaderPipeline;
 import com.braffolk.dhvulkan.core.pipeline.DhFogPipeline;
 import com.braffolk.dhvulkan.core.pipeline.DhSsaoPipeline;
+import com.braffolk.dhvulkan.core.pipeline.DhShadowPipeline;
 import com.seibel.distanthorizons.core.config.Config;
 import com.seibel.distanthorizons.core.config.types.enums.EConfigEntryAppearance;
 import com.seibel.distanthorizons.core.util.math.Mat4f;
@@ -139,9 +140,36 @@ public class VulkanRenderEngine implements VulkanBackend {
     private int savedBlendSrcAlpha;
     private int savedBlendDstAlpha;
     private int savedBlendOp;
+    
+    private boolean inShadowPass = false;
+    private DhShadowPipeline shadowPipeline;
+    private final org.joml.Matrix4f shadowLightSpaceMatrix = new org.joml.Matrix4f();
+    private com.seibel.distanthorizons.core.util.math.Vec3f currentModelOffset = new com.seibel.distanthorizons.core.util.math.Vec3f();
+    
+    private static VulkanRenderEngine instance;
+
+    public static VulkanRenderEngine getInstance() {
+        return instance;
+    }
+
+    public void enableShadowState(org.joml.Matrix4f pose, org.joml.Matrix4f projection) {
+        this.inShadowPass = true;
+        
+        // Light-space matrix: projection * view
+        this.shadowLightSpaceMatrix.set(projection).mul(pose);
+        
+        if (this.shadowPipeline != null && this.shadowPipeline.isInitialized()) {
+            this.shadowPipeline.setLightSpaceMatrix(this.shadowLightSpaceMatrix);
+        }
+    }
+
+    public void disableShadowState() {
+        this.inShadowPass = false;
+    }
 
     public VulkanRenderEngine() {
         this.renderContext = VulkanRenderContext.getInstance();
+        instance = this;
     }
 
     @Override
@@ -180,6 +208,9 @@ public class VulkanRenderEngine implements VulkanBackend {
             LOGGER.info("[DH-Vulkan] Init: creating Depth Reader pipeline...");
             this.depthReaderPipeline = new DhDepthReaderPipeline();
             this.depthReaderPipeline.init(width, height);
+            
+            // Bind BerylAccessor to DH so it knows we support shadow casting
+            Compat.registerBerylAccessor();
 
             this.initialized = true;
             LOGGER.info("[DH-Vulkan] Init complete. All resources created.");
@@ -272,9 +303,6 @@ public class VulkanRenderEngine implements VulkanBackend {
         Renderer.getInstance().endRenderPass();
         this.dhFramebuffer.beginRenderPass();
 
-        // Begin recording draw batches for next frame's shadow pass
-        com.braffolk.dhvulkan.core.shadow.DhBerylShadowRenderer.beginRecording();
-
         // N+1 frame delay for GPU buffer frees
         for (PendingFree pf : this.pendingFreeBatch) {
             CachedBuffer current = this.vulkanBufferCache.get(pf.dataId);
@@ -346,9 +374,6 @@ public class VulkanRenderEngine implements VulkanBackend {
         if (this.initFailed)
             return;
         this.renderContext.setModelOffset(modelOffset);
-        // Record for shadow replay
-        com.braffolk.dhvulkan.core.shadow.DhBerylShadowRenderer.recordModelOffset(
-                modelOffset.x, modelOffset.y, modelOffset.z);
     }
 
     @Override
@@ -416,13 +441,17 @@ public class VulkanRenderEngine implements VulkanBackend {
             }
 
             // THE draw call
-            this.renderContext.applyPerDrawState();
-            this.renderContext.drawIndexed(cached.vkBuffer, this.quadIndexBuffer, indexCount);
+            if (this.inShadowPass && this.shadowPipeline != null) {
+                // Shadow pass: use minimal depth-only pipeline
+                this.shadowPipeline.setModelOffset(this.currentModelOffset);
+                this.shadowPipeline.uploadUBOs(); // Apply per-batch model offset
+                this.renderContext.drawIndexed(cached.vkBuffer, this.quadIndexBuffer, indexCount);
+            } else {
+                // Normal pass
+                this.renderContext.applyPerDrawState();
+                this.renderContext.drawIndexed(cached.vkBuffer, this.quadIndexBuffer, indexCount);
+            }
             this.profiler.countDraw();
-
-            // Record for shadow replay (previous frame's data reused in next frame's shadow pass)
-            com.braffolk.dhvulkan.core.shadow.DhBerylShadowRenderer.recordDraw(
-                    cached.vkBuffer, this.quadIndexBuffer, indexCount);
 
         } catch (Exception e) {
             LOGGER.error("[DH-Vulkan] drawVertexData error", e);
@@ -450,7 +479,12 @@ public class VulkanRenderEngine implements VulkanBackend {
             PipelineState.blendInfo.dstAlphaFactor = 7;
             PipelineState.blendInfo.blendOp = 0;
         }
-        this.renderContext.bindTerrainPipeline();
+        
+        if (this.inShadowPass && this.shadowPipeline != null) {
+            this.shadowPipeline.bind();
+        } else {
+            this.renderContext.bindTerrainPipeline();
+        }
     }
 
     @Override
@@ -459,9 +493,6 @@ public class VulkanRenderEngine implements VulkanBackend {
             return;
 
         this.profiler.end(DhFrameProfiler.PHASE_DRAWS);
-
-        // Finalize shadow recording — makes this frame's draw list available for next frame
-        com.braffolk.dhvulkan.core.shadow.DhBerylShadowRenderer.endRecording();
 
         try {
             // End DH's render pass — transitions attachments to SHADER_READ_ONLY

@@ -186,6 +186,11 @@ public class DhFogPipeline {
     private void createFogComputePipeline() {
         String vertSource = readShaderResource("shaders/vulkan/dh_ssao.vert"); // reuse fullscreen quad vert
         String fragSource = readShaderResource("shaders/vulkan/dh_fog.frag");
+        
+        // Enable Beryl Compat if active
+        if (Compat.isBerylActive()) {
+            fragSource = fragSource.replaceFirst("(#version 450)", "$1\n#define BERYL_COMPAT");
+        }
 
         Pipeline.Builder builder = new Pipeline.Builder(QUAD_FORMAT);
         builder.compileShaders("dh_fog_compute", vertSource, fragSource);
@@ -230,6 +235,17 @@ public class DhFogPipeline {
         addUniform(uboBuilder, this.pass1Uniforms, "int", "uUseSphericalFog", 1, 4);
         addUniform(uboBuilder, this.pass1Uniforms, "int", "uHeightFogMixingMode", 1, 4);
         addUniform(uboBuilder, this.pass1Uniforms, "float", "uCameraBlockYPos", 1, 4);
+        
+        // Beryl Compat uniforms
+        addUniform(uboBuilder, this.pass1Uniforms, "float", "uBerylFogFactor", 1, 4);
+        addUniform(uboBuilder, this.pass1Uniforms, "float", "uBerylLightIntensity", 1, 4);
+        addUniform(uboBuilder, this.pass1Uniforms, "float", "uBerylNightMultiplier", 1, 4);
+        addUniform(uboBuilder, this.pass1Uniforms, "float", "uBerylLightVisibility", 1, 4);
+        addUniform(uboBuilder, this.pass1Uniforms, "float", "uBerylLightDir", 3, 16);
+        addUniform(uboBuilder, this.pass1Uniforms, "float", "uBerylFogColor", 3, 16);
+        addUniform(uboBuilder, this.pass1Uniforms, "float", "uBerylLightColor", 3, 16);
+        addUniform(uboBuilder, this.pass1Uniforms, "float", "uBerylSkyColor", 3, 16);
+        addUniform(uboBuilder, this.pass1Uniforms, "float", "uBerylUpVector", 3, 16);
 
         UBO mainUbo = uboBuilder.buildUBO(0, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT);
         Compat.setUniformSuppliers(mainUbo, this.pass1Uniforms);
@@ -309,6 +325,11 @@ public class DhFogPipeline {
         setUniformVec4(this.pass1Uniforms, "uFogColor",
                 fogColor.getRed() / 255.0f, fogColor.getGreen() / 255.0f,
                 fogColor.getBlue() / 255.0f, fogColor.getAlpha() / 255.0f);
+                
+        // Upload Beryl Compat values independently
+        if (Compat.isBerylActive()) {
+            Compat.updateBerylCompatUniforms(this.pass1Uniforms, partialTicks);
+        }
 
         // Fog scales
         int lodDrawDistance = DhConfigHelper.lodChunkRenderDistanceRadius()

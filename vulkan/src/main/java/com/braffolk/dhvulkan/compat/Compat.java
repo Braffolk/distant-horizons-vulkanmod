@@ -84,6 +84,25 @@ public final class Compat {
         return BERYL_ACTIVE;
     }
 
+    private static boolean berylRegistered = false;
+
+    /**
+     * Registers Beryl as an IrisAccessor with DH, so DH handles shadow map logic.
+     * Call this during VulkanBackend initialization.
+     */
+    public static void registerBerylAccessor() {
+        if (!BERYL_ACTIVE || berylRegistered) return;
+        try {
+            com.seibel.distanthorizons.core.dependencyInjection.ModAccessorInjector.INSTANCE.bind(
+                    com.seibel.distanthorizons.core.wrapperInterfaces.modAccessor.IIrisAccessor.class,
+                    new BerylAccessor());
+            berylRegistered = true;
+            LOGGER.info("[DH-VulkanMod] Registered BerylAccessor with DH");
+        } catch (Exception e) {
+            LOGGER.error("[DH-VulkanMod] Failed to register BerylAccessor", e);
+        }
+    }
+
     // ========================= //
     // Deferred composite hook   //
     // ========================= //
@@ -116,6 +135,182 @@ public final class Compat {
 
     public static void setLateCompositeHook(Runnable hook) {
         lateCompositeHook = hook;
+    }
+
+    private static Object lastRenderParamsDH3 = null;
+
+    /**
+     * Stores the latest DH 3.0 RenderParams. Called by VkMetaRenderer.
+     */
+    public static void setLastRenderParamsDH3(Object params) {
+        lastRenderParamsDH3 = params;
+    }
+
+    // ================================= //
+    // Beryl Rendering Uniform Sync      //
+    // ================================= //
+    
+    private static java.lang.reflect.Field berylLightDirField;
+    private static java.lang.reflect.Field berylLightColorField;
+    private static java.lang.reflect.Field berylSkyColorField;
+    private static java.lang.reflect.Field berylUpVectorField;
+    private static java.lang.reflect.Field berylFogFactorField;
+    private static java.lang.reflect.Field berylNightMultiplierField;
+    private static java.lang.reflect.Field berylLightVisibilityField;
+    private static java.lang.reflect.Method berylGetLightIntensityMethod;
+    private static boolean berylReflectionInitialized = false;
+
+    public static void updateBerylCompatUniforms(java.util.Map<String, net.vulkanmod.vulkan.util.MappedBuffer> dhUniforms, float partialTicks) {
+        if (!isBerylActive()) return;
+        
+        try {
+            if (!berylReflectionInitialized) {
+                Class<?> rpClass = Class.forName("net.beryl.render.RenderingPipeline");
+                berylLightDirField = rpClass.getDeclaredField("LightDir");
+                berylLightDirField.setAccessible(true);
+                berylLightColorField = rpClass.getDeclaredField("LightColor");
+                berylLightColorField.setAccessible(true);
+                berylSkyColorField = rpClass.getDeclaredField("SkyColor");
+                berylSkyColorField.setAccessible(true);
+                berylUpVectorField = rpClass.getDeclaredField("UpVector");
+                berylUpVectorField.setAccessible(true);
+                berylFogFactorField = rpClass.getDeclaredField("FogFactor");
+                berylFogFactorField.setAccessible(true);
+                berylNightMultiplierField = rpClass.getDeclaredField("NightMultiplier");
+                berylNightMultiplierField.setAccessible(true);
+                berylLightVisibilityField = rpClass.getDeclaredField("LightVisibility");
+                berylLightVisibilityField.setAccessible(true);
+                berylGetLightIntensityMethod = rpClass.getDeclaredMethod("getLightIntensity");
+                berylGetLightIntensityMethod.setAccessible(true);
+                
+                java.lang.reflect.Field berylMinAmbientField = rpClass.getDeclaredField("MinAmbientLight");
+                berylMinAmbientField.setAccessible(true);
+                java.lang.reflect.Field berylAmbientFactorField = rpClass.getDeclaredField("AmbientLightFactor");
+                berylAmbientFactorField.setAccessible(true);
+                
+                // We cache these inside the method to avoid adding more static fields, since reflection init is cheap
+                berylReflectionInitialized = true;
+            }
+
+            net.vulkanmod.vulkan.util.MappedBuffer berylLightDir = (net.vulkanmod.vulkan.util.MappedBuffer) berylLightDirField.get(null);
+            net.vulkanmod.vulkan.util.MappedBuffer berylLightColor = (net.vulkanmod.vulkan.util.MappedBuffer) berylLightColorField.get(null);
+            net.vulkanmod.vulkan.util.MappedBuffer berylSkyColor = (net.vulkanmod.vulkan.util.MappedBuffer) berylSkyColorField.get(null);
+            net.vulkanmod.vulkan.util.MappedBuffer berylUpVector = (net.vulkanmod.vulkan.util.MappedBuffer) berylUpVectorField.get(null);
+            float fogFactor = (float) berylFogFactorField.get(null);
+            float nightMultiplier = (float) berylNightMultiplierField.get(null);
+            float lightVisibility = (float) berylLightVisibilityField.get(null);
+            float lightIntensity = (float) berylGetLightIntensityMethod.invoke(null);
+            
+            Class<?> rpClass = Class.forName("net.beryl.render.RenderingPipeline");
+            java.lang.reflect.Field minAmbientF = rpClass.getDeclaredField("MinAmbientLight");
+            minAmbientF.setAccessible(true);
+            float minAmbientLight = (float) minAmbientF.get(null);
+            
+            java.lang.reflect.Field ambientFactorF = rpClass.getDeclaredField("AmbientLightFactor");
+            ambientFactorF.setAccessible(true);
+            float ambientLightFactor = (float) ambientFactorF.get(null);
+
+            // Fog color is set by Beryl on the MC RenderSystem, so we just query DH's wrapper
+            com.seibel.distanthorizons.core.wrapperInterfaces.minecraft.IMinecraftRenderWrapper mcRender = 
+                com.seibel.distanthorizons.core.dependencyInjection.SingletonInjector.INSTANCE.get(com.seibel.distanthorizons.core.wrapperInterfaces.minecraft.IMinecraftRenderWrapper.class);
+            java.awt.Color fogColor = mcRender.getFogColor(partialTicks);
+
+            if (dhUniforms.containsKey("uBerylFogFactor")) dhUniforms.get("uBerylFogFactor").putFloat(0, fogFactor);
+            if (dhUniforms.containsKey("uBerylLightIntensity")) dhUniforms.get("uBerylLightIntensity").putFloat(0, lightIntensity);
+            if (dhUniforms.containsKey("uBerylNightMultiplier")) dhUniforms.get("uBerylNightMultiplier").putFloat(0, nightMultiplier);
+            if (dhUniforms.containsKey("uBerylLightVisibility")) dhUniforms.get("uBerylLightVisibility").putFloat(0, lightVisibility);
+            if (dhUniforms.containsKey("uBerylMinAmbientLight")) dhUniforms.get("uBerylMinAmbientLight").putFloat(0, minAmbientLight);
+            if (dhUniforms.containsKey("uBerylAmbientLightFactor")) dhUniforms.get("uBerylAmbientLightFactor").putFloat(0, ambientLightFactor);
+
+            if (berylLightDir != null && dhUniforms.containsKey("uBerylLightDir")) {
+                dhUniforms.get("uBerylLightDir").putFloat(0, berylLightDir.getFloat(0));
+                dhUniforms.get("uBerylLightDir").putFloat(4, berylLightDir.getFloat(4));
+                dhUniforms.get("uBerylLightDir").putFloat(8, berylLightDir.getFloat(8));
+            }
+            if (berylLightColor != null && dhUniforms.containsKey("uBerylLightColor")) {
+                dhUniforms.get("uBerylLightColor").putFloat(0, berylLightColor.getFloat(0));
+                dhUniforms.get("uBerylLightColor").putFloat(4, berylLightColor.getFloat(4));
+                dhUniforms.get("uBerylLightColor").putFloat(8, berylLightColor.getFloat(8));
+            }
+            if (berylSkyColor != null && dhUniforms.containsKey("uBerylSkyColor")) {
+                dhUniforms.get("uBerylSkyColor").putFloat(0, berylSkyColor.getFloat(0));
+                dhUniforms.get("uBerylSkyColor").putFloat(4, berylSkyColor.getFloat(4));
+                dhUniforms.get("uBerylSkyColor").putFloat(8, berylSkyColor.getFloat(8));
+            }
+            if (berylUpVector != null && dhUniforms.containsKey("uBerylUpVector")) {
+                dhUniforms.get("uBerylUpVector").putFloat(0, berylUpVector.getFloat(0));
+                dhUniforms.get("uBerylUpVector").putFloat(4, berylUpVector.getFloat(4));
+                dhUniforms.get("uBerylUpVector").putFloat(8, berylUpVector.getFloat(8));
+            }
+            
+            if (dhUniforms.containsKey("uBerylFogColor")) {
+                // Beryl overrides VulkanMod's global shaderFogColor directly. 
+                // We fetch it straight from the source instead of relying on Vanilla's fallback.
+                net.vulkanmod.vulkan.util.MappedBuffer vmFogColor = net.vulkanmod.vulkan.VRenderSystem.getShaderFogColor();
+                if (vmFogColor != null) {
+                    dhUniforms.get("uBerylFogColor").putFloat(0, vmFogColor.getFloat(0));
+                    dhUniforms.get("uBerylFogColor").putFloat(4, vmFogColor.getFloat(4));
+                    dhUniforms.get("uBerylFogColor").putFloat(8, vmFogColor.getFloat(8));
+                } else {
+                    // Fallback just in case
+                    float fr = fogColor.getRed() / 255.0f;
+                    float fg = fogColor.getGreen() / 255.0f;
+                    float fb = fogColor.getBlue() / 255.0f;
+                    dhUniforms.get("uBerylFogColor").putFloat(0, (float) Math.pow(fr, 2.2));
+                    dhUniforms.get("uBerylFogColor").putFloat(4, (float) Math.pow(fg, 2.2));
+                    dhUniforms.get("uBerylFogColor").putFloat(8, (float) Math.pow(fb, 2.2));
+                }
+            }
+
+        } catch (Exception e) {
+            // Only log once if reflection fails
+            if (berylReflectionInitialized) {
+                LOGGER.error("Failed to sync Beryl compat uniforms", e);
+                berylReflectionInitialized = false; 
+            }
+        }
+    }
+
+    /**
+     * Retrieves the latest DH RenderParams (or DhApiRenderParam in 2.4).
+     */
+    public static Object getLastRenderParams() {
+        if (com.braffolk.dhvulkan.bridge.DhVersionDetector.detect() != com.braffolk.dhvulkan.bridge.DhVersionDetector.DhVersion.DH_3_0) {
+            return ((com.braffolk.dhvulkan.dh24.duck.IVulkanLodRenderer) com.seibel.distanthorizons.core.render.renderer.LodRenderer.INSTANCE).dhvulkan$getLastVulkanRenderParams();
+        }
+        return lastRenderParamsDH3;
+    }
+
+    @SuppressWarnings("unchecked")
+    public static void renderShadowLods() {
+        Object renderParams = getLastRenderParams();
+        if (renderParams == null) return;
+        
+        com.seibel.distanthorizons.core.wrapperInterfaces.minecraft.IProfilerWrapper profiler = com.seibel.distanthorizons.core.dependencyInjection.SingletonInjector.INSTANCE.get(com.seibel.distanthorizons.core.wrapperInterfaces.minecraft.IProfilerWrapper.class);
+
+        if (com.braffolk.dhvulkan.bridge.DhVersionDetector.detect() == com.braffolk.dhvulkan.bridge.DhVersionDetector.DhVersion.DH_3_0) {
+            // DH 3.0 LodRenderer.render
+            try {
+                com.seibel.distanthorizons.core.render.renderer.LodRenderer.class.getMethod(
+                    "render", 
+                    com.seibel.distanthorizons.core.render.RenderParams.class, 
+                    com.seibel.distanthorizons.core.wrapperInterfaces.minecraft.IProfilerWrapper.class
+                ).invoke(com.seibel.distanthorizons.core.render.renderer.LodRenderer.INSTANCE, renderParams, profiler);
+            } catch (Exception e) {
+                LOGGER.error("Failed to render DH 3.0 shadows", e);
+            }
+        } else {
+            // DH 2.4 LodRenderer.renderLodPass
+            try {
+                com.seibel.distanthorizons.core.render.renderer.LodRenderer.class.getMethod(
+                    "renderLodPass", 
+                    com.seibel.distanthorizons.api.methods.events.sharedParameterObjects.DhApiRenderParam.class, 
+                    com.seibel.distanthorizons.core.wrapperInterfaces.minecraft.IProfilerWrapper.class
+                ).invoke(com.seibel.distanthorizons.core.render.renderer.LodRenderer.INSTANCE, renderParams, profiler);
+            } catch (Exception e) {
+                LOGGER.error("Failed to render DH 2.4 shadows", e);
+            }
+        }
     }
 
     public static void runLateCompositeHook() {

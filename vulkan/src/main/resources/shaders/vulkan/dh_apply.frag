@@ -150,11 +150,9 @@ void main() {
         fragColor = texture(gDhColorTexture, TexCoord);
     }
 
-    // Convert sRGB → linear for Beryl's HDR pipeline.
-    // Without this, Beryl's gamma blit double-corrects DH colors.
-    if (uLinearOutput != 0 && fragColor.a > 0.0) {
-        fragColor.rgb = srgbToLinear(fragColor.rgb);
-    }
+    // Note: The input gDhColorTexture is already in Linear HDR space 
+    // because dh_terrain.frag evaluates the native Beryl PBR math. 
+    // We pass it through directly to the Beryl composite buffer untouched!
 
     if (uUseMcDepth != 0) {
         float mcDepth = texture(gMcDepthTexture, TexCoord).r;

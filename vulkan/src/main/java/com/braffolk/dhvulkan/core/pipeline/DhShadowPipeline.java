@@ -112,10 +112,13 @@ public class DhShadowPipeline {
     /**
      * Set the light-space matrix from Beryl's RenderingPipeline.lightSpaceMatrix.
      */
-    public void setLightSpaceMatrix(java.nio.ByteBuffer matrixBuffer) {
-        if (!this.initialized) return;
-        for (int i = 0; i < 16; i++) {
-            this.lightSpaceMatrixBuf.putFloat(i * 4, matrixBuffer.getFloat(i * 4));
+    public void setLightSpaceMatrix(org.joml.Matrix4f matrix) {
+        if (!this.initialized || matrix == null) return;
+        for (int col = 0; col < 4; col++) {
+            for (int row = 0; row < 4; row++) {
+                int offset = (col * 4 + row) * 4;
+                this.lightSpaceMatrixBuf.putFloat(offset, matrix.get(col, row));
+            }
         }
     }
 
@@ -127,6 +130,10 @@ public class DhShadowPipeline {
         this.modelOffsetBuf.putFloat(0, x);
         this.modelOffsetBuf.putFloat(4, y);
         this.modelOffsetBuf.putFloat(8, z);
+    }
+    
+    public void setModelOffset(com.seibel.distanthorizons.core.util.math.Vec3f offset) {
+        this.setModelOffset(offset.x, offset.y, offset.z);
     }
 
     /**

@@ -104,6 +104,9 @@ public class VkRenderApiDefinition extends AbstractDhRenderApiDefinition {
 
         @Override
         public void runRenderPassSetup(RenderParams renderParams) {
+            // Save params for Beryl shadow map pass
+            com.braffolk.dhvulkan.compat.Compat.setLastRenderParamsDH3(renderParams);
+            
             // Deferred init: VulkanMod's VkDevice is only ready at render time
             if (!initialized) {
                 backend.init();

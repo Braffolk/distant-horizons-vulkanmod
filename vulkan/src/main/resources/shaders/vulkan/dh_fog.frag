@@ -36,10 +36,48 @@ layout(std140, binding = 0) uniform FogUBO {
     int uUseSphericalFog;
     int uHeightFogMixingMode;
     float uCameraBlockYPos;
+    
+    // Beryl Compat
+    float uBerylFogFactor;
+    float uBerylLightIntensity;
+    float uBerylNightMultiplier;
+    float uBerylLightVisibility;
+    vec3 uBerylLightDir;
+    vec3 uBerylFogColor;
+    vec3 uBerylLightColor;
+    vec3 uBerylSkyColor;
+    vec3 uBerylUpVector;
 };
 
 // Depth texture at binding 1
 layout(binding = 1) uniform sampler2D uDepthMap;
+
+// ==================== //
+// Beryl Compat Functions 
+// ==================== //
+
+#if defined(BERYL_COMPAT)
+vec3 computeBerylSkyColor(vec3 fragDir, vec3 lightDir, vec3 skyColorBase, vec3 fogColorBase, float nightFactor, float roUp, float soUp, float lightVis, vec3 lightColor) {
+    vec3 skyColor = mix(fogColorBase, skyColorBase, roUp);
+
+    float sunsetFactor = lightVis * (1.0 - nightFactor);
+    vec3 sunsetColor = mix(skyColor, vec3(0.9, 0.2, 0.1), sunsetFactor);
+
+    roUp = max(roUp, 0.0);
+    float f1 = 1.0 - 0.1 /(5.0 * pow(roUp, 2.0) + 0.1);
+    skyColor = mix(fogColorBase, skyColorBase, f1);
+
+    float m1 = (1.0 - soUp);
+
+    float FdotL = max(dot(fragDir, lightDir), 0.0);
+    float m2 = pow(FdotL, 2.0);
+    m2 *= pow(1.0 - roUp, 4.0);
+    m2 *= m1;
+    
+    skyColor = mix(skyColor, sunsetColor, m2);
+    return skyColor;
+}
+#endif
 
 
 //====================//
@@ -73,6 +111,13 @@ void main()
         if (fogDebugMode == 0)
         {
             vec3 vertexWorldPos = calcViewPosition(fragmentDepth);
+            
+#if defined(BERYL_COMPAT)
+            vec3 fragDir = normalize(vertexWorldPos);
+            float roUp = dot(fragDir, vec3(0.0, 1.0, 0.0));
+            float soUp = max(dot(vec3(0.0, 1.0, 0.0), uBerylLightDir), 0.0);
+            fragColor.rgb = computeBerylSkyColor(fragDir, uBerylLightDir, uBerylSkyColor, uBerylFogColor, uBerylNightMultiplier, roUp, soUp, uBerylLightVisibility, uBerylLightColor);
+#endif
 
             float horizontalWorldDistance = length(vertexWorldPos.xz) * uFogScale;
             float worldDistance = length(vertexWorldPos.xyz) * uFogScale;

@@ -18,6 +18,7 @@ layout(location = 1) in vec4 color;
 layout(location = 0) out vec4 vertexColor;
 layout(location = 1) out vec3 vertexWorldPos;
 layout(location = 2) out vec4 vPos;
+layout(location = 3) out vec2 vLightLevels;
 
 // Uniforms — shared with fragment shader
 layout(set = 0, binding = 0) uniform DhUniforms {
@@ -85,13 +86,21 @@ void main()
     uint lights = meta & 0xFFu;
     int iSkyLight = int(lights / 16u);
     int iBlockLight = int(lights) & 0xF;
+    
+#if defined(BERYL_COMPAT)
+    // Pass pure unlit biome tint color straight to fragment shader.
+    // Bypass Vanilla uLightMap to avoid pre-baking oversaturated sRGB lighting gradients.
+    vertexColor = color;
+    // Export raw light levels strictly as (blockLight, skyLight) mapped to 0.0-1.0
+    vLightLevels = vec2(float(iBlockLight) / 15.0, float(iSkyLight) / 15.0);
+#else
     vertexColor = vec4(texelFetch(uLightMap, ivec2(iSkyLight, iBlockLight), 0).rgb, 1.0);
-
     // Apply vertex color (unless white world debug mode)
     if (uIsWhiteWorld == 0)
     {
         vertexColor *= color;
     }
+#endif
 
     gl_Position = uCombinedMatrix * vec4(vertexWorldPos, 1.0);
 
