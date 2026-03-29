@@ -198,6 +198,7 @@ public final class Compat {
             net.vulkanmod.vulkan.util.MappedBuffer berylUpVector = (net.vulkanmod.vulkan.util.MappedBuffer) berylUpVectorField.get(null);
             
             float fogFactor = (float) berylFogFactorField.get(null);
+            float fogFactorRaw = fogFactor;  // Preserve for atmospheric haze
             
             // The raw fogFactor is tuned for physical vanilla rendering distance. 
             // Stretch it so the volumetric density drops correspondingly over the DH LOD range.
@@ -226,6 +227,7 @@ public final class Compat {
             java.awt.Color fogColor = mcRender.getFogColor(partialTicks);
 
             if (dhUniforms.containsKey("uBerylFogFactor")) dhUniforms.get("uBerylFogFactor").putFloat(0, fogFactor);
+            if (dhUniforms.containsKey("uBerylFogFactorRaw")) dhUniforms.get("uBerylFogFactorRaw").putFloat(0, fogFactorRaw);
             if (dhUniforms.containsKey("uBerylLightIntensity")) dhUniforms.get("uBerylLightIntensity").putFloat(0, lightIntensity);
             if (dhUniforms.containsKey("uBerylNightMultiplier")) dhUniforms.get("uBerylNightMultiplier").putFloat(0, nightMultiplier);
             if (dhUniforms.containsKey("uBerylLightVisibility")) dhUniforms.get("uBerylLightVisibility").putFloat(0, lightVisibility);

@@ -39,6 +39,7 @@ layout(set = 0, binding = 0) uniform DhUniforms {
     
     // Beryl Compat
     float uBerylFogFactor;
+    float uBerylFogFactorRaw;  // Original unscaled fog factor for close-range atmospheric haze
     float uBerylFogEnd;
     float uBerylFogStart;
     float uBerylLightIntensity;
@@ -104,6 +105,22 @@ vec3 getSkyColor(vec3 fragDir, vec3 LightDir, vec3 SkyColorBase, vec3 FogColorBa
     
     skyColor = mix(skyColor, sunsetColor, m2);
     return skyColor;
+}
+
+// Replicated from assets/beryl/shaders/new/include/lighting.glsl:40
+vec3 getSunColor(vec3 fragDir, vec3 LightDir, vec3 LightColor) {
+    float FdotL = max(dot(fragDir, LightDir), 0.0);
+    float m = smoothstep(0.999, 0.9995, FdotL);
+    vec3 color = 10.0 * mix(vec3(0.0), LightColor, m);
+    color += LightColor * 2.0 * (0.05 / ((1.0 - FdotL) * 200.0 + 1.0));
+    return color;
+}
+
+// Replicated from assets/beryl/shaders/new/include/lighting.glsl:56
+vec3 getMoonColor(vec3 fragDir, vec3 LightDir, vec3 LightColor) {
+    float FdotL = max(dot(fragDir, LightDir), 0.0);
+    vec3 color = LightColor * (0.05 / ((1.0 - FdotL) * 200.0 + 1.0));
+    return color;
 }
 
 #endif
@@ -327,7 +344,8 @@ void main()
     
     // 5. Exact Radiance Calculation
     vec3 radiance = uBerylLightColor;
-    radiance *= saturateXZ((dot(zenithUP, worldLightDir) - 0.04) * 50.0);
+    float sunGate = saturateXZ((dot(zenithUP, worldLightDir) - 0.04) * 50.0);
+    radiance *= sunGate;
     
     // 6. Evaluate BRDF (lightingType=0 Solid)
     vec3 color1 = LightingSphereGGX2(viewDir, vertexNormal, worldLightDir, albedo, radiance, F0, roughness, metallic, 0);
@@ -354,6 +372,49 @@ void main()
         
         vec3 reflectedSkyColor = getSkyColor(reflectedDir, worldLightDir, uBerylSkyColor, uBerylFogColor, uBerylNightMultiplier, roUp, soUp, uBerylLightVisibility, uBerylLightColor);
         
+        // PBR specular sun/moon reflection on water — uses same LightingSphereGGX2
+        // math as Beryl to produce the naturally elongated sun path. The half-vector
+        // evaluation with low roughness creates the characteristic stretched highlight.
+        {
+            vec3 V = -viewDirW; // toward camera (Beryl convention)
+            vec3 N = normal;    // (0, 1, 0)
+            vec3 L = worldLightDir;
+            
+            // Sphere light approximation (Beryl radius = 0.025)
+            vec3 R = reflect(-V, N);
+            vec3 centerToRay = R - L;
+            float sRadius = 0.025;
+            float sDist = length(centerToRay);
+            L = normalize(L + centerToRay * clamp(sRadius / sDist, 0.0, 1.0));
+            
+            vec3 H = normalize(V + L);
+            const float waterRoughness = 0.1;
+            float a = waterRoughness * waterRoughness;
+            float a2 = a * a;
+            float NdotH = max(dot(N, H), 0.0);
+            float denomNDF = (NdotH * NdotH * (a2 - 1.0) + 1.0);
+            float NDF = a2 / (3.14159265 * denomNDF * denomNDF);
+            
+            float NdotV = max(dot(N, V), 0.0);
+            float NdotL = max(dot(N, L), 0.0);
+            float r2 = (waterRoughness + 1.0);
+            float k = (r2 * r2) * 0.125;
+            float G1 = NdotV / (NdotV * (1.0 - k) + k);
+            float G2 = NdotL / (NdotL * (1.0 - k) + k);
+            float G = G1 * G2;
+            
+            vec3 F0_water = vec3(0.02);
+            vec3 F = F0_water + (1.0 - F0_water) * pow(clamp(1.0 - max(dot(H, V), 0.0), 0.0, 1.0), 5.0);
+            
+            vec3 specNum = NDF * G * F;
+            float specDen = 4.0 * NdotV * NdotL + 0.0001;
+            vec3 specular = min(specNum / specDen * NdotL, 1.0);
+            
+            // Gate by radiance (same as Beryl's terrain: saturate((dot(up,L)-0.04)*50))
+            vec3 waterRadiance = uBerylLightColor * clamp((dot(vec3(0.0, 1.0, 0.0), worldLightDir) - 0.04) * 50.0, 0.0, 1.0);
+            reflectedSkyColor += specular * waterRadiance;
+        }
+        
         float fresnel = 1.0 - max(dot(-viewDirW, normal), 0.0);
         fresnel = pow(fresnel, 5.0);
         float reflectTerm = mix(0.1, 0.9, fresnel);
@@ -368,7 +429,9 @@ void main()
     vec3 viewSpaceFragPos = (mat4(uInvViewMatrix) * vec4(vertexWorldPos, 1.0)).xyz; // Convert DH World back to local Beryl View Space
     vec3 viewSpaceFragDir = normalize(viewSpaceFragPos);
     
-    // View Space light direction remains natively passed from java
+    // Atmospheric haze uses the SCALED fog factor — matching what Beryl terrain
+    // actually receives (BerylAtmosphereOverride scales the global FogFactor supplier
+    // to the DH LOD distance, so Beryl terrain sees the same reduced density).
     float fogAmount = 1.0 - exp(-viewDist * uBerylFogFactor);
     vec3 fogColorVol;
     if (uBerylLightIntensity > 0.0) {
@@ -386,6 +449,13 @@ void main()
         
         vec4 horizonSkyColor = vec4(getSkyColor(viewSpaceFragDir, uBerylLightDir, uBerylSkyColor, uBerylFogColor, uBerylNightMultiplier, RoUp, SoUp, uBerylLightVisibility, uBerylLightColor), 1.0);
         fragColor = fog(fragColor, viewDist, uBerylFogEnd, horizonSkyColor);
+    }
+    // Luminance-adaptive gamma lift for OPAQUE TERRAIN only (skip water).
+    // Compensates for display-pipeline brightness gap at night.
+    if (fragColor.a >= 0.99) {
+        float lum = dot(fragColor.rgb, vec3(0.299, 0.587, 0.114));
+        float gammaLift = mix(0.76, 1.0, smoothstep(0.0, 0.15, lum));
+        fragColor.rgb = pow(max(fragColor.rgb, vec3(0.0)), vec3(gammaLift));
     }
 #endif
 }

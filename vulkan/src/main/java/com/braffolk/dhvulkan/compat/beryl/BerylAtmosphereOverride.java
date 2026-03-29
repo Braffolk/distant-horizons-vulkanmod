@@ -16,6 +16,7 @@ public class BerylAtmosphereOverride {
     private static boolean reflectionInitialized = false;
     private static boolean hooksInjected = false;
     private static Field berylFogFactorField;
+    private static Field berylFogEndField;
     
     // Cache the max distance for smooth uniform application
     private static float currentDhClipDistance = 256.0f;
@@ -27,8 +28,13 @@ public class BerylAtmosphereOverride {
             if (!reflectionInitialized) {
                 // Prepare reflection to intercept Beryl's true FogFactor
                 Class<?> rpClass = Class.forName("net.beryl.render.RenderingPipeline");
+                
                 berylFogFactorField = rpClass.getDeclaredField("FogFactor");
                 berylFogFactorField.setAccessible(true);
+                
+                berylFogEndField = rpClass.getDeclaredField("FogEnd");
+                berylFogEndField.setAccessible(true);
+                
                 reflectionInitialized = true;
             }
 
@@ -43,9 +49,23 @@ public class BerylAtmosphereOverride {
                 // FogEnd hits the strict clipping limit
                 Uniforms.vec1f_uniformMap.put("FogEnd", () -> currentDhClipDistance);
                 
-                // The volumetric density factor must NOT be stretched.
-                // The physical density of Beryl's fog applies exactly as intended over distance. 
-                // We leave FogFactor tied natively to Beryl's base evaluation.
+                // We must stretch FogFactor using inverse proportion so volumetric fog 
+                // density diffuses outwards and doesn't hit 100% opacity over the LOD horizon!
+                // This resolves the bug where distant LODs turn into bright flat glowing walls of fog.
+                Uniforms.vec1f_uniformMap.put("FogFactor", () -> {
+                    if (berylFogFactorField == null) return 0.0f;
+                    try {
+                        float berylFogFactor = (float) berylFogFactorField.get(null);
+                        float dhDistance = currentDhClipDistance;
+                        // Beryl usually assumes a physical sunset of ~200-400 blocks.
+                        // We scale the volumetric exponential term strictly out.
+                        float berylDistance = (float) berylFogEndField.get(null);
+                        if(berylDistance <= 0.01f || dhDistance <= 0.01f) return berylFogFactor;
+                        return berylFogFactor * (berylDistance / dhDistance);
+                    } catch (Exception e) {
+                        return 0.0f;
+                    }
+                });
 
                 hooksInjected = true;
                 LOGGER.info("Successfully hooked and stretched Beryl's atmospheric coordinates to {} blocks", dhClipDistance);
