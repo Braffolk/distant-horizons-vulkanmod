@@ -200,7 +200,10 @@ public class VulkanRenderContext {
         
         // Beryl Compat uniforms
         // We always define them in the VBO for safety. Beryl sets them via reflection.
+        addDhUniform(uboBuilder, "matrix4x4", "uInvViewMatrix", 1, 64);
         addDhUniform(uboBuilder, "float", "uBerylFogFactor", 1, 4);
+        addDhUniform(uboBuilder, "float", "uBerylFogEnd", 1, 4);
+        addDhUniform(uboBuilder, "float", "uBerylFogStart", 1, 4);
         addDhUniform(uboBuilder, "float", "uBerylLightIntensity", 1, 4);
         addDhUniform(uboBuilder, "float", "uBerylNightMultiplier", 1, 4);
         addDhUniform(uboBuilder, "float", "uBerylLightVisibility", 1, 4);

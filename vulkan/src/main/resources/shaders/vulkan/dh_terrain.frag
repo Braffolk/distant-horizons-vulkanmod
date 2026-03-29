@@ -35,9 +35,12 @@ layout(set = 0, binding = 0) uniform DhUniforms {
     int uNoiseSteps;
     float uNoiseIntensity;
     int uNoiseDropoff;
+    mat4 uInvViewMatrix;
     
     // Beryl Compat
     float uBerylFogFactor;
+    float uBerylFogEnd;
+    float uBerylFogStart;
     float uBerylLightIntensity;
     float uBerylNightMultiplier;
     float uBerylLightVisibility;
@@ -55,38 +58,48 @@ layout(set = 0, binding = 0) uniform DhUniforms {
 // ==================== //
 
 #if defined(BERYL_COMPAT)
-void atmospheric_fog(inout vec4 color, vec3 fragPos, float vertexDistance) {
+vec3 computeBerylSkyColor(vec3 fragDir, vec3 lightDir, vec3 skyColorBase, vec3 fogColorBase, float nightFactor, float roUp, float soUp, float lightVis, vec3 lightColor);
+
+// Replicated from assets/beryl/shaders/new/include/fog2.glsl:36
+void atmospheric_fog(inout vec4 color, vec3 fragPos, float vertexDistance, float fogFactor, vec3 worldLightDir) {
     vec3 fragDir = normalize(fragPos);
-    float fogAmount = 1.0 - exp(-vertexDistance * uBerylFogFactor);
+    float fogAmount = 1.0 - exp(-vertexDistance * fogFactor);
 
-    vec3 fc;
+    vec3 fogColor;
     if (uBerylLightIntensity > 0.0) {
-        float SdotFd = max(dot(fragDir, uBerylLightDir), 0.0);
-        fc = mix(uBerylFogColor,
-                   uBerylLightColor * 0.5 * uBerylFogColor,
-                   pow(SdotFd, 8.0));
+        float SdotFd = max(dot(fragDir, worldLightDir), 0.0);
+        fogColor = mix( uBerylFogColor,
+                        uBerylLightColor * 0.5 * uBerylFogColor,
+                        pow(SdotFd,8.0) );
     } else {
-        fc = uBerylFogColor;
+        fogColor = uBerylFogColor;
     }
-
-    color.rgb = mix(color.rgb, fc, fogAmount);
+    color.rgb = mix(color.rgb, fogColor, fogAmount);
 }
 
-vec3 computeBerylSkyColor(vec3 fragDir, vec3 lightDir, vec3 skyColorBase, vec3 fogColorBase, float nightFactor, float roUp, float soUp, float lightVis, vec3 lightColor) {
-    vec3 skyColor = mix(fogColorBase, skyColorBase, roUp);
+// Replicated from assets/beryl/shaders/new/include/fog2.glsl:11
+vec4 fog(vec4 color, float fragDistance, float fogEnd, vec4 fogColor) {
+    float fogAmt = smoothstep(0.8*fogEnd, 1.0*fogEnd, fragDistance);
+    color = mix(color, fogColor, fogAmt);
+    return color;
+}
 
-    float sunsetFactor = lightVis * (1.0 - nightFactor);
+// Replicated from assets/beryl/shaders/new/include/lighting.glsl:3
+vec3 getSkyColor(vec3 fragDir, vec3 LightDir, vec3 SkyColorBase, vec3 FogColorBase, float NightMultiplier, float RoUp, float SoUp, float LightVisibility, vec3 LightColor) {
+    vec3 skyColor = mix(FogColorBase, SkyColorBase, RoUp);
+
+    float sunsetFactor = LightVisibility * (1.0 - NightMultiplier);
     vec3 sunsetColor = mix(skyColor, vec3(0.9, 0.2, 0.1), sunsetFactor);
 
-    roUp = max(roUp, 0.0);
-    float f1 = 1.0 - 0.1 /(5.0 * pow(roUp, 2.0) + 0.1);
-    skyColor = mix(fogColorBase, skyColorBase, f1);
+    RoUp = max(RoUp, 0.0);
+    float f1 = 1.0 - 0.1 /(5.0 * pow(RoUp, 2.0) + 0.1);
+    skyColor = mix(FogColorBase, SkyColorBase, f1);
 
-    float m1 = (1.0 - soUp);
+    float m1 = (1.0 - SoUp);
 
-    float FdotL = max(dot(fragDir, lightDir), 0.0);
+    float FdotL = max(dot(fragDir, LightDir), 0.0);
     float m2 = pow(FdotL, 2.0);
-    m2 *= pow(1.0 - roUp, 4.0);
+    m2 *= pow(1.0 - RoUp, 4.0);
     m2 *= m1;
     
     skyColor = mix(skyColor, sunsetColor, m2);
@@ -159,6 +172,92 @@ float bayerMatrix4x4(vec2 st)
 
 
 // ==================== //
+// Beryl Analytical BRDF//
+// ==================== //
+
+#if defined(BERYL_COMPAT)
+
+// Replicated from assets/beryl/shaders/new/include/lighting.glsl:1
+#define PI 3.14159265359
+
+// Replicated from assets/beryl/shaders/new/include/lighting.glsl:63
+float saturateXZ(float f) {
+    return clamp(f, 0.0, 1.0);
+}
+
+// Replicated from assets/beryl/shaders/new/include/lighting.glsl:120:GeometrySchlickGGX
+float GeometrySchlickGGX(float NdotV, float roughness)
+{
+    float r = (roughness + 1.0);
+    float k = (r*r) * 0.125;
+
+    float num   = NdotV;
+    float denom = NdotV * (1.0 - k) + k;
+
+    return num / denom;
+}
+
+// Replicated from assets/beryl/shaders/new/include/lighting.glsl:141:fresnelSchlick
+vec3 fresnelSchlick(float cosTheta, vec3 F0)
+{
+    return F0 + (1.0 - F0) * pow(clamp(1.0 - cosTheta, 0.0, 1.0), 5.0);
+}
+
+// Replicated exactly from assets/beryl/shaders/new/include/lighting.glsl:294:LightingSphereGGX2
+vec3 LightingSphereGGX2(vec3 V, vec3 N, vec3 L, vec3 albedo, vec3 radiance, vec3 F0, float roughness, float metallic, int lightingType) {
+    vec3 R = reflect(-V, N);
+    vec3 centerToRay = (R - L);
+    float radius = 0.025;
+    float d = length(centerToRay);
+    vec3 O = centerToRay * saturateXZ(radius / d);
+    L = L + O;
+    L = normalize(L);
+
+    vec3 Lo = vec3(0.0);
+    vec3 H = normalize(V + L);
+
+    float a      = roughness*roughness;
+    float a2     = a*a;
+    float NdotH  = max(dot(N, H), 0.0);
+    float NdotH2 = NdotH*NdotH;
+
+    float num   = a2;
+    float denom = (NdotH2 * (a2 - 1.0) + 1.0);
+    denom = PI * denom * denom;
+    float NDF = num / denom;
+
+    float NdotV = max(dot(N, V), 0.0);
+    float NdotL = max(dot(N, L), 0.0);
+
+    // Modified from exact source line 332: UpVector -> uBerylUpVector for UBO compat
+    NdotL = lightingType == 1 ? (dot(uBerylUpVector, L) * 0.8) : NdotL;
+
+    float ggx2  = GeometrySchlickGGX(NdotV, roughness);
+    float ggx1  = GeometrySchlickGGX(NdotL, roughness);
+    float G = ggx1 * ggx2;
+
+    vec3 F = fresnelSchlick(max(dot(H, V), 0.0), F0);
+
+    vec3 kS = F;
+    vec3 kD = vec3(1.0) - kS;
+    kD *= 1.0 - metallic;
+
+    vec3 numerator    = NDF * G * F;
+    float denominator = 4.0 * NdotV * NdotL + 0.0001;
+    vec3 specular     = numerator / denominator;
+
+    specular = min(specular * NdotL, 1.0) * radiance;
+
+    const float absorption = 0.6;
+    Lo = (kD * albedo * 0.31830988618) * absorption * radiance * NdotL + specular;
+
+    return Lo;
+}
+
+#endif
+
+
+// ==================== //
 //         Main         //
 // ==================== //
 
@@ -188,62 +287,105 @@ void main()
     }
     
 #if defined(BERYL_COMPAT)
-    // -------------------------------------------------------------
-    // DH to Beryl Analytical Lighting Replication
-    
-    // 1. Raw Albedo from DH vertex tint (bypassing Vanilla Lightmap in .vert)
-    // MUST convert to linear HDR space! DH natively bakes LOD colors in sRGB. 
-    // Feeding sRGB directly into Beryl's Linear PBR pipeline creates highly saturated,
-    // overly "yellow/vibrant" midtones because the gamma curve is evaluated linearly.
+    // 1. Raw Albedo 
+    // Optifine natively binds Block Atlases in sRGB mode, meaning GPU hardware automatically 
+    // darkens texture() queries to Linear Space before terrain.fsh receives them!
+    // DH pipes colors manually as vertex floats, bypassing hardware linear conversion.
+    // WE MUST manually linearize them to prevent blinding glow when fed into GGX math!
     vec3 albedo = pow(fragColor.rgb, vec3(2.2));
     
-    // 2. Diffuse shading: Assumes flat terrain plane matching Beryl foliage closely.
-    // NdotL = dot(UpVector, L) * 0.8 inside Beryl foliage. We emulate a uniform upward bounce.
-    float NdotL = max(dot(uBerylUpVector, uBerylLightDir) * 0.8, 0.0);
+    // 2. Light Vectors & Normals
+    vec3 viewDir = normalize(-vertexWorldPos); // Replicated from assets/beryl/shaders/new/terrain/terrain.fsh:64
     
-    // Sun radiance from Sky (uses Beryl's exact altitude fade)
-    vec3 radiance = uBerylLightColor * clamp((dot(uBerylUpVector, uBerylLightDir) - 0.04) * 50.0, 0.0, 1.0);
+    // Object geometry rendering is evaluated in World Space to respect strict 3D physical interactions
+    vec3 worldLightDir = normalize(mat3(uInvViewMatrix) * uBerylLightDir);
+    // Note: We use true physical Zenith for PBR since it determines sun brightness relative to ground!
+    vec3 zenithUP = vec3(0.0, 1.0, 0.0);
     
-    // 3. Replicate Beryl's exact diffuse calculation from lighting.glsl (LightingSphereGGX2)
-    // Lo = (kD * albedo * 0.318309) * absorption * radiance * NdotL + specular;
-    float absorption = 0.6; // The smoking gun that suffocates terrain exposure
-    vec3 diffuse = (albedo * 0.318309) * absorption * radiance * NdotL;
+    vec3 dX = dFdx(vertexWorldPos);
+    vec3 dY = dFdy(vertexWorldPos);
+    vec3 geometricNormal = normalize(cross(dX, dY));
+    if (dot(geometricNormal, vertexWorldPos) > 0.0) {
+        geometricNormal = -geometricNormal;
+    }
     
-    // 4. Replicate terrain.fsh ambient integration using true light levels!
-    // -> terrain.vsh: lightY = max(lightY * AmbientLightFactor - NightFactor, MinAmbientLight);
-    // Since DH LODs are universally exterior surface terrain blocks, their physical 
-    // SkyLight exposure base (UV2.y) is ALWAYS 1.0. We dynamically apply Beryl's Ambient and Night 
-    // factors to perfectly align the ambient falloff with the local sky gradient at midnight.
+    // 3. Exact Normal Reconstruction (Quantized to Minecraft block-faces to ensure identical contrast dropping)
+    vec3 absN = abs(geometricNormal);
+    vec3 vertexNormal;
+    if (absN.x > absN.y && absN.x > absN.z) {
+        vertexNormal = vec3(sign(geometricNormal.x), 0.0, 0.0);
+    } else if (absN.y > absN.x && absN.y > absN.z) {
+        vertexNormal = vec3(0.0, sign(geometricNormal.y), 0.0);
+    } else {
+        vertexNormal = vec3(0.0, 0.0, sign(geometricNormal.z));
+    }
+    
+    // 4. Exact Material Defaults
+    vec3 F0 = vec3(0.04);
+    float roughness = 1.0;
+    float metallic = 0.0;
+    
+    // 5. Exact Radiance Calculation
+    vec3 radiance = uBerylLightColor;
+    radiance *= saturateXZ((dot(zenithUP, worldLightDir) - 0.04) * 50.0);
+    
+    // 6. Evaluate BRDF (lightingType=0 Solid)
+    vec3 color1 = LightingSphereGGX2(viewDir, vertexNormal, worldLightDir, albedo, radiance, F0, roughness, metallic, 0);
+
+    // 6.b Evaluate ambient `lightY`
     float beryl_lightY = 1.0 * uBerylAmbientLightFactor;
-    float stableSkyLight = max(beryl_lightY - uBerylNightMultiplier, uBerylMinAmbientLight); 
+    float lightY = max(beryl_lightY - uBerylNightMultiplier, uBerylMinAmbientLight); 
+
+    // 7. Final Composition 
+    fragColor.rgb = (color1 * 1.0 * 1.0) + albedo * (0.3 * lightY + vLightLevels.x * vec3(1.0, 0.7, 0.5));
     
-    fragColor.rgb = diffuse + albedo * (0.3 * stableSkyLight + vLightLevels.x * vec3(1.0, 0.7, 0.5));
-    
-    // Beryl's final additive upward scattered illumination
-    fragColor.rgb += radiance * 0.05 * albedo;
-    // -------------------------------------------------------------
+    // Strict block lighting (sun bounce upward reflection natively uses Zenith)
+    float NdotU = max(dot(vertexNormal, zenithUP), 0.0);
+    fragColor.rgb += radiance * 0.05 * NdotU * albedo * 1.0 * 1.0;
     
     if (fragColor.a < 0.99) {
-        // Compute water reflection
-        vec3 normal = vec3(0.0, 1.0, 0.0); // Simple horizontal plane for water reflection
-        vec3 viewDir = normalize(vertexWorldPos);
-        vec3 reflectedDir = reflect(viewDir, normal);
+        vec3 normal = vec3(0.0, 1.0, 0.0); 
+        vec3 viewDirW = normalize(vertexWorldPos);
+        vec3 reflectedDir = reflect(viewDirW, normal);
         
+        // Water is a pure surface effect mapped against absolute world positions
         float roUp = dot(reflectedDir, vec3(0.0, 1.0, 0.0));
-        float soUp = max(dot(vec3(0.0, 1.0, 0.0), uBerylLightDir), 0.0);
+        float soUp = max(dot(vec3(0.0, 1.0, 0.0), worldLightDir), 0.0);
         
-        vec3 reflectedSkyColor = computeBerylSkyColor(reflectedDir, uBerylLightDir, uBerylSkyColor, uBerylFogColor, uBerylNightMultiplier, roUp, soUp, uBerylLightVisibility, uBerylLightColor);
+        vec3 reflectedSkyColor = getSkyColor(reflectedDir, worldLightDir, uBerylSkyColor, uBerylFogColor, uBerylNightMultiplier, roUp, soUp, uBerylLightVisibility, uBerylLightColor);
         
-        // Blend reflection heavily on grazing angles (Fresnel approximation)
-        float fresnel = 1.0 - max(dot(-viewDir, normal), 0.0);
+        float fresnel = 1.0 - max(dot(-viewDirW, normal), 0.0);
         fresnel = pow(fresnel, 5.0);
         float reflectTerm = mix(0.1, 0.9, fresnel);
-        
         fragColor.rgb = mix(fragColor.rgb, reflectedSkyColor, reflectTerm);
-        // Ensure water remains semi-opaque relative to its original DH alpha
         fragColor.a = max(fragColor.a, reflectTerm);
     }
 
-    atmospheric_fog(fragColor, vertexWorldPos, viewDist);
+    // --- BERYL SCREEN-SPACE ATMOSPHERIC ANCHORING ---
+    // Beryl natively evaluates fog2.glsl against VIEW SPACE constraints. 
+    // Specifically, when it computes dot(fragDir, vec3(0,1,0)), it is taking the Screen-Relative Y 
+    // coordinate to force the horizon gradient to perpetually intersect the user's crosshair natively!
+    vec3 viewSpaceFragPos = (mat4(uInvViewMatrix) * vec4(vertexWorldPos, 1.0)).xyz; // Convert DH World back to local Beryl View Space
+    vec3 viewSpaceFragDir = normalize(viewSpaceFragPos);
+    
+    // View Space light direction remains natively passed from java
+    float fogAmount = 1.0 - exp(-viewDist * uBerylFogFactor);
+    vec3 fogColorVol;
+    if (uBerylLightIntensity > 0.0) {
+        float SdotFd = max(dot(viewSpaceFragDir, uBerylLightDir), 0.0);
+        fogColorVol = mix( uBerylFogColor, uBerylLightColor * 0.5 * uBerylFogColor, pow(SdotFd,8.0) );
+    } else {
+        fogColorVol = uBerylFogColor;
+    }
+    fragColor.rgb = mix(fragColor.rgb, fogColorVol, fogAmount);
+
+    // View distance horizon glow uses rigorous Screen-Space Y mapping
+    if (viewDist > 0.8 * uBerylFogEnd) {
+        float RoUp = max(viewSpaceFragDir.y, 0.0); // Equivalent to dot(viewSpaceFragDir, vec3(0,1,0))
+        float SoUp = max(uBerylLightDir.y, 0.0); // Equivalent to dot(vec3(0,1,0), uBerylLightDir)
+        
+        vec4 horizonSkyColor = vec4(getSkyColor(viewSpaceFragDir, uBerylLightDir, uBerylSkyColor, uBerylFogColor, uBerylNightMultiplier, RoUp, SoUp, uBerylLightVisibility, uBerylLightColor), 1.0);
+        fragColor = fog(fragColor, viewDist, uBerylFogEnd, horizonSkyColor);
+    }
 #endif
 }

@@ -349,8 +349,20 @@ public class VulkanRenderEngine implements VulkanBackend {
         int renderDistChunks = Minecraft.getInstance().options.getEffectiveRenderDistance();
         int vpWidth = Minecraft.getInstance().getWindow().getWidth();
         int vpHeight = Minecraft.getInstance().getWindow().getHeight();
-        this.renderContext.setUniformFloat("uClipDistance",
-                DhConfigHelper.getShaderClipDistance(renderDistChunks, vpWidth, vpHeight));
+        float clipDistance = DhConfigHelper.getShaderClipDistance(renderDistChunks, vpWidth, vpHeight);
+        int lodDrawDistance = (DhConfigHelper.lodChunkRenderDistanceRadius() + 2) * 16;
+        this.renderContext.setUniformFloat("uClipDistance", clipDistance);
+        
+        Mat4f invViewMatrix = new Mat4f();
+        invViewMatrix.set(uniforms.dhModelViewMatrix);
+        invViewMatrix.invert();
+        this.renderContext.setUniformMat4("uInvViewMatrix", invViewMatrix);
+        
+        if (com.braffolk.dhvulkan.compat.Compat.isBerylActive()) {
+            com.braffolk.dhvulkan.compat.beryl.BerylAtmosphereOverride.applyDhDistanceOverrides((float) lodDrawDistance);
+            this.renderContext.setUniformFloat("uBerylFogEnd", (float) lodDrawDistance);
+            this.renderContext.setUniformFloat("uBerylFogStart", lodDrawDistance * 0.8f);
+        }
         this.renderContext.setUniformBool("uDitherDhRendering", DhConfigHelper.ditherDhFade());
 
         boolean noiseEnabled = DhConfigHelper.noiseEnabled();

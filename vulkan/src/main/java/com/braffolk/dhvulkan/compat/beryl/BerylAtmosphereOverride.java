@@ -1,12 +1,11 @@
 package com.braffolk.dhvulkan.compat.beryl;
 
-import net.minecraft.client.Minecraft;
+
 import net.vulkanmod.vulkan.shader.Uniforms;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.lang.reflect.Field;
-import java.util.function.Supplier;
 
 /**
  * Dynamically scales Beryl's rendering effects (Fog, Sunsets) originally bound to 
@@ -21,7 +20,6 @@ public class BerylAtmosphereOverride {
     // Cache the max distance for smooth uniform application
     private static float currentDhClipDistance = 256.0f;
 
-    @SuppressWarnings("unchecked")
     public static void applyDhDistanceOverrides(float dhClipDistance) {
         currentDhClipDistance = dhClipDistance;
 
@@ -45,24 +43,9 @@ public class BerylAtmosphereOverride {
                 // FogEnd hits the strict clipping limit
                 Uniforms.vec1f_uniformMap.put("FogEnd", () -> currentDhClipDistance);
                 
-                // We also need to stretch the atmospheric density factor.
-                // The fog formula is: 1.0 - exp(-distance * FogFactor)
-                // We reduce the factor proportionally so the fog achieves the exact same 
-                // terminal opacity at currentDhClipDistance as it natively did at vanilla distance.
-                Uniforms.vec1f_uniformMap.put("FogFactor", () -> {
-                    try {
-                        float vanillaBerylFactor = (float) berylFogFactorField.get(null);
-                        
-                        Integer vanillaRenderOpt = Minecraft.getInstance().options.getRenderDistance().get();
-                        float vanillaDistance = (vanillaRenderOpt != null ? vanillaRenderOpt : 12) * 16.0f;
-                        
-                        // Stretch ratio
-                        float ratio = vanillaDistance / currentDhClipDistance;
-                        return vanillaBerylFactor * ratio;
-                    } catch (Exception e) {
-                        return 0.001f; // Safe fallback
-                    }
-                });
+                // The volumetric density factor must NOT be stretched.
+                // The physical density of Beryl's fog applies exactly as intended over distance. 
+                // We leave FogFactor tied natively to Beryl's base evaluation.
 
                 hooksInjected = true;
                 LOGGER.info("Successfully hooked and stretched Beryl's atmospheric coordinates to {} blocks", dhClipDistance);

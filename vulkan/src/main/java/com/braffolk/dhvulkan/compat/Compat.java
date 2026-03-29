@@ -196,7 +196,17 @@ public final class Compat {
             net.vulkanmod.vulkan.util.MappedBuffer berylLightColor = (net.vulkanmod.vulkan.util.MappedBuffer) berylLightColorField.get(null);
             net.vulkanmod.vulkan.util.MappedBuffer berylSkyColor = (net.vulkanmod.vulkan.util.MappedBuffer) berylSkyColorField.get(null);
             net.vulkanmod.vulkan.util.MappedBuffer berylUpVector = (net.vulkanmod.vulkan.util.MappedBuffer) berylUpVectorField.get(null);
+            
             float fogFactor = (float) berylFogFactorField.get(null);
+            
+            // The raw fogFactor is tuned for physical vanilla rendering distance. 
+            // Stretch it so the volumetric density drops correspondingly over the DH LOD range.
+            float dhMaxDistance = dhUniforms.containsKey("uBerylFogEnd") ? dhUniforms.get("uBerylFogEnd").getFloat(0) : 4000.0f;
+            int vanillaRenderOpt = net.minecraft.client.Minecraft.getInstance().options.getEffectiveRenderDistance();
+            float vanillaDistance = vanillaRenderOpt * 16.0f;
+            float ratio = vanillaDistance / dhMaxDistance;
+            fogFactor = fogFactor * ratio;
+
             float nightMultiplier = (float) berylNightMultiplierField.get(null);
             float lightVisibility = (float) berylLightVisibilityField.get(null);
             float lightIntensity = (float) berylGetLightIntensityMethod.invoke(null);
