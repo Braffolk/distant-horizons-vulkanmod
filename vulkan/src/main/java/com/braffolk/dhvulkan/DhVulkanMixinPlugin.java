@@ -172,6 +172,13 @@ public class DhVulkanMixinPlugin implements IMixinConfigPlugin {
         if (mixinClassName.contains(".dh3.") && !isDh3Present) {
             return false;
         }
+        // beryl mixins: only when Beryl is present
+        if (mixinClassName.contains(".beryl.")) {
+            if (!net.fabricmc.loader.api.FabricLoader.getInstance().isModLoaded("beryl")) {
+                System.out.println("[DH-VulkanMod] Beryl not present, skipping: " + mixinClassName);
+                return false;
+            }
+        }
         return true;
     }
 

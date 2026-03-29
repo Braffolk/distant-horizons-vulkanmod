@@ -22,10 +22,10 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 public class MixinLevelRenderer {
 
     /**
-     * Cancel vanilla clouds when DH overrides them (1.20.6 hook).
+     * Cancel vanilla clouds when DH overrides them (legacy hook, require=0).
      */
     @Inject(method = "addCloudsPass", at = @At("HEAD"), cancellable = true, require = 0)
-    private void dhvulkan$cancelVanillaClouds120(CallbackInfo ci) {
+    private void dhvulkan$cancelVanillaClouds_addCloudsPass(CallbackInfo ci) {
         if (!Compat.isVulkanModActive()) return;
         try {
             if (Config.Client.Advanced.Graphics.overrideVanillaGraphicsSettings.get()) {
@@ -35,10 +35,10 @@ public class MixinLevelRenderer {
     }
 
     /**
-     * Cancel vanilla clouds when DH overrides them (1.21.11 hook).
+     * Cancel vanilla clouds when DH overrides them (1.21.11+ hook).
      */
     @Inject(method = "renderClouds", at = @At("HEAD"), cancellable = true, require = 0)
-    private void dhvulkan$cancelVanillaClouds121(CallbackInfo ci) {
+    private void dhvulkan$cancelVanillaClouds_renderClouds(CallbackInfo ci) {
         if (!Compat.isVulkanModActive()) return;
         try {
             if (Config.Client.Advanced.Graphics.overrideVanillaGraphicsSettings.get()) {

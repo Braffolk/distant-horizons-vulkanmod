@@ -272,6 +272,9 @@ public class VulkanRenderEngine implements VulkanBackend {
         Renderer.getInstance().endRenderPass();
         this.dhFramebuffer.beginRenderPass();
 
+        // Begin recording draw batches for next frame's shadow pass
+        com.braffolk.dhvulkan.core.shadow.DhBerylShadowRenderer.beginRecording();
+
         // N+1 frame delay for GPU buffer frees
         for (PendingFree pf : this.pendingFreeBatch) {
             CachedBuffer current = this.vulkanBufferCache.get(pf.dataId);
@@ -343,6 +346,9 @@ public class VulkanRenderEngine implements VulkanBackend {
         if (this.initFailed)
             return;
         this.renderContext.setModelOffset(modelOffset);
+        // Record for shadow replay
+        com.braffolk.dhvulkan.core.shadow.DhBerylShadowRenderer.recordModelOffset(
+                modelOffset.x, modelOffset.y, modelOffset.z);
     }
 
     @Override
@@ -414,6 +420,10 @@ public class VulkanRenderEngine implements VulkanBackend {
             this.renderContext.drawIndexed(cached.vkBuffer, this.quadIndexBuffer, indexCount);
             this.profiler.countDraw();
 
+            // Record for shadow replay (previous frame's data reused in next frame's shadow pass)
+            com.braffolk.dhvulkan.core.shadow.DhBerylShadowRenderer.recordDraw(
+                    cached.vkBuffer, this.quadIndexBuffer, indexCount);
+
         } catch (Exception e) {
             LOGGER.error("[DH-Vulkan] drawVertexData error", e);
         }
@@ -449,6 +459,9 @@ public class VulkanRenderEngine implements VulkanBackend {
             return;
 
         this.profiler.end(DhFrameProfiler.PHASE_DRAWS);
+
+        // Finalize shadow recording — makes this frame's draw list available for next frame
+        com.braffolk.dhvulkan.core.shadow.DhBerylShadowRenderer.endRecording();
 
         try {
             // End DH's render pass — transitions attachments to SHADER_READ_ONLY
@@ -560,7 +573,7 @@ public class VulkanRenderEngine implements VulkanBackend {
 
         this.profiler.begin(DhFrameProfiler.PHASE_PHASE2);
         try {
-            VulkanImage mcDepth = Compat.getSwapChainDepthAttachment();
+            VulkanImage mcDepth = Compat.getMainTargetDepthAttachment();
             Renderer.getInstance().endRenderPass();
 
             VulkanImage mcDepthR32F = null;
@@ -605,7 +618,7 @@ public class VulkanRenderEngine implements VulkanBackend {
         }
 
         try {
-            VulkanImage mcDepth = Compat.getSwapChainDepthAttachment();
+            VulkanImage mcDepth = Compat.getMainTargetDepthAttachment();
             Renderer.getInstance().endRenderPass();
 
             this.cachedMcDepthTexture = this.depthReaderPipeline.readDepth(mcDepth);

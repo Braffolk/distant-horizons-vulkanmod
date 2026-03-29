@@ -28,6 +28,13 @@ public class DhVulkanConfig {
      */
     public int vulkanRenderMode = 0;
 
+    /**
+     * Enable DH LOD shadow casting in Beryl's shadow pass.
+     * When true, LOD terrain casts shadows via Beryl's shadow map pipeline.
+     * Disable to save GPU cost if LOD shadows are not needed.
+     */
+    public boolean berylShadowsEnabled = true;
+
     // ---- Load / Save ----
 
     public static DhVulkanConfig get() {

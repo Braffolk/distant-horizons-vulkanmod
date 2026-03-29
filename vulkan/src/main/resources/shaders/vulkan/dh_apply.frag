@@ -16,6 +16,7 @@ layout(std140, binding = 0) uniform CompositeUBO {
     float uEndFadeBlockDist;    // distance where DH fade ends (blocks)
     float uStartFadeBlockDistSq; // squared, for dot() instead of length()
     float uEndFadeBlockDistSq;   // squared, for dot() instead of length()
+    int uLinearOutput;      // 1=convert sRGB→linear (Beryl HDR pipeline)
 };
 
 layout(set = 0, binding = 1) uniform sampler2D gDhColorTexture;
@@ -57,6 +58,14 @@ vec3 reconstructNormal(vec2 uv, float depth) {
     vec3 dx = dFdxFine(viewPos);
     vec3 dy = dFdyFine(viewPos);
     return normalize(cross(dx, dy)) * 0.5 + 0.5;
+}
+
+/**
+ * Convert sRGB color to linear for Beryl's HDR pipeline.
+ * Uses the standard sRGB transfer function approximation.
+ */
+vec3 srgbToLinear(vec3 srgb) {
+    return pow(srgb, vec3(2.2));
 }
 
 void main() {
@@ -139,6 +148,12 @@ void main() {
     }
     else {
         fragColor = texture(gDhColorTexture, TexCoord);
+    }
+
+    // Convert sRGB → linear for Beryl's HDR pipeline.
+    // Without this, Beryl's gamma blit double-corrects DH colors.
+    if (uLinearOutput != 0 && fragColor.a > 0.0) {
+        fragColor.rgb = srgbToLinear(fragColor.rgb);
     }
 
     if (uUseMcDepth != 0) {

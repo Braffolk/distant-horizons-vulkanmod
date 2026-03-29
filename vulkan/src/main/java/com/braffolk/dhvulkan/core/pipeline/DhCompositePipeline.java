@@ -80,6 +80,7 @@ public class DhCompositePipeline {
     private MappedBuffer endFadeDistBuf;
     private MappedBuffer startFadeDistSqBuf;
     private MappedBuffer endFadeDistSqBuf;
+    private MappedBuffer linearOutputBuf;
 
     /**
      * Simple vertex format for the fullscreen quad: just vec2 position.
@@ -185,6 +186,10 @@ public class DhCompositePipeline {
         this.endFadeDistSqBuf.putFloat(0, 0);
         Compat.addUniformWithBuffer(uboBuilder, "float", "uEndFadeBlockDistSq", 1, () -> this.endFadeDistSqBuf);
 
+        this.linearOutputBuf = new MappedBuffer(4);
+        this.linearOutputBuf.putInt(0, 0);
+        Compat.addUniformWithBuffer(uboBuilder, "int", "uLinearOutput", 1, () -> this.linearOutputBuf);
+
         UBO mainUbo = uboBuilder.buildUBO(0, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT);
         Compat.setUniformSuppliers(mainUbo, java.util.Map.ofEntries(
                 java.util.Map.entry("uInvProj", this.invProjBuf),
@@ -197,7 +202,8 @@ public class DhCompositePipeline {
                 java.util.Map.entry("uEndFadeBlockDist", this.endFadeDistBuf),
                 java.util.Map.entry("uStartFadeBlockDistSq", this.startFadeDistSqBuf),
                 java.util.Map.entry("uEndFadeBlockDistSq", this.endFadeDistSqBuf),
-                java.util.Map.entry("uIsNoneMode", this.isNoneModeBuf)));
+                java.util.Map.entry("uIsNoneMode", this.isNoneModeBuf),
+                java.util.Map.entry("uLinearOutput", this.linearOutputBuf)));
         ubos.add(mainUbo);
 
         // Image descriptors — DH color/depth + SSAO/fog debug + MC depth
@@ -236,6 +242,7 @@ public class DhCompositePipeline {
         this.debugModeBuf.putInt(0, debugMode);
         this.useMcDepthBuf.putInt(0, mcDepthTexture != null ? 1 : 0);
         this.isNoneModeBuf.putInt(0, isNoneMode ? 1 : 0);
+        this.linearOutputBuf.putInt(0, Compat.isBerylActive() ? 1 : 0);
         if (invProjMatrix != null && invProjMatrix.length == 16) {
             for (int i = 0; i < 16; i++) {
                 this.invProjBuf.putFloat(i * 4, invProjMatrix[i]);

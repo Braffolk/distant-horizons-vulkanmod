@@ -1,13 +1,8 @@
 package com.braffolk.dhvulkan.compat;
 
-#if MC_VER>=MC_1_21_1
-
 import net.vulkanmod.vulkan.memory.buffer.VertexBuffer;
 import net.vulkanmod.vulkan.memory.buffer.IndexBuffer;
-import net.vulkanmod.vulkan.memory.buffer.Buffer;#else
-import net.vulkanmod.vulkan.memory.VertexBuffer;
-import net.vulkanmod.vulkan.memory.IndexBuffer;
-import net.vulkanmod.vulkan.memory.Buffer;#endif
+import net.vulkanmod.vulkan.memory.buffer.Buffer;
 
 import net.vulkanmod.vulkan.Renderer;
 import net.vulkanmod.vulkan.memory.MemoryTypes;
@@ -21,6 +16,9 @@ import java.nio.ByteBuffer;
 /**
  * Single source of truth for ALL version-specific API differences.
  * NO other file should contain #if blocks.
+ *
+ * As of this version, the minimum supported MC version is 1.21.1 (VM 0.6.x).
+ * The Compat layer is retained for forward compatibility with MC 26.1+.
  */
 public final class Compat {
 
@@ -33,18 +31,8 @@ public final class Compat {
     private static java.lang.reflect.Field vulkanImageLayoutField;
     private static java.lang.reflect.Field rendererCmdBufferField;
 
-    // Pre-allocated native memory for drawIndexed VM 0.4.2 path
-    // Avoids per-draw nmemAlloc/nmemFree (was ~400-1000× per frame)
-    private static final long drawBufPtr = org.lwjgl.system.MemoryUtil.nmemAllocChecked(8);
-    private static final long drawOffPtr = org.lwjgl.system.MemoryUtil.nmemAllocChecked(8);
-
-    // Cached method for setModelOffset (VM 0.6+ only)
-    private static java.lang.reflect.Method setModelOffsetMethod;
-    private static boolean setModelOffsetResolved = false;
-
     // Reusable float[3] for getCloudColorRGB — avoids per-frame allocation
     private static final float[] cloudColorResult = new float[3];
-    private static java.lang.reflect.Field defaultMainPassAuxField;
 
     static {
         try {
@@ -62,10 +50,6 @@ public final class Compat {
         try {
             rendererCmdBufferField = Renderer.class.getDeclaredField("currentCmdBuffer");
             rendererCmdBufferField.setAccessible(true);
-        } catch (Exception ignored) {}
-        try {
-            defaultMainPassAuxField = net.vulkanmod.vulkan.pass.DefaultMainPass.class.getDeclaredField("auxRenderPass");
-            defaultMainPassAuxField.setAccessible(true);
         } catch (Exception ignored) {}
     }
 
@@ -87,6 +71,17 @@ public final class Compat {
     /** @return true if VulkanMod is loaded (no GL context available) */
     public static boolean isVulkanModActive() {
         return VULKANMOD_ACTIVE;
+    }
+
+    // ========================= //
+    // Beryl detection           //
+    // ========================= //
+
+    private static final boolean BERYL_ACTIVE = net.fabricmc.loader.api.FabricLoader.getInstance().isModLoaded("beryl");
+
+    /** @return true if the Beryl shader mod is loaded alongside VulkanMod */
+    public static boolean isBerylActive() {
+        return BERYL_ACTIVE;
     }
 
     // ========================= //
@@ -116,9 +111,6 @@ public final class Compat {
      * Static hook for Phase 2b late re-composite.
      * Set by MixinLodRenderer (dh24 module), called by MixinLevelRenderer (shared module)
      * at renderLevel @RETURN.
-     *
-     * On MC 1.20.6 where addCloudsPass doesn't exist, the deferred composite
-     * hook is also called here as fallback.
      */
     private static Runnable lateCompositeHook;
 
@@ -127,7 +119,7 @@ public final class Compat {
     }
 
     public static void runLateCompositeHook() {
-        // If Phase 2a didn't fire (MC 1.20.6 — no addCloudsPass), run it now
+        // Safety net: if Phase 2a didn't fire (e.g. mixin target missing), run it now
         if (!deferredCompositeRanThisFrame) {
             Runnable deferred = deferredCompositeHook;
             if (deferred != null) deferred.run();
@@ -151,15 +143,11 @@ public final class Compat {
     }
 
     public static Object createIndexBuffer(int sizeBytes) {
-        #if MC_VER >= MC_1_21_1
         return new IndexBuffer(sizeBytes, MemoryTypes.HOST_MEM, IndexBuffer.IndexType.UINT32);
-        #else
-        return new IndexBuffer(sizeBytes, MemoryTypes.HOST_MEM);
-        #endif
     }
 
     // ========================= //
-    // Buffer operations //
+    // Buffer operations         //
     // ========================= //
 
     /**
@@ -177,27 +165,15 @@ public final class Compat {
     }
 
     public static void scheduleFree(Object buffer) {
-        #if MC_VER >= MC_1_21_1
         ((Buffer) buffer).scheduleFree();
-        #else
-        ((Buffer) buffer).freeBuffer();
-        #endif
     }
 
     public static void copyBuffer(Object buffer, ByteBuffer data, int size) {
-        #if MC_VER >= MC_1_21_1
         ((Buffer) buffer).copyBuffer(data, size);
-        #else
-        if (buffer instanceof VertexBuffer) {
-            ((VertexBuffer) buffer).copyToVertexBuffer(size, 1, data);
-        } else if (buffer instanceof IndexBuffer) {
-            ((IndexBuffer) buffer).copyBuffer(data);
-        }
-        #endif
     }
 
     // ========================= //
-    // Draw calls //
+    // Draw calls                //
     // ========================= //
 
     public static void draw(Object vertexBuffer, int vertexCount) {
@@ -205,161 +181,74 @@ public final class Compat {
     }
 
     public static void drawIndexed(Object vertexBuffer, Object indexBuffer, int indexCount) {
-        #if MC_VER >= MC_1_21_1
         Renderer.getInstance().getDrawer().drawIndexed(
                 (Buffer) vertexBuffer, (IndexBuffer) indexBuffer, indexCount);
-        #else
-        // VM 0.4.2 Drawer.drawIndexed() hardcodes VK_INDEX_TYPE_UINT16 (= 0),
-        // but DH uses UINT32 indices. Issue raw Vulkan commands with UINT32.
-        org.lwjgl.vulkan.VkCommandBuffer cmd = Renderer.getCommandBuffer();
-        VertexBuffer vb = (VertexBuffer) vertexBuffer;
-        IndexBuffer ib = (IndexBuffer) indexBuffer;
-
-        // Bind vertex buffer — uses pre-allocated static native pointers
-        org.lwjgl.system.MemoryUtil.memPutLong(drawBufPtr, vb.getId());
-        org.lwjgl.system.MemoryUtil.memPutLong(drawOffPtr, vb.getOffset());
-        org.lwjgl.vulkan.VK10.nvkCmdBindVertexBuffers(cmd, 0, 1, drawBufPtr, drawOffPtr);
-
-        // Bind index buffer with VK_INDEX_TYPE_UINT32 = 1
-        org.lwjgl.vulkan.VK10.vkCmdBindIndexBuffer(cmd, ib.getId(), ib.getOffset(), 1);
-
-        // Draw
-        org.lwjgl.vulkan.VK10.vkCmdDrawIndexed(cmd, indexCount, 1, 0, 0, 0);
-        #endif
     }
 
     // ========================= //
-    // VertexFormatElement //
+    // VertexFormatElement       //
     // ========================= //
 
     public static VertexFormatElement vertexFormatElement(
             int id, int index,
             VertexFormatElement.Type type, VertexFormatElement.Usage usage,
             int count) {
-        #if MC_VER >= MC_1_21_1
         return new VertexFormatElement(id, index, type, usage, count);
-        #else
-        // MC 1.20: VertexFormatElement(id, Type, Usage, count)
-        // Non-UV usages MUST have id=0 (MC validates this at construction).
-        // CRITICAL: Do NOT remap GENERIC→UV! VulkanMod's UV handler doesn't
-        // support INT type, resulting in VK_FORMAT_UNDEFINED → DEVICE_LOST.
-        // GENERIC with id=0 is valid and VulkanMod maps INT→VK_FORMAT_R32_SINT.
-        if (usage == VertexFormatElement.Usage.UV) {
-            return new VertexFormatElement(id, type, usage, count);
-        }
-        return new VertexFormatElement(0, type, usage, count);
-        #endif
     }
 
     // ========================= //
-    // VertexFormat builder //
+    // VertexFormat builder      //
     // ========================= //
 
     public static VertexFormat buildVertexFormat(String[] names, VertexFormatElement[] elements) {
-        #if MC_VER >= MC_1_21_1
         VertexFormat.Builder builder = VertexFormat.builder();
         for (int i = 0; i < names.length; i++) {
             builder.add(names[i], elements[i]);
         }
         return builder.build();
-        #else
-        com.google.common.collect.ImmutableMap.Builder<String, VertexFormatElement> map =
-                com.google.common.collect.ImmutableMap.builder();
-        for (int i = 0; i < names.length; i++) {
-            map.put(names[i], elements[i]);
-        }
-        return new VertexFormat(map.build());
-        #endif
     }
 
     // ========================= //
-    // Renderer / SwapChain //
+    // Renderer / SwapChain      //
     // ========================= //
 
     public static int getSwapChainWidth() {
-        #if MC_VER >= MC_1_21_1
         return Renderer.getInstance().getSwapChain().getWidth();
-        #else
-        return net.vulkanmod.vulkan.Vulkan.getSwapChain().getWidth();
-        #endif
     }
 
     public static int getSwapChainHeight() {
-        #if MC_VER >= MC_1_21_1
         return Renderer.getInstance().getSwapChain().getHeight();
-        #else
-        return net.vulkanmod.vulkan.Vulkan.getSwapChain().getHeight();
-        #endif
     }
 
     public static void beginRenderPass(
             net.vulkanmod.vulkan.framebuffer.RenderPass renderPass,
             net.vulkanmod.vulkan.framebuffer.Framebuffer framebuffer) {
-        #if MC_VER >= MC_1_21_1
         Renderer.getInstance().beginRenderPass(renderPass, framebuffer);
-        #else
-        try {
-            // End any currently active render pass first
-            Renderer.getInstance().endRenderPass();
-
-            org.lwjgl.vulkan.VkCommandBuffer cmdBuffer =
-                    (org.lwjgl.vulkan.VkCommandBuffer) rendererCmdBufferField.get(Renderer.getInstance());
-            org.lwjgl.system.MemoryStack stack = org.lwjgl.system.MemoryStack.stackPush();
-            framebuffer.beginRenderPass(cmdBuffer, renderPass, stack);
-            stack.close();
-
-            // CRITICAL: update Renderer's state so endRenderPass() works.
-            // Without this, endRenderPass() sees boundFramebuffer==null and no-ops,
-            // leaving nested render passes open → DEVICE_LOST on NVIDIA.
-            Renderer.getInstance().setBoundFramebuffer(framebuffer);
-            Renderer.getInstance().setBoundRenderPass(renderPass);
-        } catch (Exception e) {
-            throw new RuntimeException("[DH-Vulkan] Failed to begin render pass on VM 0.4.2", e);
-        }
-        #endif
     }
 
     /**
-     * Rebind MC's main render target (swapchain) so the composite can draw into it.
-     * On VM 0.6.1, DefaultMainPass.rebindMainTarget() handles state internally.
-     * On VM 0.4.2, it calls swapChain.beginRenderPass() directly without updating
-     * Renderer state — we must fix up boundFramebuffer/boundRenderPass afterward.
+     * Rebind the main render target so the composite can draw into it.
+     * <p>
+     * Without Beryl: restarts MC's swapchain render pass via DefaultMainPass.
+     * With Beryl: restarts Beryl's hdrFramebuffer render pass via ShaderMainPass.
+     * Both implement the MainPass interface, so this call is polymorphic.
      */
     public static void rebindMainTarget() {
-        net.vulkanmod.vulkan.pass.DefaultMainPass mainPass =
-                (net.vulkanmod.vulkan.pass.DefaultMainPass) Renderer.getInstance().getMainPass();
-        mainPass.rebindMainTarget();
-
-        #if MC_VER < MC_1_21_1
-        // VM 0.4.2: rebindMainTarget starts auxRenderPass on swapChain but doesn't
-        // update Renderer state. Fix up so bindGraphicsPipeline/endRenderPass work.
-        try {
-            net.vulkanmod.vulkan.framebuffer.RenderPass auxPass =
-                    (net.vulkanmod.vulkan.framebuffer.RenderPass) defaultMainPassAuxField.get(mainPass);
-            Renderer.getInstance().setBoundFramebuffer(net.vulkanmod.vulkan.Vulkan.getSwapChain());
-            Renderer.getInstance().setBoundRenderPass(auxPass);
-        } catch (Exception e) {
-            throw new RuntimeException("[DH-Vulkan] Failed to rebind main target on VM 0.4.2", e);
-        }
-        #endif
+        Renderer.getInstance().getMainPass().rebindMainTarget();
     }
 
     // ========================= //
-    // Uniform setup //
+    // Uniform setup             //
     // ========================= //
 
     public static void addUniformWithBuffer(
             net.vulkanmod.vulkan.shader.layout.AlignedStruct.Builder builder,
             String type, String name, int count,
             java.util.function.Supplier<net.vulkanmod.vulkan.util.MappedBuffer> bufferSupplier) {
-        #if MC_VER >= MC_1_21_1
         net.vulkanmod.vulkan.shader.layout.Uniform.Info info =
                 net.vulkanmod.vulkan.shader.layout.Uniform.createUniformInfo(type, name, count);
         info.setBufferSupplier(bufferSupplier);
         builder.addUniformInfo(info);
-        #else
-        builder.addUniformInfo(type, name, count);
-        #endif
     }
 
     // ========================= //
@@ -367,20 +256,15 @@ public final class Compat {
     // ========================= //
 
     /**
-     * Compile-time constant: true on VM 0.6.1+, false on VM 0.4.2.
-     * Used at init time only (shader preprocessing, pipeline creation).
+     * Returns true — push constants are always available on VM 0.6+.
+     * Retained as an abstraction point for future VM API changes.
      */
     public static boolean hasPushConstants() {
-        #if MC_VER >= MC_1_21_1
         return true;
-        #else
-        return false;
-        #endif
     }
 
     /**
      * Build a push constant block and attach it to the pipeline builder.
-     * On VM 0.4.2: no-op (push constants not supported).
      *
      * @param pipelineBuilder the Pipeline.Builder being constructed
      * @param type   uniform type string (e.g. "float")
@@ -392,7 +276,6 @@ public final class Compat {
             net.vulkanmod.vulkan.shader.Pipeline.Builder pipelineBuilder,
             String type, String name, int count,
             java.util.function.Supplier<net.vulkanmod.vulkan.util.MappedBuffer> bufferSupplier) {
-        #if MC_VER >= MC_1_21_1
         net.vulkanmod.vulkan.shader.layout.AlignedStruct.Builder pcBuilder =
                 new net.vulkanmod.vulkan.shader.layout.AlignedStruct.Builder();
         net.vulkanmod.vulkan.shader.layout.Uniform.Info info =
@@ -407,48 +290,31 @@ public final class Compat {
         } catch (Exception e) {
             throw new RuntimeException("[DH-Vulkan] Failed to set push constants on pipeline builder", e);
         }
-        #endif
     }
 
     /**
-     * Per-draw state application:
-     * - VM 0.6.1: issues vkCmdPushConstants (12 bytes, zero-copy to cmd buffer)
-     * - VM 0.4.2: full uploadAndBindUBOs (descriptor set alloc + UBO copy)
+     * Per-draw state application: issues vkCmdPushConstants (12 bytes, zero-copy to cmd buffer).
      */
     public static void applyPerDrawState(net.vulkanmod.vulkan.shader.GraphicsPipeline pipeline) {
-        #if MC_VER >= MC_1_21_1
         Renderer.getInstance().pushConstants(pipeline);
-        #else
-        Renderer.getInstance().uploadAndBindUBOs(pipeline);
-        #endif
     }
 
     /**
-     * On VM 0.4.2, Uniform.setSupplier() in the constructor only resolves MC's
-     * built-in uniforms (ModelViewMat etc). Custom DH uniforms have values=null.
-     * Call this AFTER buildUBO() to set suppliers on each Uniform.
-     * On VM 0.6.1, this is a no-op (Info.setBufferSupplier handles it).
+     * No-op on VM 0.6+ (Info.setBufferSupplier handles supplier resolution).
+     * Retained as an abstraction point for future VM API changes.
      */
     public static void setUniformSuppliers(
             net.vulkanmod.vulkan.shader.descriptor.UBO ubo,
             java.util.Map<String, net.vulkanmod.vulkan.util.MappedBuffer> bufferMap) {
-        #if MC_VER < MC_1_21_1
-        for (net.vulkanmod.vulkan.shader.layout.Uniform uniform : ubo.getUniforms()) {
-            net.vulkanmod.vulkan.util.MappedBuffer mb = bufferMap.get(uniform.getName());
-            if (mb != null) {
-                uniform.setSupplier(() -> mb);
-            }
-        }
-        #endif
+        // No-op on VM 0.6+
     }
 
     // ========================= //
-    // GlTexture / Lightmap //
+    // GlTexture / Lightmap      //
     // ========================= //
 
     public static VulkanImage getLightmapVulkanImage() {
         try {
-            #if MC_VER >= MC_1_21_1
             var lightmapView = net.minecraft.client.Minecraft.getInstance()
                     .gameRenderer.lightTexture().getTextureView();
             if (lightmapView == null) return null;
@@ -457,34 +323,24 @@ public final class Compat {
             net.vulkanmod.gl.VkGlTexture vkGlTex =
                     net.vulkanmod.gl.VkGlTexture.getTexture(glTex.glId());
             return vkGlTex != null ? vkGlTex.getVulkanImage() : null;
-            #else
-            // VM 0.4.2: MC already binds lightmap to slot 2 before our hook fires.
-            // Just read it directly from VTextureSelector.
-            return VTextureSelector.getBoundTexture(2);
-            #endif
         } catch (Exception e) {
             return null;
         }
     }
 
     // ========================= //
-    // Config value scaling //
+    // Config value scaling      //
     // ========================= //
 
     /**
-     * DH 1.20.6 config returns noise intensity as an unscaled integer (e.g. 40 = 40%).
-     * DH 1.21.1+ returns it as a pre-scaled 0-1 float. Normalize here.
+     * DH 1.21.1+ returns noise intensity as a pre-scaled 0-1 float. Pass through.
      */
     public static float scaleNoiseIntensity(float raw) {
-        #if MC_VER < MC_1_21_1
-        return raw * 0.01f;
-        #else
         return raw;
-        #endif
     }
 
     // ========================= //
-    // Swapchain access //
+    // Swapchain access          //
     // ========================= //
 
     /**
@@ -492,15 +348,31 @@ public final class Compat {
      * Returns the VulkanImage backing MC's depth buffer.
      */
     public static VulkanImage getSwapChainDepthAttachment() {
-        #if MC_VER >= MC_1_21_1
         return Renderer.getInstance().getSwapChain().getDepthAttachment();
-        #else
-        return net.vulkanmod.vulkan.Vulkan.getSwapChain().getDepthAttachment();
-        #endif
+    }
+
+    /**
+     * Get the depth attachment from whatever framebuffer MC terrain was rendered into.
+     * <p>
+     * Without Beryl: this is the swapchain depth (same as getSwapChainDepthAttachment).
+     * With Beryl: terrain renders into hdrFramebuffer, so we read from the
+     * currently-bound framebuffer's depth attachment.
+     */
+    public static VulkanImage getMainTargetDepthAttachment() {
+        if (!BERYL_ACTIVE) {
+            return Renderer.getInstance().getSwapChain().getDepthAttachment();
+        }
+        // With Beryl, terrain depth lives in the bound framebuffer (hdrFramebuffer)
+        net.vulkanmod.vulkan.framebuffer.Framebuffer bound = Renderer.getInstance().getBoundFramebuffer();
+        if (bound != null) {
+            return bound.getDepthAttachment();
+        }
+        // Fallback to swapchain
+        return Renderer.getInstance().getSwapChain().getDepthAttachment();
     }
 
     // ========================= //
-    // Depth-only sampling //
+    // Depth-only sampling       //
     // ========================= //
 
     /** Cached depth-only image view for D24S8 / D32S8 formats */
@@ -514,7 +386,7 @@ public final class Compat {
      * Prepare MC's depth texture for sampling by setting the depth-only
      * image view on combined D+S formats and binding to the given slot.
      * <p>
-     * vm.5 logic: only create a depth-only view for combined depth+stencil
+     * Only creates a depth-only view for combined depth+stencil
      * formats (D24S8, D32S8). For depth-only formats like D32_SFLOAT (Mac),
      * the default mainImageView already has DEPTH_BIT aspect — just bind directly.
      * <p>
@@ -525,9 +397,6 @@ public final class Compat {
         int VK_IMAGE_ASPECT_STENCIL_BIT = 4;
         int VK_IMAGE_ASPECT_DEPTH_BIT = 2;
 
-        // vm.5 logic: only create depth-only view for combined D+S formats
-        // (aspect has stencil bit set). D32_SFLOAT (aspect=2, no stencil)
-        // works fine with the default mainImageView.
         if ((depthImage.aspect & VK_IMAGE_ASPECT_STENCIL_BIT) != 0) {
             try {
                 long imageId = (long) vulkanImageIdField.get(depthImage);
@@ -537,7 +406,6 @@ public final class Compat {
                         org.lwjgl.vulkan.VK10.vkDestroyImageView(
                                 net.vulkanmod.vulkan.Vulkan.getVkDevice(), depthOnlyView, null);
                     }
-                    // vm.5 used the 5-param overload which maps to createImageView(id, viewType=1, format, aspect, arrayLayers=0→1, baseMip=0, mips)
                     depthOnlyView = VulkanImage.createImageView(
                             imageId, depthImage.format,
                             VK_IMAGE_ASPECT_DEPTH_BIT,
@@ -564,31 +432,12 @@ public final class Compat {
         }
     }
 
-    /** Check if a VkFormat is a depth or depth-stencil format. */
-    private static boolean isDepthFormat(int format) {
-        // VK_FORMAT_D16_UNORM = 124
-        // VK_FORMAT_X8_D24_UNORM_PACK32 = 125
-        // VK_FORMAT_D32_SFLOAT = 126
-        // VK_FORMAT_S8_UINT = 127 (stencil only, not depth)
-        // VK_FORMAT_D16_UNORM_S8_UINT = 128
-        // VK_FORMAT_D24_UNORM_S8_UINT = 129
-        // VK_FORMAT_D32_SFLOAT_S8_UINT = 130
-        return format >= 124 && format <= 130 && format != 127;
-    }
-
     /**
      * Force-set the currentLayout field on a VulkanImage via reflection.
      * <p>
      * VulkanMod's render pass finalLayout transitions update the GPU layout
      * but do NOT update the software-tracked currentLayout field. This causes
-     * transitionImageLayout() to skip barriers on subsequent frames
-     * (it returns early when currentLayout == newLayout).
-     * <p>
-     * After endRenderPass, the depth attachment's GPU layout is
-     * DEPTH_STENCIL_ATTACHMENT_OPTIMAL (render pass finalLayout), but
-     * currentLayout may still say SHADER_READ_ONLY_OPTIMAL from our
-     * previous frame's transition. Calling this forces currentLayout to
-     * match the actual GPU state so the next transition works correctly.
+     * transitionImageLayout() to skip barriers on subsequent frames.
      */
     public static void forceDepthLayout(VulkanImage depthImage) {
         if (vulkanImageLayoutField == null) return;
@@ -602,22 +451,10 @@ public final class Compat {
 
     /**
      * Transition MC's depth image to SHADER_READ_ONLY_OPTIMAL for sampling.
-     * <p>
-     * Must be called AFTER endRenderPass() (depth is no longer an active
-     * attachment) and BEFORE any render pass that samples the depth image.
-     * <p>
-     * Since VulkanMod's render pass endRenderPass() transitions depth to
-     * DEPTH_STENCIL_ATTACHMENT_OPTIMAL (layout 3) but may not update the
-     * software-tracked currentLayout field consistently, we first force
-     * currentLayout to match the actual GPU state, then transition.
      */
     public static void transitionDepthForSampling(VulkanImage depthImage) {
         try {
-            // Force currentLayout to match actual GPU state after endRenderPass.
-            // The render pass finalLayout puts depth in DEPTH_STENCIL_ATTACHMENT_OPTIMAL (3).
             forceDepthLayout(depthImage);
-
-            // Now transition from DEPTH_STENCIL_ATTACHMENT (3) → SHADER_READ_ONLY (5)
             org.lwjgl.vulkan.VkCommandBuffer cmd = Renderer.getCommandBuffer();
             try (org.lwjgl.system.MemoryStack stack = org.lwjgl.system.MemoryStack.stackPush()) {
                 depthImage.transitionImageLayout(stack, cmd,
@@ -630,11 +467,7 @@ public final class Compat {
 
     /**
      * Transition MC's depth image back to DEPTH_STENCIL_ATTACHMENT_OPTIMAL
-     * after sampling is complete, so MC can use it as a depth attachment again.
-     * <p>
-     * Must be called AFTER the depth-reading render pass has ended and
-     * BEFORE rebindMainTarget() starts a new render pass with the depth
-     * as an attachment.
+     * after sampling is complete.
      */
     public static void transitionDepthForAttachment(VulkanImage depthImage) {
         try {
@@ -666,8 +499,7 @@ public final class Compat {
 
     /**
      * Convenience: prepare, bind, and restore in one call.
-     * Use when the full bind→upload→draw cycle happens within the caller.
-     * 
+     *
      * @deprecated Use {@link #prepareMcDepthForSampling} +
      *             {@link #restoreMcDepthView} instead
      */
@@ -690,10 +522,6 @@ public final class Compat {
      * <p>
      * Must be called AFTER endRenderPass() (so the depth is not an active
      * attachment) and BEFORE rebindMainTarget() (which re-attaches it).
-     * The returned image is safe to sample during the composite pass because
-     * it is NOT bound as an attachment.
-     * <p>
-     * The copy image is persistent and only recreated on resize.
      */
     public static VulkanImage copyMcDepthForSampling(VulkanImage srcDepth) {
         try {
@@ -704,7 +532,6 @@ public final class Compat {
                 if (mcDepthCopyImage != null) {
                     mcDepthCopyImage.free();
                 }
-                // Create with TRANSFER_DST (receive copy) + SAMPLED (sample in shader)
                 int copyUsage = 0x04 /* VK_IMAGE_USAGE_SAMPLED_BIT */
                         | 0x08 /* VK_IMAGE_USAGE_TRANSFER_DST_BIT */;
                 mcDepthCopyImage = VulkanImage.createDepthImage(
@@ -716,20 +543,16 @@ public final class Compat {
                         srcDepth.width, srcDepth.height, srcDepth.format);
             }
 
-            // Get the current command buffer from Renderer
             org.lwjgl.vulkan.VkCommandBuffer cmdBuffer = (org.lwjgl.vulkan.VkCommandBuffer) rendererCmdBufferField
                     .get(Renderer.getInstance());
 
             try (org.lwjgl.system.MemoryStack stack = org.lwjgl.system.MemoryStack.stackPush()) {
-                // Transition src depth to TRANSFER_SRC
                 srcDepth.transitionImageLayout(stack, cmdBuffer,
                         org.lwjgl.vulkan.VK10.VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
 
-                // Transition copy to TRANSFER_DST
                 mcDepthCopyImage.transitionImageLayout(stack, cmdBuffer,
                         org.lwjgl.vulkan.VK10.VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
 
-                // Copy depth
                 long srcId = (long) vulkanImageIdField.get(srcDepth);
                 long dstId = (long) vulkanImageIdField.get(mcDepthCopyImage);
 
@@ -750,7 +573,6 @@ public final class Compat {
                         dstId, org.lwjgl.vulkan.VK10.VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
                         copyRegion);
 
-                // Transition copy to SHADER_READ_ONLY for sampling
                 mcDepthCopyImage.transitionImageLayout(stack, cmdBuffer,
                         org.lwjgl.vulkan.VK10.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
             }
@@ -778,7 +600,6 @@ public final class Compat {
      * across server transitions (leave/join world cycles).
      */
     public static void cleanupStaticResources() {
-        // Free the depth-only image view used for combined D+S formats
         if (depthOnlyView != 0) {
             org.lwjgl.vulkan.VK10.vkDestroyImageView(
                     net.vulkanmod.vulkan.Vulkan.getVkDevice(), depthOnlyView, null);
@@ -788,7 +609,6 @@ public final class Compat {
         savedOriginalView = 0;
         savedDepthImage = null;
 
-        // Free the persistent MC depth copy image
         cleanupDepthCopy();
     }
 
@@ -798,50 +618,25 @@ public final class Compat {
 
     /**
      * Load a resource by path from Minecraft's resource manager.
-     * ResourceLocation was renamed to Identifier in MC 1.21.11.
      */
     public static java.io.InputStream openMcResource(String path) throws java.io.IOException {
-        #if MC_VER <= MC_1_20_6
-        var loc = new net.minecraft.resources.ResourceLocation(path);
-        #elif MC_VER <= MC_1_21_10
-        var loc = net.minecraft.resources.ResourceLocation.withDefaultNamespace(path);
-        #else
         var loc = net.minecraft.resources.Identifier.withDefaultNamespace(path);
-        #endif
         return net.minecraft.client.Minecraft.getInstance().getResourceManager()
                 .getResourceOrThrow(loc).open();
     }
 
     /**
      * Get the cloud render range in blocks.
-     * MC 1.21.x has options.cloudRange(), MC 1.20.x uses renderDistance.
      */
     public static int getCloudRenderRange() {
-        #if MC_VER <= MC_1_20_6
-        return net.minecraft.client.Minecraft.getInstance().options.renderDistance().get() * 16;
-        #else
         return Math.min(net.minecraft.client.Minecraft.getInstance().options.cloudRange().get(), 128) * 16;
-        #endif
     }
 
     /**
      * Get cloud pixel data from a NativeImage as int array.
-     * MC 1.21.x has getPixelsABGR(), MC 1.20.x has getPixelRGBA per-pixel.
      */
     public static int[] getCloudPixels(com.mojang.blaze3d.platform.NativeImage image) {
-        #if MC_VER <= MC_1_20_6
-        int width = image.getWidth();
-        int height = image.getHeight();
-        int[] pixels = new int[width * height];
-        for (int y = 0; y < height; y++) {
-            for (int x = 0; x < width; x++) {
-                pixels[y * width + x] = image.getPixelRGBA(x, y);
-            }
-        }
-        return pixels;
-        #else
         return image.getPixelsABGR();
-        #endif
     }
 
     /**
@@ -849,26 +644,7 @@ public final class Compat {
      */
     public static int getCloudHeight(net.minecraft.client.multiplayer.ClientLevel level) {
         try {
-            #if MC_VER <= MC_1_20_6
-            // MC 1.20.x: cloudHeight might be an OptionalInt
-            java.lang.reflect.Method m = level.dimensionType().getClass().getMethod("cloudHeight");
-            Object result = m.invoke(level.dimensionType());
-            if (result instanceof java.util.OptionalInt) {
-                return ((java.util.OptionalInt) result).orElse(-1);
-            } else if (result instanceof java.util.Optional) {
-                @SuppressWarnings("unchecked")
-                java.util.Optional<Integer> opt = (java.util.Optional<Integer>) result;
-                return opt.orElse(-1);
-            }
-            return 192; // fallback overworld
-            #elif MC_VER <= MC_1_21_10
-            java.util.Optional<Integer> opt = level.dimensionType().cloudHeight();
-            return opt.orElse(-1);
-            #else
-            // MC 1.21.11: dimensionType API may have changed, fallback to 192
-            // Cloud height is typically 192 in overworld dimensions
             return level.dimensionType().hasSkyLight() ? 192 : -1;
-            #endif
         } catch (Exception e) {
             return 192;
         }
@@ -876,31 +652,16 @@ public final class Compat {
 
     /**
      * Get cloud color as RGB float[3] for the current level.
-     * API varies significantly across MC versions.
+     * API varies across MC 1.21.x sub-versions.
      */
     public static float[] getCloudColorRGB(net.minecraft.client.multiplayer.ClientLevel level, float partialTicks) {
         try {
-            #if MC_VER < MC_1_21_3
-            // MC 1.20.x - 1.21.1: returns Vec3
-            net.minecraft.world.phys.Vec3 color = level.getCloudColor(partialTicks);
-            cloudColorResult[0] = (float) color.x;
-            cloudColorResult[1] = (float) color.y;
-            cloudColorResult[2] = (float) color.z;
-            #elif MC_VER <= MC_1_21_10
-            // MC 1.21.3 - 1.21.10: returns int (ARGB)
-            int argb = level.getCloudColor(partialTicks);
-            cloudColorResult[0] = ((argb >> 16) & 0xFF) / 255.0f;
-            cloudColorResult[1] = ((argb >> 8) & 0xFF) / 255.0f;
-            cloudColorResult[2] = (argb & 0xFF) / 255.0f;
-            #else
-            // MC 1.21.11+: uses environmentAttributes
             int argb = level.environmentAttributes().getValue(
                     net.minecraft.world.attribute.EnvironmentAttributes.CLOUD_COLOR,
                     net.minecraft.core.BlockPos.ZERO);
             cloudColorResult[0] = ((argb >> 16) & 0xFF) / 255.0f;
             cloudColorResult[1] = ((argb >> 8) & 0xFF) / 255.0f;
             cloudColorResult[2] = (argb & 0xFF) / 255.0f;
-            #endif
         } catch (Exception e) {
             cloudColorResult[0] = 1.0f;
             cloudColorResult[1] = 1.0f;
@@ -911,72 +672,36 @@ public final class Compat {
 
     /**
      * Begin building cloud mesh geometry.
-     * MC 1.21.x: Tesselator.getInstance().begin(Mode, Format)
-     * MC 1.20.x: new BufferBuilder(size); builder.begin(Mode, Format)
      */
     public static com.mojang.blaze3d.vertex.BufferBuilder beginCloudMesh() {
-        #if MC_VER <= MC_1_20_6
-        com.mojang.blaze3d.vertex.BufferBuilder builder = com.mojang.blaze3d.vertex.Tesselator.getInstance().getBuilder();
-        builder.begin(com.mojang.blaze3d.vertex.VertexFormat.Mode.QUADS, com.mojang.blaze3d.vertex.DefaultVertexFormat.POSITION_COLOR);
-        return builder;
-        #else
         return com.mojang.blaze3d.vertex.Tesselator.getInstance().begin(
                 com.mojang.blaze3d.vertex.VertexFormat.Mode.QUADS,
                 com.mojang.blaze3d.vertex.DefaultVertexFormat.POSITION_COLOR);
-        #endif
     }
 
     /**
      * Add a vertex with position + ARGB color to the cloud mesh builder.
      */
     public static void putCloudVertex(com.mojang.blaze3d.vertex.BufferBuilder builder, float x, float y, float z, int color) {
-        #if MC_VER <= MC_1_20_6
-        float a = ((color >> 24) & 0xFF) / 255.0f;
-        float r = ((color >> 16) & 0xFF) / 255.0f;
-        float g = ((color >> 8) & 0xFF) / 255.0f;
-        float b = (color & 0xFF) / 255.0f;
-        builder.vertex(x, y, z).color(r, g, b, a).endVertex();
-        #else
         builder.addVertex(x, y, z).setColor(color);
-        #endif
     }
 
     /**
      * Finish building the cloud mesh, returning the mesh data (or null if empty).
-     * Returns Object to avoid referencing MeshData which doesn't exist on 1.20.x.
      */
     public static Object finishCloudMesh(com.mojang.blaze3d.vertex.BufferBuilder builder) {
-        #if MC_VER <= MC_1_20_6
-        // On 1.20.x, builder.end() returns BufferBuilder.RenderedBuffer
-        // which is what VM 0.4.2's VBO.upload() expects
-        return builder.end();
-        #else
         return builder.build();
-        #endif
     }
 
     /**
-     * Set VRenderSystem model offset. Only exists on VM 0.6.x.
+     * Set VRenderSystem model offset (VM 0.6+ direct call).
      */
     public static void setModelOffset(float x, float y, float z) {
-        if (!setModelOffsetResolved) {
-            setModelOffsetResolved = true;
-            try {
-                setModelOffsetMethod = net.vulkanmod.vulkan.VRenderSystem.class.getMethod(
-                        "setModelOffset", float.class, float.class, float.class);
-            } catch (Exception ignored) {
-                // VM 0.4.2 doesn't have setModelOffset — no-op
-            }
-        }
-        if (setModelOffsetMethod != null) {
-            try {
-                setModelOffsetMethod.invoke(null, x, y, z);
-            } catch (Exception ignored) {}
-        }
+        net.vulkanmod.vulkan.VRenderSystem.setModelOffset(x, y, z);
     }
 
     /**
-     * Get the MeshData class for reflection. Returns null on MC 1.20.x (class doesn't exist).
+     * Get the MeshData class for reflection.
      */
     public static Class<?> getMeshDataClass() {
         try {

@@ -12,7 +12,8 @@
         "dh24.MixinLodBufferContainer",
         "dh3.MixinDependencySetup",
         "shared.MixinLevelRenderer",
-        "shared.MixinLightMapWrapper"
+        "shared.MixinLightMapWrapper",
+        "beryl.MixinBerylRenderingPipeline"
     ],
     "injectors": {
         "defaultRequire": 1

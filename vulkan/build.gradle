@@ -17,12 +17,10 @@ remapJar {
 }
 
 processResources {
-    def vmMinVersion = rootProject.minecraft_version.startsWith("1.20") ? ">=0.4.2" : ">=0.6.0"
     inputs.property "version", project.version
     inputs.property "minecraft_version", rootProject.minecraft_version
-    inputs.property "vulkanmod_min_version", vmMinVersion
     filesMatching("fabric.mod.json") {
-        expand "version": project.version, "minecraft_version": rootProject.minecraft_version, "vulkanmod_min_version": vmMinVersion
+        expand "version": project.version, "minecraft_version": rootProject.minecraft_version
     }
 }
 
