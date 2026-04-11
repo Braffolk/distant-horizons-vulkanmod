@@ -257,6 +257,13 @@ public class VulkanRenderEngine implements VulkanBackend {
         if (this.initFailed)
             return;
 
+        // VM sets skipRendering when the swapchain is unavailable (window minimized,
+        // VK_ERROR_OUT_OF_DATE, etc.). beginRenderPass() silently returns false in
+        // that state, leaving boundRenderPass=null. Any subsequent
+        // bindGraphicsPipeline() would NPE on state.renderPass.getFramebuffer().
+        if (Renderer.skipRendering)
+            return;
+
         // Init (first frame only)
         if (!this.initialized) {
             Renderer.getInstance().endRenderPass();
@@ -503,6 +510,10 @@ public class VulkanRenderEngine implements VulkanBackend {
     public void endFrame(RenderUniforms uniforms) {
         if (!this.frameReady)
             return;
+        if (Renderer.skipRendering) {
+            this.frameReady = false;
+            return;
+        }
 
         this.profiler.end(DhFrameProfiler.PHASE_DRAWS);
 
@@ -608,6 +619,7 @@ public class VulkanRenderEngine implements VulkanBackend {
     @Override
     public void lateComposite(RenderUniforms uniforms) {
         if (!this.frameReady) return;
+        if (Renderer.skipRendering) return;
 
         com.seibel.distanthorizons.api.enums.config.EDhApiMcRenderingFadeMode fadeMode = DhConfigHelper.vanillaFadeMode();
         if (fadeMode == com.seibel.distanthorizons.api.enums.config.EDhApiMcRenderingFadeMode.NONE) {
@@ -652,6 +664,8 @@ public class VulkanRenderEngine implements VulkanBackend {
     @Override
     public void readAndCacheMcDepth() {
         if (!this.initialized || this.initFailed || this.depthReaderPipeline == null)
+            return;
+        if (Renderer.skipRendering)
             return;
 
         com.seibel.distanthorizons.api.enums.config.EDhApiMcRenderingFadeMode fadeMode = DhConfigHelper.vanillaFadeMode();
