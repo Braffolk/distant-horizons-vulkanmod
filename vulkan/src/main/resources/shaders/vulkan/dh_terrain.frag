@@ -362,64 +362,22 @@ void main()
     fragColor.rgb += radiance * 0.05 * NdotU * albedo * 1.0 * 1.0;
     
     if (fragColor.a < 0.99) {
-        vec3 normal = vec3(0.0, 1.0, 0.0); 
-        vec3 viewDirW = normalize(vertexWorldPos);
-        vec3 reflectedDir = reflect(viewDirW, normal);
+        // Water: re-run Beryl's PBR with water material properties.
+        // Beryl treats water blocks identically to terrain — no separate sky reflection.
+        // The sun path on water comes purely from LightingSphereGGX2 with low roughness.
+        vec3 waterNormal = vec3(0.0, 1.0, 0.0);
+        vec3 waterF0 = vec3(0.02);       // Water IOR ~1.33
+        float waterRoughness = 0.1;      // Smooth surface
+        float waterMetallic = 0.0;       // Dielectric
         
-        // Water is a pure surface effect mapped against absolute world positions
-        float roUp = dot(reflectedDir, vec3(0.0, 1.0, 0.0));
-        float soUp = max(dot(vec3(0.0, 1.0, 0.0), worldLightDir), 0.0);
+        vec3 waterColor1 = LightingSphereGGX2(viewDir, waterNormal, worldLightDir, albedo, radiance, waterF0, waterRoughness, waterMetallic, 0);
         
-        vec3 reflectedSkyColor = getSkyColor(reflectedDir, worldLightDir, uBerylSkyColor, uBerylFogColor, uBerylNightMultiplier, roUp, soUp, uBerylLightVisibility, uBerylLightColor);
+        // Same composition as terrain (line 358) but with water PBR result
+        fragColor.rgb = (waterColor1 * 1.0 * 1.0) + albedo * (0.3 * lightY + vLightLevels.x * vec3(1.0, 0.7, 0.5));
+        float waterNdotU = max(dot(waterNormal, zenithUP), 0.0);
+        fragColor.rgb += radiance * 0.05 * waterNdotU * albedo * 1.0 * 1.0;
         
-        // PBR specular sun/moon reflection on water — uses same LightingSphereGGX2
-        // math as Beryl to produce the naturally elongated sun path. The half-vector
-        // evaluation with low roughness creates the characteristic stretched highlight.
-        {
-            vec3 V = -viewDirW; // toward camera (Beryl convention)
-            vec3 N = normal;    // (0, 1, 0)
-            vec3 L = worldLightDir;
-            
-            // Sphere light approximation (Beryl radius = 0.025)
-            vec3 R = reflect(-V, N);
-            vec3 centerToRay = R - L;
-            float sRadius = 0.025;
-            float sDist = length(centerToRay);
-            L = normalize(L + centerToRay * clamp(sRadius / sDist, 0.0, 1.0));
-            
-            vec3 H = normalize(V + L);
-            const float waterRoughness = 0.1;
-            float a = waterRoughness * waterRoughness;
-            float a2 = a * a;
-            float NdotH = max(dot(N, H), 0.0);
-            float denomNDF = (NdotH * NdotH * (a2 - 1.0) + 1.0);
-            float NDF = a2 / (3.14159265 * denomNDF * denomNDF);
-            
-            float NdotV = max(dot(N, V), 0.0);
-            float NdotL = max(dot(N, L), 0.0);
-            float r2 = (waterRoughness + 1.0);
-            float k = (r2 * r2) * 0.125;
-            float G1 = NdotV / (NdotV * (1.0 - k) + k);
-            float G2 = NdotL / (NdotL * (1.0 - k) + k);
-            float G = G1 * G2;
-            
-            vec3 F0_water = vec3(0.02);
-            vec3 F = F0_water + (1.0 - F0_water) * pow(clamp(1.0 - max(dot(H, V), 0.0), 0.0, 1.0), 5.0);
-            
-            vec3 specNum = NDF * G * F;
-            float specDen = 4.0 * NdotV * NdotL + 0.0001;
-            vec3 specular = min(specNum / specDen * NdotL, 1.0);
-            
-            // Gate by radiance (same as Beryl's terrain: saturate((dot(up,L)-0.04)*50))
-            vec3 waterRadiance = uBerylLightColor * clamp((dot(vec3(0.0, 1.0, 0.0), worldLightDir) - 0.04) * 50.0, 0.0, 1.0);
-            reflectedSkyColor += specular * waterRadiance;
-        }
-        
-        float fresnel = 1.0 - max(dot(-viewDirW, normal), 0.0);
-        fresnel = pow(fresnel, 5.0);
-        float reflectTerm = mix(0.1, 0.9, fresnel);
-        fragColor.rgb = mix(fragColor.rgb, reflectedSkyColor, reflectTerm);
-        fragColor.a = max(fragColor.a, reflectTerm);
+        fragColor.a = max(fragColor.a, 0.8);
     }
 
     // --- BERYL SCREEN-SPACE ATMOSPHERIC ANCHORING ---

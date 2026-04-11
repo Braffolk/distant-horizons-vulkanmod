@@ -32,8 +32,13 @@ public class BerylAtmosphereOverride {
                 berylFogFactorField = rpClass.getDeclaredField("FogFactor");
                 berylFogFactorField.setAccessible(true);
                 
-                berylFogEndField = rpClass.getDeclaredField("FogEnd");
-                berylFogEndField.setAccessible(true);
+                try {
+                    berylFogEndField = rpClass.getDeclaredField("FogEnd");
+                    berylFogEndField.setAccessible(true);
+                } catch (NoSuchFieldException e) {
+                    LOGGER.warn("Beryl RenderingPipeline has no FogEnd field, will use FogStart fallback");
+                    berylFogEndField = null;
+                }
                 
                 reflectionInitialized = true;
             }
@@ -59,7 +64,13 @@ public class BerylAtmosphereOverride {
                         float dhDistance = currentDhClipDistance;
                         // Beryl usually assumes a physical sunset of ~200-400 blocks.
                         // We scale the volumetric exponential term strictly out.
-                        float berylDistance = (float) berylFogEndField.get(null);
+                        float berylDistance;
+                        if (berylFogEndField != null) {
+                            berylDistance = (float) berylFogEndField.get(null);
+                        } else {
+                            // Fallback: estimate from MC render distance (16 chunks = 256 blocks typical)
+                            berylDistance = 256.0f;
+                        }
                         if(berylDistance <= 0.01f || dhDistance <= 0.01f) return berylFogFactor;
                         return berylFogFactor * (berylDistance / dhDistance);
                     } catch (Exception e) {
