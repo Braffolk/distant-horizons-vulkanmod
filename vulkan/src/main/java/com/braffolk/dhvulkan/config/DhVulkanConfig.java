@@ -3,6 +3,8 @@ package com.braffolk.dhvulkan.config;
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
 import net.fabricmc.loader.api.FabricLoader;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 
 import java.io.IOException;
 import java.nio.file.*;
@@ -12,6 +14,8 @@ import java.nio.file.*;
  * Saved to {@code config/dh-vulkanmod.json}.
  */
 public class DhVulkanConfig {
+
+    private static final Logger LOGGER = LogManager.getLogger("DH-VulkanMod");
 
     private static final Path CONFIG_PATH = FabricLoader.getInstance()
             .getConfigDir().resolve("dh-vulkanmod.json");
@@ -56,7 +60,7 @@ public class DhVulkanConfig {
                 if (config != null)
                     return config;
             } catch (Exception e) {
-                System.err.println("[DH-VulkanMod] Failed to load config, using defaults: " + e.getMessage());
+                LOGGER.warn("Failed to load config, using defaults: {}", e.getMessage());
             }
         }
         // Create default config
@@ -70,7 +74,7 @@ public class DhVulkanConfig {
             Files.createDirectories(CONFIG_PATH.getParent());
             Files.writeString(CONFIG_PATH, GSON.toJson(this));
         } catch (IOException e) {
-            System.err.println("[DH-VulkanMod] Failed to save config: " + e.getMessage());
+            LOGGER.warn("Failed to save config: {}", e.getMessage());
         }
     }
 }

@@ -12,7 +12,6 @@ import com.mojang.blaze3d.vertex.VertexFormat;
 import com.mojang.blaze3d.vertex.VertexFormatElement;
 import com.seibel.distanthorizons.core.logging.DhLogger;
 import com.seibel.distanthorizons.core.logging.DhLoggerBuilder;
-import com.seibel.distanthorizons.core.render.glObject.GLProxy;
 import com.seibel.distanthorizons.core.util.math.Mat4f;
 import com.seibel.distanthorizons.core.util.math.Vec3f;
 import net.vulkanmod.vulkan.Drawer;
@@ -104,11 +103,11 @@ public class VulkanRenderContext {
             return;
         }
 
-        LOGGER.info("[DH-Vulkan] Initializing VulkanRenderContext...");
+        LOGGER.debug("[DH-Vulkan] Initializing VulkanRenderContext...");
         try {
             this.terrainPipeline = createTerrainPipeline();
             this.initialized = true;
-            LOGGER.info("[DH-Vulkan] VulkanRenderContext initialized.");
+            LOGGER.debug("[DH-Vulkan] VulkanRenderContext initialized.");
         } catch (Exception e) {
             LOGGER.error("[DH-Vulkan] Failed to initialize VulkanRenderContext", e);
             throw new RuntimeException("DH Vulkan initialization failed", e);
@@ -125,11 +124,11 @@ public class VulkanRenderContext {
     private static final VertexFormat DH_TERRAIN_FORMAT;
     static {
         VertexFormatElement position = Compat.vertexFormatElement(0, 0,
-                VertexFormatElement.Type.SHORT, VertexFormatElement.Usage.POSITION, 4);
+                VertexFormatElement.Type.SHORT, Compat.ElementUsage.POSITION, 4);
         VertexFormatElement color = Compat.vertexFormatElement(1, 0,
-                VertexFormatElement.Type.UBYTE, VertexFormatElement.Usage.COLOR, 4);
+                VertexFormatElement.Type.UBYTE, Compat.ElementUsage.COLOR, 4);
         VertexFormatElement material = Compat.vertexFormatElement(2, 0,
-                VertexFormatElement.Type.INT, VertexFormatElement.Usage.GENERIC, 1);
+                VertexFormatElement.Type.INT, Compat.ElementUsage.GENERIC, 1);
 
         DH_TERRAIN_FORMAT = Compat.buildVertexFormat(
                 new String[] { "Position", "Color", "Material" },
@@ -157,7 +156,7 @@ public class VulkanRenderContext {
         }
 
         Pipeline.Builder builder = new Pipeline.Builder(DH_TERRAIN_FORMAT);
-        builder.compileShaders("dh_terrain", vertSource, fragSource);
+        Compat.compileShaders(builder, "dh_terrain", vertSource, fragSource);
 
         // UBOs and samplers
         List<UBO> ubos = new ArrayList<>();
@@ -203,7 +202,7 @@ public class VulkanRenderContext {
         // Binding 1: LightMap sampler
         // VulkanMod hardcodes lightmap at texture slot 2 (see
         // VTextureSelector.setLightTexture())
-        imageDescriptors.add(new ImageDescriptor(1, "sampler2D", "uLightMap", 2));
+        imageDescriptors.add(Compat.imageDescriptor(1, "sampler2D", "uLightMap", 2));
 
         builder.setUniforms(ubos, imageDescriptors);
 
@@ -367,7 +366,7 @@ public class VulkanRenderContext {
         }
         this.uniformBuffers.clear();
         this.initialized = false;
-        LOGGER.info("[DH-Vulkan] VulkanRenderContext cleaned up.");
+        LOGGER.debug("[DH-Vulkan] VulkanRenderContext cleaned up.");
     }
 
     // ================//

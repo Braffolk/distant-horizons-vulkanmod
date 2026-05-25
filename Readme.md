@@ -4,7 +4,7 @@ A Fabric extension mod that adds native **Vulkan rendering** to [Distant Horizon
 
 LODs are rendered using VulkanMod's Vulkan pipeline instead of OpenGL, enabling Distant Horizons to work on systems and configurations running VulkanMod.
 
-> **This is not a standalone mod.** You must have both Distant Horizons and VulkanMod installed. Versions v2.4.6+vm.3 and earlier were standalone forks of DH; Newer versions are a separate extension mod that runs alongside unmodified DH. Tested for Minecraft versions 1.20.6 and 1.21.11.
+> **This is not a standalone mod.** You must have both Distant Horizons and VulkanMod installed. Versions v2.4.6+vm.3 and earlier were standalone forks of DH; Newer versions are a separate extension mod that runs alongside unmodified DH. Tested for Minecraft versions 1.20.6 and 26.1–26.1.2.
 
 ![Distant Horizons running on VulkanMod](docs/dh-vulkanmod.jpg)
 *Distant Horizons LODs rendered via VulkanMod's Vulkan backend*
@@ -32,22 +32,24 @@ See [docs/vulkan_implementation_roadmap.md](docs/vulkan_implementation_roadmap.m
 
 ## Requirements
 
-- **Minecraft:** 1.20.6 or 1.21.11
+- **Minecraft:** 1.20.6 or 26.1 / 26.1.1 / 26.1.2
 - **Mod loader:** Fabric
-- **VulkanMod** must be installed (0.4.2 for MC 1.20.6, 0.6.1 for MC 1.21.11)
-- **Distant Horizons** 2.4.0+ or 3.0.0+ must be installed
+- **VulkanMod** must be installed (0.4.2 for MC 1.20.6, 0.6.6+ for MC 26.1.x)
+- **Distant Horizons** 2.4.0+ (1.20.6) or 3.0.0+ (26.1.x) must be installed
 
 > This is not the official Distant Horizons mod. For the original, see the [GitLab](https://gitlab.com/distant-horizons-team/distant-horizons) or [CurseForge](https://www.curseforge.com/minecraft/mc-mods/distant-horizons) pages.
 
 ## Building
 
 ```bash
-# MC 1.21.11
-./gradlew :vulkan:build -PmcVer="1.21.11"
+# MC 26.1.2 (also supports 26.1 and 26.1.1 in the same jar)
+./gradlew :vulkan:build -PmcVer="26.1.2"
 
 # MC 1.20.6
 ./gradlew :vulkan:build -PmcVer="1.20.6"
 ```
+
+Place matching **Distant Horizons** and **VulkanMod** jars in `jars/` before building (see Modrinth: DH 3.0.3-b for 26.1.2, VulkanMod 0.6.6 for 26.1.2).
 
 The compiled jar will be in `vulkan/build/libs/`.
 
@@ -55,7 +57,7 @@ The compiled jar will be in `vulkan/build/libs/`.
 
 ### Prerequisites
 
-* JDK 21 or newer — https://www.oracle.com/java/technologies/downloads/
+* JDK 21+ for MC 1.20.6 builds; **JDK 25+** for MC 26.1.x (Gradle auto-downloads via toolchains)
 * Git — https://git-scm.com/
 
 ### IntelliJ IDEA

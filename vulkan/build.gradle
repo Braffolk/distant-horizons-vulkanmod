@@ -1,19 +1,36 @@
 plugins {
-    id "dev.architectury.loom" version "1.13-SNAPSHOT"
+    id "net.fabricmc.fabric-loom" version "1.16-SNAPSHOT"
     id "systems.manifold.manifold-gradle-plugin" version "0.0.2-alpha"
 }
 
-version = rootProject.mod_version
-archivesBaseName = "DistantHorizons-VulkanMod-fabric"
+def mcVer = rootProject.minecraft_version
+def isUnobfuscatedMc = mcVer.startsWith("26.")
 
-jar {
-    archiveFileName = "${archivesBaseName}-${version}-mc${rootProject.minecraft_version}.jar"
+sourceSets {
+    main {
+        resources {
+            if (isUnobfuscatedMc) {
+                srcDir "src/main/resources-mc26"
+            } else {
+                srcDir "src/main/resources-legacy"
+            }
+        }
+        if (isUnobfuscatedMc) {
+            java {
+                exclude "**/dh24/**"
+                exclude "**/mixin/dh24/**"
+            }
+        }
+    }
 }
 
-remapJar {
-    inputFile = jar.archiveFile
-    archiveFileName = "DistantHorizons-VulkanMod-fabric-${version}-mc${rootProject.minecraft_version}.jar"
-    dependsOn jar
+version = rootProject.mod_version
+base {
+    archivesName = "DistantHorizons-VulkanMod-fabric"
+}
+
+jar {
+    archiveFileName.set("${base.archivesName.get()}-${version}-mc${rootProject.minecraft_version}.jar")
 }
 
 processResources {
@@ -22,17 +39,16 @@ processResources {
     inputs.property "minecraft_version", rootProject.minecraft_version
     inputs.property "vulkanmod_min_version", vmMinVersion
     filesMatching("fabric.mod.json") {
-        expand "version": project.version, "minecraft_version": rootProject.minecraft_version, "vulkanmod_min_version": vmMinVersion
+        expand "version": project.version,
+                "minecraft_version": rootProject.minecraft_version,
+                "vulkanmod_min_version": vmMinVersion
     }
 }
 
-// Manifold preprocessor version
 manifold {
     manifoldVersion = "2025.1.31"
 }
 
-// Resolve DH and VulkanMod jars dynamically based on MC version
-def mcVer = rootProject.minecraft_version
 def dhJar = fileTree("${rootDir}/jars").matching { include "DistantHorizons-*-${mcVer}-*.jar" }.files
 def vmJar = fileTree("${rootDir}/jars").matching { include "VulkanMod_${mcVer}-*.jar" }.files
 
@@ -41,24 +57,34 @@ if (vmJar.isEmpty()) throw new GradleException("No VulkanMod jar found for MC ${
 
 dependencies {
     minecraft "com.mojang:minecraft:${mcVer}"
-    mappings loom.layered() {
-        officialMojangMappings()
-        parchment("org.parchmentmc.data:parchment-${rootProject.parchment_version}@zip")
+
+    if (isUnobfuscatedMc) {
+        implementation "net.fabricmc:fabric-loader:${rootProject.fabric_loader_version}"
+        implementation "net.fabricmc.fabric-api:fabric-api:${rootProject.fabric_api_version}"
+        dhJar.each { compileOnly files(it) }
+        compileOnly files(vmJar.first())
+    } else {
+        mappings loom.layered() {
+            officialMojangMappings()
+            parchment("org.parchmentmc.data:parchment-${rootProject.parchment_version}@zip")
+        }
+        modImplementation "net.fabricmc:fabric-loader:${rootProject.fabric_loader_version}"
+        modImplementation "net.fabricmc.fabric-api:fabric-api:${rootProject.fabric_api_version}"
+        dhJar.each { modCompileOnly files(it) }
+        modCompileOnly files(vmJar.first())
     }
-    // Fabric loader + API
-    modImplementation "net.fabricmc:fabric-loader:${rootProject.fabric_loader_version}"
-    modImplementation "net.fabricmc.fabric-api:fabric-api:${rootProject.fabric_api_version}"
 
-    // Distant Horizons — compile against all matched jars (DH 2.4 + DH 3.0)
-    dhJar.each { modCompileOnly files(it) }
-
-    // VulkanMod — compile against the jar
-    modCompileOnly files(vmJar.first())
-
-    // LWJGL vulkan types (VkCommandBuffer, MemoryStack) surfaced by VulkanMod's API
     compileOnly "org.lwjgl:lwjgl:${rootProject.lwjgl_version}"
     compileOnly "org.lwjgl:lwjgl-vulkan:${rootProject.lwjgl_version}"
-
-    // Manifold preprocessor
     annotationProcessor("systems.manifold:manifold-preprocessor:2025.1.31")
+}
+
+java {
+    toolchain {
+        languageVersion = JavaLanguageVersion.of(rootProject.java_version as int)
+    }
+}
+
+tasks.withType(JavaCompile).configureEach {
+    options.release = rootProject.java_version as int
 }

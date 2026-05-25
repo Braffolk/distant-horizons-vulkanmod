@@ -1,5 +1,7 @@
 package com.braffolk.dhvulkan;
 
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 import org.objectweb.asm.tree.ClassNode;
 import org.spongepowered.asm.mixin.Mixins;
 import org.spongepowered.asm.mixin.extensibility.IMixinConfigPlugin;
@@ -24,6 +26,8 @@ import java.util.Set;
  */
 public class DhVulkanMixinPlugin implements IMixinConfigPlugin {
 
+    private static final Logger LOGGER = LogManager.getLogger("DH-VulkanMod");
+
     private static final String DH_CONFIG_NAME = "DistantHorizons.fabric.mixins.json";
     private static final String DH_MIXIN_TO_REMOVE = "client.MixinTextureUtil";
     // DH 3.0's MixinSharedConstants sets IS_RUNNING_IN_IDE = true, which enables
@@ -34,7 +38,7 @@ public class DhVulkanMixinPlugin implements IMixinConfigPlugin {
 
     @Override
     public void onLoad(String mixinPackage) {
-        System.out.println("[DH-VulkanMod] Mixin plugin loaded, resolving DH/VulkanMod mixin conflicts...");
+        LOGGER.debug("Resolving DH/VulkanMod mixin conflicts...");
 
         boolean removed = false;
         try {
@@ -45,12 +49,12 @@ public class DhVulkanMixinPlugin implements IMixinConfigPlugin {
                     continue;
                 }
 
-                System.out.println("[DH-VulkanMod] Found DH config: " + configName);
+                LOGGER.debug("Found DH config: {}", configName);
 
                 // Config.getConfig() returns the internal MixinConfig
                 Object mixinConfig = getFieldValue(config, "config");
                 if (mixinConfig == null) {
-                    System.err.println("[DH-VulkanMod] Could not access internal MixinConfig");
+                    LOGGER.warn("Could not access internal MixinConfig");
                     continue;
                 }
 
@@ -71,28 +75,16 @@ public class DhVulkanMixinPlugin implements IMixinConfigPlugin {
                 if (clientMixins != null) {
                     if (clientMixins.remove(DH_MIXIN_TO_REMOVE)) {
                         removed = true;
-                        System.out.println("[DH-VulkanMod] ✓ Removed " + DH_MIXIN_TO_REMOVE
-                                + " from DH config — TextureUtil conflict resolved");
+                        LOGGER.debug("Removed {} from DH config (TextureUtil conflict)", DH_MIXIN_TO_REMOVE);
                     }
                     if (clientMixins.remove(DH_MIXIN_SHARED_CONSTANTS)) {
                         removed = true;
-                        System.out.println("[DH-VulkanMod] ✓ Removed " + DH_MIXIN_SHARED_CONSTANTS
-                                + " from DH config — prevents VulkanMod validation crash");
+                        LOGGER.debug("Removed {} from DH config (validation crash)", DH_MIXIN_SHARED_CONSTANTS);
                     }
-                }
-                if (!removed) {
-                    System.out.println("[DH-VulkanMod] No conflicting DH mixins found in config"
-                            + " (may not exist in this DH version — no conflict)");
                 }
             }
         } catch (Exception e) {
-            System.err.println("[DH-VulkanMod] WARNING: Failed to strip DH's MixinTextureUtil: " + e);
-            e.printStackTrace();
-        }
-
-        if (!removed) {
-            System.err.println("[DH-VulkanMod] Could not remove conflicting DH mixins from DH config.");
-            System.err.println("[DH-VulkanMod] If a mixin crash occurs, add JVM arg: -Dmixin.checks=false");
+            LOGGER.warn("Failed to strip conflicting DH mixins from DH config", e);
         }
     }
 
@@ -157,10 +149,10 @@ public class DhVulkanMixinPlugin implements IMixinConfigPlugin {
                     "com.seibel.distanthorizons.core.wrapperInterfaces.render.AbstractDhRenderApiDefinition"
                 );
                 isDh3Present = true;
-                System.out.println("[DH-VulkanMod] DH 3.0 detected. Using API integration + dh3 mixins.");
+                LOGGER.debug("DH 3.0 detected; using API integration + dh3 mixins.");
             } catch (ClassNotFoundException e) {
                 isDh3Present = false;
-                System.out.println("[DH-VulkanMod] DH 2.4 detected. Using mixin integration + dh24 mixins.");
+                LOGGER.debug("DH 2.4 detected; using mixin integration + dh24 mixins.");
             }
         }
 

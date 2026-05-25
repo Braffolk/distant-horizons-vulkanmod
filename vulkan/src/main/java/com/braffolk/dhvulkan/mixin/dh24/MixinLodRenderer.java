@@ -85,7 +85,7 @@ public class MixinLodRenderer implements IVulkanLodRenderer {
     @Inject(method = "createRenderObjects", at = @At("HEAD"), cancellable = true)
     private void dhvulkan$skipGLRenderObjectCreation(CallbackInfoReturnable<Boolean> cir) {
         if (Compat.isVulkanModActive()) {
-            LodRenderer.LOGGER.info("[DH-VulkanMod] Skipping GL render object creation (VulkanMod active)");
+            LodRenderer.LOGGER.debug("[DH-VulkanMod] Skipping GL render object creation (VulkanMod active)");
             cir.setReturnValue(true); // signal success to caller
         }
     }

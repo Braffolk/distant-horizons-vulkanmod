@@ -22,8 +22,8 @@ An extension mod that makes [Distant Horizons](https://www.curseforge.com/minecr
 
 **Requirements:**
 - Fabric
-- MC 1.20.6 or 1.21.11
-- VulkanMod must be installed. 0.6+ for 1.21.11 and 0.4.2 for 1.20.6
+- MC 1.20.6 or 26.1 / 26.1.1 / 26.1.2
+- VulkanMod must be installed. 0.6.6+ for 26.1.x and 0.4.2 for 1.20.6
 - Distant Horizons 2.4.0+ or 3.0.0+ must be installed
 
 > This is not a standalone mod. Both Distant Horizons and VulkanMod are required.

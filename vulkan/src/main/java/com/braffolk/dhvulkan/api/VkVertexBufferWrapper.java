@@ -34,13 +34,11 @@ public class VkVertexBufferWrapper implements IVertexBufferWrapper {
     }
 
     // [DH 2.4 COMPAT] DH 2.4 calls upload(); DH 3.0 calls uploadVertexBuffer().
-    // Remove this method when dropping DH 2.4 support.
-    @Override
     public void upload(ByteBuffer buffer, int vertexCount) {
         uploadVertexBufferImpl(buffer, vertexCount);
     }
 
-    // DH 3.0 interface methods
+    @Override
     public void uploadVertexBuffer(ByteBuffer buffer, int vertexCount) {
         uploadVertexBufferImpl(buffer, vertexCount);
     }
