@@ -153,36 +153,28 @@ public class VulkanRenderEngine implements VulkanBackend {
         try {
             disableUnsupportedSettings();
 
-            LOGGER.info("[DH-Vulkan] Init: creating pipeline...");
             this.renderContext.init();
-
-            LOGGER.info("[DH-Vulkan] Init: creating index buffer...");
             this.ensureQuadIndexBuffer(262144);
 
-            LOGGER.info("[DH-Vulkan] Init: creating framebuffer...");
             int width = Compat.getSwapChainWidth();
             int height = Compat.getSwapChainHeight();
             this.dhFramebuffer = new DhVulkanFramebuffer();
             this.dhFramebuffer.init(width, height);
 
-            LOGGER.info("[DH-Vulkan] Init: creating composite pipeline...");
             this.compositePipeline = new DhCompositePipeline();
             this.compositePipeline.init();
 
-            LOGGER.info("[DH-Vulkan] Init: creating SSAO pipeline...");
             this.ssaoPipeline = new DhSsaoPipeline();
             this.ssaoPipeline.init(width, height);
 
-            LOGGER.info("[DH-Vulkan] Init: creating Fog pipeline...");
             this.fogPipeline = new DhFogPipeline();
             this.fogPipeline.init(width, height);
 
-            LOGGER.info("[DH-Vulkan] Init: creating Depth Reader pipeline...");
             this.depthReaderPipeline = new DhDepthReaderPipeline();
             this.depthReaderPipeline.init(width, height);
 
             this.initialized = true;
-            LOGGER.info("[DH-Vulkan] Init complete. All resources created.");
+            LOGGER.debug("[DH-Vulkan] Vulkan renderer initialized ({}x{}).", width, height);
         } catch (Exception e) {
             LOGGER.error("[DH-Vulkan] Init FAILED", e);
             this.initFailed = true;
@@ -233,7 +225,7 @@ public class VulkanRenderEngine implements VulkanBackend {
             if (this.initFailed)
                 return;
             Compat.rebindMainTarget();
-            return;
+            // Continue into the normal frame path now that init succeeded.
         }
 
         // Bind MC's lightmap texture
@@ -723,7 +715,7 @@ public class VulkanRenderEngine implements VulkanBackend {
             // Drained, freed in cache sweep below
         }
 
-        LOGGER.info("[DH-Vulkan] cleanup() called, freeing {} cached Vulkan buffers.", this.vulkanBufferCache.size());
+        LOGGER.debug("[DH-Vulkan] cleanup() called, freeing {} cached Vulkan buffers.", this.vulkanBufferCache.size());
         for (CachedBuffer cached : this.vulkanBufferCache.values()) {
             cached.free();
         }
@@ -759,7 +751,7 @@ public class VulkanRenderEngine implements VulkanBackend {
 
         this.initialized = false;
         this.initFailed = false;
-        LOGGER.info("[DH-Vulkan] VulkanRenderEngine cleaned up.");
+        LOGGER.debug("[DH-Vulkan] VulkanRenderEngine cleaned up.");
     }
 
     /**
@@ -771,12 +763,16 @@ public class VulkanRenderEngine implements VulkanBackend {
         Config.Client.Advanced.Debugging.DebugWireframe.showWorldGenQueue.setApiValue(false);
         Config.Client.Advanced.Debugging.DebugWireframe.showNetworkSyncOnLoadQueue.setApiValue(false);
         Config.Client.Advanced.Debugging.DebugWireframe.showRenderSectionStatus.setApiValue(false);
+        #if MC_VER < MC_26_1_2
         Config.Client.Advanced.Debugging.DebugWireframe.showRenderSectionToggling.setApiValue(false);
+        #endif
         Config.Client.Advanced.Debugging.DebugWireframe.showQuadTreeRenderStatus.setApiValue(false);
         Config.Client.Advanced.Debugging.DebugWireframe.showFullDataUpdateStatus.setApiValue(false);
 
+        #if MC_VER < MC_26_1_2
         Config.Client.Advanced.Graphics.GenericRendering.enableInstancedRendering
                 .setAppearance(EConfigEntryAppearance.ONLY_IN_FILE);
+        #endif
         Config.Client.Advanced.Graphics.Fog.enableVanillaFog
                 .setAppearance(EConfigEntryAppearance.ONLY_IN_FILE);
         Config.Client.Advanced.Debugging.OpenGl.overrideVanillaGLLogger
@@ -785,7 +781,9 @@ public class VulkanRenderEngine implements VulkanBackend {
                 .setAppearance(EConfigEntryAppearance.ONLY_IN_FILE);
         Config.Client.Advanced.Debugging.OpenGl.glErrorHandlingMode
                 .setAppearance(EConfigEntryAppearance.ONLY_IN_FILE);
+        #if MC_VER < MC_26_1_2
         Config.Client.Advanced.Debugging.OpenGl.glUploadMode
                 .setAppearance(EConfigEntryAppearance.ONLY_IN_FILE);
+        #endif
     }
 }

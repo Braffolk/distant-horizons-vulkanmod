@@ -87,7 +87,7 @@ public class DhCompositePipeline {
     private static final VertexFormat QUAD_FORMAT;
     static {
         VertexFormatElement position = Compat.vertexFormatElement(0, 0,
-                VertexFormatElement.Type.FLOAT, VertexFormatElement.Usage.POSITION, 2);
+                VertexFormatElement.Type.FLOAT, Compat.ElementUsage.POSITION, 2);
         QUAD_FORMAT = Compat.buildVertexFormat(
                 new String[] { "Position" },
                 new VertexFormatElement[] { position });
@@ -101,7 +101,7 @@ public class DhCompositePipeline {
         createQuadBuffers();
         createPipeline();
         this.initialized = true;
-        LOGGER.info("[DH-Vulkan] DhCompositePipeline initialized.");
+        LOGGER.debug("[DH-Vulkan] DhCompositePipeline initialized.");
     }
 
     /**
@@ -138,7 +138,7 @@ public class DhCompositePipeline {
         String fragSource = readShaderResource("shaders/vulkan/dh_apply.frag");
 
         Pipeline.Builder builder = new Pipeline.Builder(QUAD_FORMAT);
-        builder.compileShaders("dh_composite", vertSource, fragSource);
+        Compat.compileShaders(builder, "dh_composite", vertSource, fragSource);
 
         // UBO at binding 0: mat4 uInvProj (64 bytes) + int uDebugMode (4 bytes) + int
         // uUseMcDepth (4 bytes)
@@ -202,11 +202,11 @@ public class DhCompositePipeline {
 
         // Image descriptors — DH color/depth + SSAO/fog debug + MC depth
         List<ImageDescriptor> imageDescriptors = new ArrayList<>();
-        imageDescriptors.add(new ImageDescriptor(1, "sampler2D", "gDhColorTexture", DH_COLOR_TEXTURE_SLOT));
-        imageDescriptors.add(new ImageDescriptor(2, "sampler2D", "gDhDepthTexture", DH_DEPTH_TEXTURE_SLOT));
-        imageDescriptors.add(new ImageDescriptor(3, "sampler2D", "gSsaoTexture", DEBUG_SSAO_TEXTURE_SLOT));
-        imageDescriptors.add(new ImageDescriptor(4, "sampler2D", "gFogTexture", DEBUG_FOG_TEXTURE_SLOT));
-        imageDescriptors.add(new ImageDescriptor(5, "sampler2D", "gMcDepthTexture", MC_DEPTH_TEXTURE_SLOT));
+        imageDescriptors.add(Compat.imageDescriptor(1, "sampler2D", "gDhColorTexture", DH_COLOR_TEXTURE_SLOT));
+        imageDescriptors.add(Compat.imageDescriptor(2, "sampler2D", "gDhDepthTexture", DH_DEPTH_TEXTURE_SLOT));
+        imageDescriptors.add(Compat.imageDescriptor(3, "sampler2D", "gSsaoTexture", DEBUG_SSAO_TEXTURE_SLOT));
+        imageDescriptors.add(Compat.imageDescriptor(4, "sampler2D", "gFogTexture", DEBUG_FOG_TEXTURE_SLOT));
+        imageDescriptors.add(Compat.imageDescriptor(5, "sampler2D", "gMcDepthTexture", MC_DEPTH_TEXTURE_SLOT));
 
         builder.setUniforms(ubos, imageDescriptors);
         this.compositePipeline = builder.createGraphicsPipeline();
@@ -398,7 +398,7 @@ public class DhCompositePipeline {
         }
 
         this.initialized = false;
-        LOGGER.info("[DH-Vulkan] DhCompositePipeline cleaned up.");
+        LOGGER.debug("[DH-Vulkan] DhCompositePipeline cleaned up.");
     }
 
     private static String readShaderResource(String path) {

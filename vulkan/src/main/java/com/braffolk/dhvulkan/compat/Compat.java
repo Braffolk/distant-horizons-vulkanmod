@@ -232,24 +232,45 @@ public final class Compat {
     // VertexFormatElement //
     // ========================= //
 
+    /** Semantic role of a vertex attribute (replaces removed VertexFormatElement.Usage on MC 26.1+). */
+    public enum ElementUsage {
+        POSITION,
+        COLOR,
+        GENERIC,
+        UV
+    }
+
     public static VertexFormatElement vertexFormatElement(
             int id, int index,
-            VertexFormatElement.Type type, VertexFormatElement.Usage usage,
+            VertexFormatElement.Type type, ElementUsage usage,
             int count) {
-        #if MC_VER >= MC_1_21_1
-        return new VertexFormatElement(id, index, type, usage, count);
+        #if MC_VER >= MC_26_1_2
+        // MC 26.1: register() assigns a global BY_ID slot — ids 0–7 are taken by POSITION, COLOR, etc.
+        // Custom DH/Vulkan formats must use the record constructor (format-local ids are fine).
+        boolean normalized = usage == ElementUsage.COLOR && type == VertexFormatElement.Type.UBYTE;
+        return new VertexFormatElement(id, index, type, normalized, count);
+        #elif MC_VER >= MC_1_21_1
+        VertexFormatElement.Usage mapped = mapElementUsage(usage);
+        return new VertexFormatElement(id, index, type, mapped, count);
         #else
-        // MC 1.20: VertexFormatElement(id, Type, Usage, count)
-        // Non-UV usages MUST have id=0 (MC validates this at construction).
-        // CRITICAL: Do NOT remap GENERIC→UV! VulkanMod's UV handler doesn't
-        // support INT type, resulting in VK_FORMAT_UNDEFINED → DEVICE_LOST.
-        // GENERIC with id=0 is valid and VulkanMod maps INT→VK_FORMAT_R32_SINT.
-        if (usage == VertexFormatElement.Usage.UV) {
-            return new VertexFormatElement(id, type, usage, count);
+        VertexFormatElement.Usage mapped = mapElementUsage(usage);
+        if (mapped == VertexFormatElement.Usage.UV) {
+            return new VertexFormatElement(id, type, mapped, count);
         }
-        return new VertexFormatElement(0, type, usage, count);
+        return new VertexFormatElement(0, type, mapped, count);
         #endif
     }
+
+    #if MC_VER < MC_26_1_2
+    private static VertexFormatElement.Usage mapElementUsage(ElementUsage usage) {
+        return switch (usage) {
+            case POSITION -> VertexFormatElement.Usage.POSITION;
+            case COLOR -> VertexFormatElement.Usage.COLOR;
+            case GENERIC -> VertexFormatElement.Usage.GENERIC;
+            case UV -> VertexFormatElement.Usage.UV;
+        };
+    }
+    #endif
 
     // ========================= //
     // VertexFormat builder //
@@ -356,7 +377,11 @@ public final class Compat {
         net.vulkanmod.vulkan.shader.layout.Uniform.Info info =
                 net.vulkanmod.vulkan.shader.layout.Uniform.createUniformInfo(type, name, count);
         info.setBufferSupplier(bufferSupplier);
+        #if MC_VER >= MC_26_1_2
+        builder.addUniform(info);
+        #else
         builder.addUniformInfo(info);
+        #endif
         #else
         builder.addUniformInfo(type, name, count);
         #endif
@@ -398,15 +423,53 @@ public final class Compat {
         net.vulkanmod.vulkan.shader.layout.Uniform.Info info =
                 net.vulkanmod.vulkan.shader.layout.Uniform.createUniformInfo(type, name, count);
         info.setBufferSupplier(bufferSupplier);
+        #if MC_VER >= MC_26_1_2
+        pcBuilder.addUniform(info);
+        #else
         pcBuilder.addUniformInfo(info);
+        #endif
         try {
             java.lang.reflect.Field pcField =
                     net.vulkanmod.vulkan.shader.Pipeline.Builder.class.getDeclaredField("pushConstants");
             pcField.setAccessible(true);
+            #if MC_VER >= MC_26_1_2
+            int stages = org.lwjgl.vulkan.VK10.VK_SHADER_STAGE_VERTEX_BIT
+                    | org.lwjgl.vulkan.VK10.VK_SHADER_STAGE_FRAGMENT_BIT;
+            pcField.set(pipelineBuilder, pcBuilder.buildPushConstant(stages));
+            #else
             pcField.set(pipelineBuilder, pcBuilder.buildPushConstant());
+            #endif
         } catch (Exception e) {
             throw new RuntimeException("[DH-Vulkan] Failed to set push constants on pipeline builder", e);
         }
+        #endif
+    }
+
+    /**
+     * Attach GLSL sources to a pipeline builder (API differs between VM 0.6.1 and 0.6.6+).
+     */
+    public static void compileShaders(
+            net.vulkanmod.vulkan.shader.Pipeline.Builder builder,
+            String name, String vertSource, String fragSource) {
+        #if MC_VER >= MC_26_1_2
+        builder.setShaderSrc(net.vulkanmod.vulkan.shader.SPIRVUtils.ShaderKind.VERTEX_SHADER, vertSource);
+        builder.setShaderSrc(net.vulkanmod.vulkan.shader.SPIRVUtils.ShaderKind.FRAGMENT_SHADER, fragSource);
+        #else
+        builder.compileShaders(name, vertSource, fragSource);
+        #endif
+    }
+
+    /**
+     * Create a combined image sampler descriptor (VulkanMod 0.6.6+ / MC 26.1).
+     */
+    public static net.vulkanmod.vulkan.shader.descriptor.ImageDescriptor imageDescriptor(
+            int binding, String qualifier, String name, int imageIdx) {
+        #if MC_VER >= MC_26_1_2
+        return new net.vulkanmod.vulkan.shader.descriptor.ImageDescriptor(
+                binding, qualifier, name, imageIdx,
+                org.lwjgl.vulkan.VK10.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER);
+        #else
+        return new net.vulkanmod.vulkan.shader.descriptor.ImageDescriptor(binding, qualifier, name, imageIdx);
         #endif
     }
 
@@ -448,7 +511,16 @@ public final class Compat {
 
     public static VulkanImage getLightmapVulkanImage() {
         try {
-            #if MC_VER >= MC_1_21_1
+            #if MC_VER >= MC_26_1_2
+            var lightmapView = net.minecraft.client.Minecraft.getInstance()
+                    .gameRenderer.lightmap();
+            if (lightmapView == null) return null;
+            com.mojang.blaze3d.textures.GpuTexture gpuTex = lightmapView.texture();
+            if (!(gpuTex instanceof com.mojang.blaze3d.opengl.GlTexture glTex)) return null;
+            net.vulkanmod.gl.VkGlTexture vkGlTex =
+                    net.vulkanmod.gl.VkGlTexture.getTexture(glTex.glId());
+            return vkGlTex != null ? vkGlTex.getVulkanImage() : null;
+            #elif MC_VER >= MC_1_21_1
             var lightmapView = net.minecraft.client.Minecraft.getInstance()
                     .gameRenderer.lightTexture().getTextureView();
             if (lightmapView == null) return null;
@@ -543,7 +615,7 @@ public final class Compat {
                             VK_IMAGE_ASPECT_DEPTH_BIT,
                             1, depthImage.mipLevels);
                     lastDepthImageId = imageId;
-                    LOGGER.info("[DH-Vulkan] Created depth-only view for D+S format={} aspect={} (view={})",
+                    LOGGER.debug("[DH-Vulkan] Created depth-only view for D+S format={} aspect={} (view={})",
                             depthImage.format, depthImage.aspect, depthOnlyView);
                 }
 
@@ -712,7 +784,7 @@ public final class Compat {
                         copyUsage, false, true);
                 mcDepthCopyWidth = srcDepth.width;
                 mcDepthCopyHeight = srcDepth.height;
-                LOGGER.info("[DH-Vulkan] Created MC depth copy image: {}x{} format={}",
+                LOGGER.debug("[DH-Vulkan] Created MC depth copy image: {}x{} format={}",
                         srcDepth.width, srcDepth.height, srcDepth.format);
             }
 

@@ -65,7 +65,7 @@ public class MixinGLProxy {
                 }
 
                 dhvulkan$dummyCreated = true;
-                GLProxy.LOGGER.info("[DH-VulkanMod] Created dummy GLProxy (VulkanMod active, no GL context).");
+                GLProxy.LOGGER.debug("[DH-VulkanMod] Created dummy GLProxy (VulkanMod active, no GL context).");
             } catch (Exception e) {
                 GLProxy.LOGGER.error("[DH-VulkanMod] Failed to create dummy GLProxy", e);
             }

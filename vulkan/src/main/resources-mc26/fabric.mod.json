@@ -25,9 +25,9 @@
         "dh-vulkanmod.mixins.json"
     ],
     "depends": {
-        "fabricloader": ">=0.17.0",
-        "minecraft": "${minecraft_version}",
-        "distanthorizons": ">=2.4.0-",
+        "fabricloader": ">=0.18.0",
+        "minecraft": ["26.1", "26.1.1", "26.1.2"],
+        "distanthorizons": ">=3.0.0-",
         "vulkanmod": "${vulkanmod_min_version}"
     }
 }

@@ -15,6 +15,8 @@ import com.seibel.distanthorizons.core.wrapperInterfaces.render.objects.IDhGener
 import com.seibel.distanthorizons.core.wrapperInterfaces.render.objects.ILodContainerUniformBufferWrapper;
 import com.seibel.distanthorizons.core.wrapperInterfaces.render.objects.IVertexBufferWrapper;
 import com.seibel.distanthorizons.core.wrapperInterfaces.render.renderPass.*;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 
 /**
  * Vulkan implementation of DH 3.0's render API definition.
@@ -52,6 +54,11 @@ public class VkRenderApiDefinition extends AbstractDhRenderApiDefinition {
     }
 
     @Override public String getApiName() { return "VulkanMod"; }
+
+    @Override
+    public boolean useSingleIbo() {
+        return true;
+    }
 
     // Singletons
     @Override public IDhMetaRenderer getMetaRenderer() { return metaRenderer; }
@@ -93,10 +100,12 @@ public class VkRenderApiDefinition extends AbstractDhRenderApiDefinition {
      * This is the main lifecycle manager connecting DH's render loop to our Vulkan engine.
      */
     static class VkMetaRenderer implements IDhMetaRenderer {
+        private static final Logger LOGGER = LogManager.getLogger("DH-VulkanMod");
         private final VulkanBackend backend;
         private final RenderUniforms cachedUniforms = new RenderUniforms();
         private boolean frameActive = false;
         private boolean initialized = false;
+        private static boolean loggedFirstPass = false;
 
         VkMetaRenderer(VulkanBackend backend) {
             this.backend = backend;
@@ -104,6 +113,10 @@ public class VkRenderApiDefinition extends AbstractDhRenderApiDefinition {
 
         @Override
         public void runRenderPassSetup(RenderParams renderParams) {
+            if (!loggedFirstPass) {
+                loggedFirstPass = true;
+                LOGGER.debug("[DH-VulkanMod] DH 3.0 render pass started (Vulkan meta renderer).");
+            }
             // Deferred init: VulkanMod's VkDevice is only ready at render time
             if (!initialized) {
                 backend.init();
@@ -296,6 +309,11 @@ public class VkRenderApiDefinition extends AbstractDhRenderApiDefinition {
         @Override
         public IDhApiRenderableBoxGroup remove(long id) {
             return null; // Not yet implemented
+        }
+
+        @Override
+        public void close() {
+            // No persistent GPU resources for generic renderer yet
         }
     }
 }

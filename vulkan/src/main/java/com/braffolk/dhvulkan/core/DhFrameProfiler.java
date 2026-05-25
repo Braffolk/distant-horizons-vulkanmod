@@ -160,7 +160,7 @@ public final class DhFrameProfiler {
                 intervalGcCount,
                 intervalGcTimeMs));
 
-        LOGGER.info("[DH-Perf] {}", sb);
+        LOGGER.debug("[DH-Perf] {}", sb);
     }
 
     private void snapshotGc() {

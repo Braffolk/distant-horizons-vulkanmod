@@ -22,7 +22,7 @@ public class Dh24Integration implements DhIntegration {
     public void initialize(VulkanBackend backend) {
         this.backend = backend;
         this.delegate = new Dh24RenderDelegate(backend);
-        LOGGER.info("[DH-VulkanMod] DH 2.4 integration initialized. Delegate ready for wiring.");
+        LOGGER.debug("[DH-VulkanMod] DH 2.4 integration initialized. Delegate ready for wiring.");
     }
 
     @Override
@@ -42,7 +42,7 @@ public class Dh24Integration implements DhIntegration {
             IVulkanLodRenderer lodRenderer = (IVulkanLodRenderer) LodRenderer.INSTANCE;
             lodRenderer.dhvulkan$setVulkanDelegate(this.delegate);
             this.wired = true;
-            LOGGER.info("[DH-VulkanMod] Dh24RenderDelegate wired into LodRenderer.");
+            LOGGER.debug("[DH-VulkanMod] Dh24RenderDelegate wired into LodRenderer.");
         } catch (Exception e) {
             LOGGER.error("[DH-VulkanMod] Failed to wire delegate", e);
         }

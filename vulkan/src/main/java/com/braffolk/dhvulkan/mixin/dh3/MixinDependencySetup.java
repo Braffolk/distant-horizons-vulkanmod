@@ -10,27 +10,29 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
  * Intercepts DH 3.0's DependencySetup.setRenderingApiBindings() to replace
  * the default GL/Blaze3D renderer with our Vulkan renderer.
  *
- * Without this, DH's delayed setup overwrites our early bindRenderers() call.
- * By cancelling the original method and binding our VkRenderApiDefinition instead,
- * we ensure DH uses our Vulkan rendering pipeline.
+ * DH 3.0.3 (26.1) uses {@code com.seibel.distanthorizons.common.wrappers.DependencySetup}.
+ * Older mixin targets ({@code loaderCommon.fabric...}) never applied, so DH kept
+ * binding GlDhRenderApiDefinition and LODs never rendered on VulkanMod.
  */
-@Mixin(targets = "loaderCommon.fabric.com.seibel.distanthorizons.common.wrappers.DependencySetup", remap = false)
+@Mixin(value = com.seibel.distanthorizons.common.wrappers.DependencySetup.class, remap = false)
 public class MixinDependencySetup {
 
     @Inject(method = "setRenderingApiBindings", at = @At("HEAD"), cancellable = true)
     private static void dhvulkan$overrideRenderApi(CallbackInfo ci) {
         if (!Compat.isVulkanModActive()) return;
 
-        System.out.println("[DH-VulkanMod] Intercepting DH 3.0 renderer binding — injecting Vulkan render API.");
-
-        // Get the VkRenderApiDefinition from ApiDhIntegration and bind it
         com.braffolk.dhvulkan.api.ApiDhIntegration integration =
-            com.braffolk.dhvulkan.api.ApiDhIntegration.getInstance();
-        if (integration != null) {
-            integration.bindRenderApi();
-            ci.cancel();
-        } else {
-            System.out.println("[DH-VulkanMod] WARNING: ApiDhIntegration not initialized yet, falling back to default renderer.");
+                com.braffolk.dhvulkan.api.ApiDhIntegration.getInstance();
+        if (integration == null) {
+            // DH can call this before our ClientModInitializer (DH loads first as a dependency).
+            com.braffolk.dhvulkan.core.VulkanBackend backend =
+                    new com.braffolk.dhvulkan.core.VulkanRenderEngine();
+            integration = new com.braffolk.dhvulkan.api.ApiDhIntegration();
+            integration.initialize(backend);
+            com.braffolk.dhvulkan.DhVulkanModEntrypoint.setActiveIntegration(integration);
         }
+
+        integration.bindRenderApi();
+        ci.cancel();
     }
 }

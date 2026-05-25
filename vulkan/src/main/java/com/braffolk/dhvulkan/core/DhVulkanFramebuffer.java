@@ -58,7 +58,7 @@ public class DhVulkanFramebuffer {
         // Recreate when VulkanMod resizes the swap chain
         Renderer.getInstance().addOnResizeCallback(this::onResize);
 
-        LOGGER.info("[DH-Vulkan] DhVulkanFramebuffer created ({}x{})", width, height);
+        LOGGER.debug("[DH-Vulkan] DhVulkanFramebuffer created ({}x{})", width, height);
     }
 
     private void createFramebufferAndPass() {
@@ -117,7 +117,7 @@ public class DhVulkanFramebuffer {
             return; // No change
         }
 
-        LOGGER.info("[DH-Vulkan] Resizing DhVulkanFramebuffer: {}x{} -> {}x{}",
+        LOGGER.debug("[DH-Vulkan] Resizing DhVulkanFramebuffer: {}x{} -> {}x{}",
                 this.width, this.height, newWidth, newHeight);
 
         // Clean up old render pass and framebuffer
@@ -163,6 +163,6 @@ public class DhVulkanFramebuffer {
             this.framebuffer.cleanUp();
             this.framebuffer = null;
         }
-        LOGGER.info("[DH-Vulkan] DhVulkanFramebuffer cleaned up.");
+        LOGGER.debug("[DH-Vulkan] DhVulkanFramebuffer cleaned up.");
     }
 }
