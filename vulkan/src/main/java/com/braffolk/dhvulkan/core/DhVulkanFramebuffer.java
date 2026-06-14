@@ -29,6 +29,11 @@ public class DhVulkanFramebuffer {
     private static final DhLogger LOGGER = new DhLoggerBuilder().build();
 
     // Vulkan constants (from VK10) — inlined to avoid compile-time LWJGL dependency
+    // RGBA8 UNORM for DH's LOD framebuffer. DH's terrain shader outputs LDR
+    // values (0-1 range from vertex color). Using RGBA16F would work but
+    // provides no benefit since DH doesn't produce HDR values.
+    // The composite shader handles the final color space conversion when
+    // writing into Beryl's RGBA16F HDR framebuffer.
     private static final int VK_FORMAT_R8G8B8A8_UNORM = 37;
     private static final int VK_FORMAT_D32_SFLOAT = 126;
     private static final int VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT = 16; // 0x10

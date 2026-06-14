@@ -51,9 +51,11 @@ manifold {
 
 def dhJar = fileTree("${rootDir}/jars").matching { include "DistantHorizons-*-${mcVer}-*.jar" }.files
 def vmJar = fileTree("${rootDir}/jars").matching { include "VulkanMod_${mcVer}-*.jar" }.files
+def blJar = fileTree("${rootDir}/jars").matching { include "beryl_${mcVer}-*.jar" }.files
 
 if (dhJar.isEmpty()) throw new GradleException("No DH jar found for MC ${mcVer} in jars/")
 if (vmJar.isEmpty()) throw new GradleException("No VulkanMod jar found for MC ${mcVer} in jars/")
+if (blJar.isEmpty()) throw new GradleException("No Beryl jar found for MC ${mcVer} in jars/")
 
 dependencies {
     minecraft "com.mojang:minecraft:${mcVer}"
@@ -63,6 +65,7 @@ dependencies {
         implementation "net.fabricmc.fabric-api:fabric-api:${rootProject.fabric_api_version}"
         dhJar.each { compileOnly files(it) }
         compileOnly files(vmJar.first())
+        compileOnly files(blJar.first())
     } else {
         mappings loom.layered() {
             officialMojangMappings()
@@ -72,6 +75,7 @@ dependencies {
         modImplementation "net.fabricmc.fabric-api:fabric-api:${rootProject.fabric_api_version}"
         dhJar.each { modCompileOnly files(it) }
         modCompileOnly files(vmJar.first())
+        modCompileOnly files(blJar.first())
     }
 
     compileOnly "org.lwjgl:lwjgl:${rootProject.lwjgl_version}"

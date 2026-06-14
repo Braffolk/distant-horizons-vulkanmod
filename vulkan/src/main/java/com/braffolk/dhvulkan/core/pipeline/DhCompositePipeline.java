@@ -50,18 +50,29 @@ public class DhCompositePipeline {
     private static final int VK_SHADER_STAGE_VERTEX_BIT = 0x00000001;
     private static final int VK_SHADER_STAGE_FRAGMENT_BIT = 0x00000010;
 
-    /** VTextureSelector slot for DH color texture */
-    static final int DH_COLOR_TEXTURE_SLOT = 3;
-    /** VTextureSelector slot for DH depth texture */
-    static final int DH_DEPTH_TEXTURE_SLOT = 4;
-    /** VTextureSelector slot for SSAO intermediate texture (debug) */
-    static final int DEBUG_SSAO_TEXTURE_SLOT = 5;
-    /** VTextureSelector slot for fog intermediate texture (debug) */
-    static final int DEBUG_FOG_TEXTURE_SLOT = 6;
     /**
-     * VTextureSelector slot for MC's depth texture (for depth-compared composite)
+     * VTextureSelector slots for DH textures.
+     *
+     * CRITICAL: VulkanMod's VTextureSelector has a 12-element array (indices 0-11).
+     * bindTexture(slot, image) silently rejects slot >= 12 with an error log.
+     * All slots MUST be within [0, 11].
+     *
+     * Beryl uses slots 0-5:
+     *   0: terrain atlas (Sampler0)
+     *   1: lightmap (Sampler1)
+     *   2: overlay (Sampler2)
+     *   3: shadow depth (ShadowMap)
+     *   4: shadow depth 2 (ShadowMap1)
+     *   5: shadow color (ShadowMapColor)
+     *
+     * DH uses slots 7-11 for composite (5 simultaneous textures needed).
+     * SSAO/Fog/DepthReader run BEFORE composite and reuse slots 7-9.
      */
-    static final int MC_DEPTH_TEXTURE_SLOT = 7;
+    static final int DH_COLOR_TEXTURE_SLOT = 7;
+    static final int DH_DEPTH_TEXTURE_SLOT = 8;
+    static final int DEBUG_SSAO_TEXTURE_SLOT = 9;
+    static final int DEBUG_FOG_TEXTURE_SLOT = 10;
+    static final int MC_DEPTH_TEXTURE_SLOT = 11;
 
     private GraphicsPipeline compositePipeline;
     private Object quadVertexBuffer;

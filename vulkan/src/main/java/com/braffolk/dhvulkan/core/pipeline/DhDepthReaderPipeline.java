@@ -53,8 +53,10 @@ public class DhDepthReaderPipeline {
     private static final int VK_ATTACHMENT_STORE_OP_STORE = 0;
     private static final int VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL = 5;
 
-    // Reuse composite's DH color slot (3) — not active during depth reader's pass
-    private static final int MC_DEPTH_READ_SLOT = 3;
+    // Slot 7 — reused from SSAO/Fog slots (DepthReader runs before them in endFrame).
+    // CRITICAL: VulkanMod VTextureSelector has 12-element array (slots 0-11).
+    // bindTexture(slot>=12) silently fails!
+    private static final int MC_DEPTH_READ_SLOT = 7;
 
     private static final VertexFormat QUAD_FORMAT;
     static {

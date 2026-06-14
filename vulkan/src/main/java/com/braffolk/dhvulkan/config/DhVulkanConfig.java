@@ -32,6 +32,18 @@ public class DhVulkanConfig {
      */
     public int vulkanRenderMode = 0;
 
+    /**
+     * Force Vulkan rendering regardless of DH's "Rendering API" config setting.
+     * When true, DH-VulkanMod always binds its Vulkan renderer, even if DH's
+     * renderingApi is set to OPEN_GL or BLAZE_3D.
+     *
+     * Use this if DH's config doesn't include a Vulkan option and you want to
+     * ensure Vulkan is always used when VulkanMod is installed.
+     *
+     * Default: false (respects DH's renderingApi setting; AUTO uses Vulkan).
+     */
+    public boolean forceVulkanRendering = false;
+
     // ---- Load / Save ----
 
     public static DhVulkanConfig get() {

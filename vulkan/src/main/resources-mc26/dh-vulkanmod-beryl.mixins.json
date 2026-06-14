@@ -1,0 +1,18 @@
+{
+    "required": false,
+    "package": "com.braffolk.dhvulkan.mixin.beryl",
+    "compatibilityLevel": "JAVA_21",
+    "minVersion": "0.8",
+    "plugin": "com.braffolk.dhvulkan.DhVulkanBerylMixinPlugin",
+    "mixins": [],
+    "client": [
+        "MixinShaderMainPass",
+        "MixinShaderRenderPipeline",
+        "MixinBerylPipelineConfigs",
+        "MixinBerylVulkan",
+        "MixinFogRenderer"
+    ],
+    "injectors": {
+        "defaultRequire": 0
+    }
+}

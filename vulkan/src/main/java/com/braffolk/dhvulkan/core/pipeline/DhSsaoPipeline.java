@@ -67,11 +67,13 @@ public class DhSsaoPipeline {
     private static final int VK_ATTACHMENT_STORE_OP_STORE = 0;
     private static final int VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL = 5;
 
-    // VTextureSelector slots for SSAO textures
-    // Using slots 5-7 to avoid conflict with DH composite (3-4) and lightmap (2)
-    private static final int SSAO_DEPTH_TEXTURE_SLOT = 5;
-    private static final int SSAO_RAW_TEXTURE_SLOT = 6;
-    private static final int SSAO_APPLY_DEPTH_TEXTURE_SLOT = 7;
+    // VTextureSelector slots for SSAO textures.
+    // CRITICAL: VulkanMod VTextureSelector has a 12-element array (slots 0-11).
+    // bindTexture(slot>=12) silently fails. SSAO reuses slots 7-9 which are
+    // also used by Fog and Composite (all run sequentially in endFrame).
+    private static final int SSAO_DEPTH_TEXTURE_SLOT = 7;
+    private static final int SSAO_RAW_TEXTURE_SLOT = 8;
+    private static final int SSAO_APPLY_DEPTH_TEXTURE_SLOT = 9;
 
     /** Fullscreen quad vertex format: vec2 position */
     private static final VertexFormat QUAD_FORMAT;

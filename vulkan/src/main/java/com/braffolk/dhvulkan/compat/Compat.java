@@ -347,8 +347,10 @@ public final class Compat {
      * Renderer state — we must fix up boundFramebuffer/boundRenderPass afterward.
      */
     public static void rebindMainTarget() {
-        net.vulkanmod.vulkan.pass.DefaultMainPass mainPass =
-                (net.vulkanmod.vulkan.pass.DefaultMainPass) Renderer.getInstance().getMainPass();
+        net.vulkanmod.vulkan.pass.MainPass mainPass =
+                Renderer.getInstance().getMainPass();
+        // Use interface method — works for both DefaultMainPass and
+        // Beryl's ShaderMainPass (which also implements MainPass).
         mainPass.rebindMainTarget();
 
         #if MC_VER < MC_1_21_1

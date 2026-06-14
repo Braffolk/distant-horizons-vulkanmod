@@ -82,10 +82,13 @@ public class DhFogPipeline {
     private static final int VK_ATTACHMENT_STORE_OP_STORE = 0;
     private static final int VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL = 5;
 
-    // VTextureSelector slots — offset from SSAO (5-7) to avoid collision
-    private static final int FOG_DEPTH_TEXTURE_SLOT = 5;
-    private static final int FOG_COLOR_TEXTURE_SLOT = 6;
-    private static final int FOG_APPLY_DEPTH_TEXTURE_SLOT = 7;
+    // VTextureSelector slots — avoid collision with Beryl (slots 3, 5-7),
+    // and stay within VTextureSelector bounds (0-11).
+    // CRITICAL: bindTexture(slot>=12) silently fails in VulkanMod!
+    // Fog reuses slots 7-9 (shared with SSAO — runs sequentially in endFrame).
+    private static final int FOG_DEPTH_TEXTURE_SLOT = 7;
+    private static final int FOG_COLOR_TEXTURE_SLOT = 8;
+    private static final int FOG_APPLY_DEPTH_TEXTURE_SLOT = 9;
 
     /** Fullscreen quad vertex format: vec2 position */
     private static final VertexFormat QUAD_FORMAT;
