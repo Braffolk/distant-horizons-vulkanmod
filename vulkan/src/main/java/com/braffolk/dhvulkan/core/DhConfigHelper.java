@@ -80,7 +80,11 @@ public final class DhConfigHelper {
     // =================== //
 
     public static boolean ssaoEnabled() {
+        #if MC_VER >= MC_26_1_2
+        return Config.Client.Advanced.Graphics.enableSsao.get();
+        #else
         return Config.Client.Advanced.Graphics.Ssao.enableSsao.get();
+        #endif
     }
 
     // =================== //
@@ -211,7 +215,7 @@ public final class DhConfigHelper {
 
                 if (!velocityDiagLogged) {
                     velocityDiagLogged = true;
-                    LOGGER.info("[DH-VulkanMod] Velocity overdraw active: speed={}, overdraw={}",
+                    LOGGER.debug("[DH-VulkanMod] Velocity overdraw active: speed={}, overdraw={}",
                             String.format("%.1f", speedAverage), String.format("%.3f", overdraw));
                 }
             }

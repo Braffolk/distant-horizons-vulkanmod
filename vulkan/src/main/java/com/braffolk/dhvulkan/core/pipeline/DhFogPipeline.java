@@ -82,16 +82,19 @@ public class DhFogPipeline {
     private static final int VK_ATTACHMENT_STORE_OP_STORE = 0;
     private static final int VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL = 5;
 
-    // VTextureSelector slots — offset from SSAO (5-7) to avoid collision
-    private static final int FOG_DEPTH_TEXTURE_SLOT = 5;
-    private static final int FOG_COLOR_TEXTURE_SLOT = 6;
-    private static final int FOG_APPLY_DEPTH_TEXTURE_SLOT = 7;
+    // VTextureSelector slots — avoid collision with Beryl (slots 3, 5-7),
+    // and stay within VTextureSelector bounds (0-11).
+    // CRITICAL: bindTexture(slot>=12) silently fails in VulkanMod!
+    // Fog reuses slots 7-9 (shared with SSAO — runs sequentially in endFrame).
+    private static final int FOG_DEPTH_TEXTURE_SLOT = 7;
+    private static final int FOG_COLOR_TEXTURE_SLOT = 8;
+    private static final int FOG_APPLY_DEPTH_TEXTURE_SLOT = 9;
 
     /** Fullscreen quad vertex format: vec2 position */
     private static final VertexFormat QUAD_FORMAT;
     static {
         VertexFormatElement position = Compat.vertexFormatElement(0, 0,
-                VertexFormatElement.Type.FLOAT, VertexFormatElement.Usage.POSITION, 2);
+                VertexFormatElement.Type.FLOAT, Compat.ElementUsage.POSITION, 2);
         QUAD_FORMAT = Compat.buildVertexFormat(
                 new String[] { "Position" },
                 new VertexFormatElement[] { position });
@@ -188,7 +191,7 @@ public class DhFogPipeline {
         String fragSource = readShaderResource("shaders/vulkan/dh_fog.frag");
 
         Pipeline.Builder builder = new Pipeline.Builder(QUAD_FORMAT);
-        builder.compileShaders("dh_fog_compute", vertSource, fragSource);
+        Compat.compileShaders(builder, "dh_fog_compute", vertSource, fragSource);
 
         List<UBO> ubos = new ArrayList<>();
         AlignedStruct.Builder uboBuilder = new AlignedStruct.Builder();
@@ -236,7 +239,7 @@ public class DhFogPipeline {
         ubos.add(mainUbo);
 
         List<ImageDescriptor> imageDescriptors = new ArrayList<>();
-        imageDescriptors.add(new ImageDescriptor(1, "sampler2D", "uDepthMap", FOG_DEPTH_TEXTURE_SLOT));
+        imageDescriptors.add(Compat.imageDescriptor(1, "sampler2D", "uDepthMap", FOG_DEPTH_TEXTURE_SLOT));
 
         builder.setUniforms(ubos, imageDescriptors);
         this.fogComputePipeline = builder.createGraphicsPipeline();
@@ -252,7 +255,7 @@ public class DhFogPipeline {
         String fragSource = readShaderResource("shaders/vulkan/dh_fog_apply.frag");
 
         Pipeline.Builder builder = new Pipeline.Builder(QUAD_FORMAT);
-        builder.compileShaders("dh_fog_apply", vertSource, fragSource);
+        Compat.compileShaders(builder, "dh_fog_apply", vertSource, fragSource);
 
         List<UBO> ubos = new ArrayList<>();
         AlignedStruct.Builder uboBuilder = new AlignedStruct.Builder();
@@ -263,8 +266,8 @@ public class DhFogPipeline {
         ubos.add(mainUbo);
 
         List<ImageDescriptor> imageDescriptors = new ArrayList<>();
-        imageDescriptors.add(new ImageDescriptor(1, "sampler2D", "uFogTexture", FOG_COLOR_TEXTURE_SLOT));
-        imageDescriptors.add(new ImageDescriptor(2, "sampler2D", "uDepthTexture", FOG_APPLY_DEPTH_TEXTURE_SLOT));
+        imageDescriptors.add(Compat.imageDescriptor(1, "sampler2D", "uFogTexture", FOG_COLOR_TEXTURE_SLOT));
+        imageDescriptors.add(Compat.imageDescriptor(2, "sampler2D", "uDepthTexture", FOG_APPLY_DEPTH_TEXTURE_SLOT));
 
         builder.setUniforms(ubos, imageDescriptors);
         this.fogApplyPipeline = builder.createGraphicsPipeline();

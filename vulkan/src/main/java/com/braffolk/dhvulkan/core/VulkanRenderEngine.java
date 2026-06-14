@@ -7,6 +7,9 @@
 
 package com.braffolk.dhvulkan.core;
 
+import com.braffolk.dhvulkan.beryl.BerylCompat;
+import com.braffolk.dhvulkan.beryl.DhBerylSamplers;
+import com.braffolk.dhvulkan.beryl.DhBerylUniforms;
 import com.braffolk.dhvulkan.core.data.RenderUniforms;
 import com.braffolk.dhvulkan.core.data.VkVertexData;
 import com.braffolk.dhvulkan.config.DhVulkanConfig;
@@ -58,6 +61,9 @@ public class VulkanRenderEngine implements VulkanBackend {
     private final VulkanRenderContext renderContext;
     private boolean initialized = false;
     private boolean initFailed = false;
+
+    /** Whether Beryl rendering path is active this session */
+    private boolean berylPath = false;
 
     // Frame state
     private boolean frameReady = false;
@@ -153,36 +159,35 @@ public class VulkanRenderEngine implements VulkanBackend {
         try {
             disableUnsupportedSettings();
 
-            LOGGER.info("[DH-Vulkan] Init: creating pipeline...");
             this.renderContext.init();
-
-            LOGGER.info("[DH-Vulkan] Init: creating index buffer...");
             this.ensureQuadIndexBuffer(262144);
 
-            LOGGER.info("[DH-Vulkan] Init: creating framebuffer...");
             int width = Compat.getSwapChainWidth();
             int height = Compat.getSwapChainHeight();
             this.dhFramebuffer = new DhVulkanFramebuffer();
             this.dhFramebuffer.init(width, height);
 
-            LOGGER.info("[DH-Vulkan] Init: creating composite pipeline...");
             this.compositePipeline = new DhCompositePipeline();
             this.compositePipeline.init();
 
-            LOGGER.info("[DH-Vulkan] Init: creating SSAO pipeline...");
             this.ssaoPipeline = new DhSsaoPipeline();
             this.ssaoPipeline.init(width, height);
 
-            LOGGER.info("[DH-Vulkan] Init: creating Fog pipeline...");
             this.fogPipeline = new DhFogPipeline();
             this.fogPipeline.init(width, height);
 
-            LOGGER.info("[DH-Vulkan] Init: creating Depth Reader pipeline...");
             this.depthReaderPipeline = new DhDepthReaderPipeline();
             this.depthReaderPipeline.init(width, height);
 
+            // Check if Beryl rendering path should be used.
+            // Only enable when Beryl is present AND Vulkan rendering is active.
+            this.berylPath = BerylCompat.shouldUseVulkanWithBeryl();
+            if (this.berylPath) {
+                LOGGER.info("[DH-Vulkan] Beryl rendering path active — DH will integrate with Beryl's pipeline.");
+            }
+
             this.initialized = true;
-            LOGGER.info("[DH-Vulkan] Init complete. All resources created.");
+            LOGGER.debug("[DH-Vulkan] Vulkan renderer initialized ({}x{}).", width, height);
         } catch (Exception e) {
             LOGGER.error("[DH-Vulkan] Init FAILED", e);
             this.initFailed = true;
@@ -233,7 +238,7 @@ public class VulkanRenderEngine implements VulkanBackend {
             if (this.initFailed)
                 return;
             Compat.rebindMainTarget();
-            return;
+            // Continue into the normal frame path now that init succeeded.
         }
 
         // Bind MC's lightmap texture
@@ -467,7 +472,10 @@ public class VulkanRenderEngine implements VulkanBackend {
             }
 
             // Fog post-process (after SSAO, before composite)
-            if (this.fogPipeline != null && DhConfigHelper.dhFogEnabled()) {
+            // When Beryl is active, skip DH's own fog pipeline to prevent double-fogging.
+            // Beryl's atmospheric fog + render distance fog will handle fog for both
+            // MC terrain and composited DH LODs via the extended FogEnd (see MixinFogRenderer).
+            if (this.fogPipeline != null && DhConfigHelper.dhFogEnabled() && !this.berylPath) {
                 this.profiler.begin(DhFrameProfiler.PHASE_FOG);
                 try {
                     this.tempCombinedMatrix.set(uniforms.dhModelViewMatrix);
@@ -482,8 +490,14 @@ public class VulkanRenderEngine implements VulkanBackend {
                 this.profiler.end(DhFrameProfiler.PHASE_FOG);
             }
 
-            // End any render pass left by SSAO/Fog, then rebind MC
+            // End any render pass left by SSAO/Fog
             Renderer.getInstance().endRenderPass();
+
+            // Rebind render target for compositing.
+            // When Beryl is active, Renderer.getMainPass() returns Beryl's ShaderMainPass,
+            // so rebindMainTarget() correctly re-enters Beryl's HDR render pass.
+            // Previous approach (captureBerylRenderState + explicit beginRenderPass)
+            // caused blue/black noise due to Vulkan image layout mismatches.
             Compat.rebindMainTarget();
 
             // Phase 1 composite: draw LODs WITHOUT MC depth comparison.
@@ -532,6 +546,14 @@ public class VulkanRenderEngine implements VulkanBackend {
         } catch (Exception e) {
             LOGGER.error("[DH-Vulkan] endFrame error", e);
         }
+        // Update DH uniforms for Beryl's shaders
+        if (this.berylPath) {
+            DhBerylUniforms.updateUniforms(uniforms);
+            // Bind DH depth texture to Beryl-accessible sampler slots (8-10)
+            // so Beryl's shaders can sample DH depth for fog/lighting effects.
+            DhBerylSamplers.updateDepthSamplers(this.dhFramebuffer);
+        }
+
         this.profiler.endFrame();
     }
 
@@ -569,6 +591,10 @@ public class VulkanRenderEngine implements VulkanBackend {
                 this.cachedMcDepthTexture = mcDepthR32F;
             }
 
+            // Re-enter render pass for Phase 2 composite.
+            // Use rebindMainTarget() for both vanilla and Beryl paths to ensure
+            // correct render pass management. The explicit captureBerylRenderState
+            // approach caused layout mismatches in Beryl's HDR framebuffer.
             Compat.rebindMainTarget();
 
             // Run Phase 2 first: this writes LOD depth into the MC depth buffer for open-sky pixels
@@ -707,6 +733,16 @@ public class VulkanRenderEngine implements VulkanBackend {
         }
     }
 
+    /** @return the DH framebuffer (for Beryl depth sampler registration) */
+    public DhVulkanFramebuffer getDhFramebuffer() {
+        return this.dhFramebuffer;
+    }
+
+    /** @return true if the engine has been successfully initialized */
+    public boolean isInitialized() {
+        return this.initialized;
+    }
+
     @Override
     public void cleanup() {
         this.cloudRenderer.cleanup();
@@ -723,7 +759,7 @@ public class VulkanRenderEngine implements VulkanBackend {
             // Drained, freed in cache sweep below
         }
 
-        LOGGER.info("[DH-Vulkan] cleanup() called, freeing {} cached Vulkan buffers.", this.vulkanBufferCache.size());
+        LOGGER.debug("[DH-Vulkan] cleanup() called, freeing {} cached Vulkan buffers.", this.vulkanBufferCache.size());
         for (CachedBuffer cached : this.vulkanBufferCache.values()) {
             cached.free();
         }
@@ -753,13 +789,17 @@ public class VulkanRenderEngine implements VulkanBackend {
             this.dhFramebuffer.cleanup();
             this.dhFramebuffer = null;
         }
+        if (this.berylPath) {
+            DhBerylUniforms.cleanup();
+        }
+
         this.renderContext.cleanup();
 
         Compat.cleanupStaticResources();
 
         this.initialized = false;
         this.initFailed = false;
-        LOGGER.info("[DH-Vulkan] VulkanRenderEngine cleaned up.");
+        LOGGER.debug("[DH-Vulkan] VulkanRenderEngine cleaned up.");
     }
 
     /**
@@ -771,12 +811,16 @@ public class VulkanRenderEngine implements VulkanBackend {
         Config.Client.Advanced.Debugging.DebugWireframe.showWorldGenQueue.setApiValue(false);
         Config.Client.Advanced.Debugging.DebugWireframe.showNetworkSyncOnLoadQueue.setApiValue(false);
         Config.Client.Advanced.Debugging.DebugWireframe.showRenderSectionStatus.setApiValue(false);
+        #if MC_VER < MC_26_1_2
         Config.Client.Advanced.Debugging.DebugWireframe.showRenderSectionToggling.setApiValue(false);
+        #endif
         Config.Client.Advanced.Debugging.DebugWireframe.showQuadTreeRenderStatus.setApiValue(false);
         Config.Client.Advanced.Debugging.DebugWireframe.showFullDataUpdateStatus.setApiValue(false);
 
+        #if MC_VER < MC_26_1_2
         Config.Client.Advanced.Graphics.GenericRendering.enableInstancedRendering
                 .setAppearance(EConfigEntryAppearance.ONLY_IN_FILE);
+        #endif
         Config.Client.Advanced.Graphics.Fog.enableVanillaFog
                 .setAppearance(EConfigEntryAppearance.ONLY_IN_FILE);
         Config.Client.Advanced.Debugging.OpenGl.overrideVanillaGLLogger
@@ -785,7 +829,9 @@ public class VulkanRenderEngine implements VulkanBackend {
                 .setAppearance(EConfigEntryAppearance.ONLY_IN_FILE);
         Config.Client.Advanced.Debugging.OpenGl.glErrorHandlingMode
                 .setAppearance(EConfigEntryAppearance.ONLY_IN_FILE);
+        #if MC_VER < MC_26_1_2
         Config.Client.Advanced.Debugging.OpenGl.glUploadMode
                 .setAppearance(EConfigEntryAppearance.ONLY_IN_FILE);
+        #endif
     }
 }

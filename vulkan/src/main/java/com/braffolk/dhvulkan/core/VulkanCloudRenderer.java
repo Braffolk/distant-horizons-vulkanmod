@@ -167,7 +167,11 @@ public class VulkanCloudRenderer {
         else
             yState = Y_INSIDE_CLOUDS;
 
+        #if MC_VER >= MC_26_1_2
+        CloudStatus cloudsType = mc.options.getCloudStatus();
+        #else
         CloudStatus cloudsType = mc.options.getCloudsType();
+        #endif
 
         // Rebuild mesh when camera cell changes
         if (centerCellX != this.prevCloudX || centerCellZ != this.prevCloudZ
@@ -391,7 +395,7 @@ public class VulkanCloudRenderer {
             this.cloudGridWidth = width;
             this.cloudRenderFaces = computeRenderFaces();
             this.textureLoaded = true;
-            LOGGER.info("[DH-VulkanMod] Cloud texture loaded: {}x{}", width, height);
+            LOGGER.debug("[DH-VulkanMod] Cloud texture loaded: {}x{}", width, height);
         } catch (Exception e) {
             LOGGER.error("[DH-VulkanMod] Failed to load cloud texture", e);
         }
@@ -458,7 +462,7 @@ public class VulkanCloudRenderer {
             // Requires VM 0.6+ getCloudsPipeline()
             Method getCloudsPipelineMethod = pipelineManagerClass.getMethod("getCloudsPipeline");
             this.cloudsPipeline = (GraphicsPipeline) getCloudsPipelineMethod.invoke(null);
-            LOGGER.info("[DH-VulkanMod] Cloud pipeline: using VM 0.6 getCloudsPipeline()");
+            LOGGER.debug("[DH-VulkanMod] Cloud pipeline: using VM 0.6 getCloudsPipeline()");
 
             if (this.cloudsPipeline == null) {
                 throw new RuntimeException("Cloud pipeline is null");
@@ -486,9 +490,9 @@ public class VulkanCloudRenderer {
             this.vboCloseHandle = lookup.unreflect(
                     vboClass.getMethod("close"));
 
-            LOGGER.info("[DH-VulkanMod] Cloud renderer MethodHandles resolved (VM 0.6).");
+            LOGGER.debug("[DH-VulkanMod] Cloud renderer MethodHandles resolved (VM 0.6).");
         } catch (Exception e) {
-            LOGGER.info("[DH-VulkanMod] VM 0.6 cloud API not available, custom cloud renderer disabled. ({})",
+            LOGGER.debug("[DH-VulkanMod] VM 0.6 cloud API not available, custom cloud renderer disabled. ({})",
                     e.getMessage());
             this.reflectionFailed = true;
         }

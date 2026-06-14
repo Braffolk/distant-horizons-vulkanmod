@@ -8,12 +8,22 @@ pluginManagement {
         gradlePluginPortal()
         mavenLocal()
     }
+    plugins {
+        id "dev.architectury.loom" version "1.13-SNAPSHOT"
+        id "net.fabricmc.fabric-loom" version "1.16-SNAPSHOT"
+        id "systems.manifold.manifold-gradle-plugin" version "0.0.2-alpha"
+        id "org.gradle.toolchains.foojay-resolver-convention" version "1.0.0"
+    }
+}
+
+plugins {
+    id "org.gradle.toolchains.foojay-resolver-convention"
 }
 
 
 /** Loads version properties for the selected Minecraft version. */
 def loadProperties() {
-    def defaultMcVersion = "1.21.11"
+    def defaultMcVersion = "26.1.2"
     def mcVersion = ""
     def mcVers = fileTree("versionProperties").files.name
     for (int i = 0; i < mcVers.size(); i++) {

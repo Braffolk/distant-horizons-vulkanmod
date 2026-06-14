@@ -3,6 +3,8 @@ package com.braffolk.dhvulkan.config;
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
 import net.fabricmc.loader.api.FabricLoader;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 
 import java.io.IOException;
 import java.nio.file.*;
@@ -12,6 +14,8 @@ import java.nio.file.*;
  * Saved to {@code config/dh-vulkanmod.json}.
  */
 public class DhVulkanConfig {
+
+    private static final Logger LOGGER = LogManager.getLogger("DH-VulkanMod");
 
     private static final Path CONFIG_PATH = FabricLoader.getInstance()
             .getConfigDir().resolve("dh-vulkanmod.json");
@@ -27,6 +31,18 @@ public class DhVulkanConfig {
      * Hot-reloadable: edit dh-vulkanmod.json while the game is running.
      */
     public int vulkanRenderMode = 0;
+
+    /**
+     * Force Vulkan rendering regardless of DH's "Rendering API" config setting.
+     * When true, DH-VulkanMod always binds its Vulkan renderer, even if DH's
+     * renderingApi is set to OPEN_GL or BLAZE_3D.
+     *
+     * Use this if DH's config doesn't include a Vulkan option and you want to
+     * ensure Vulkan is always used when VulkanMod is installed.
+     *
+     * Default: false (respects DH's renderingApi setting; AUTO uses Vulkan).
+     */
+    public boolean forceVulkanRendering = false;
 
     // ---- Load / Save ----
 
@@ -56,7 +72,7 @@ public class DhVulkanConfig {
                 if (config != null)
                     return config;
             } catch (Exception e) {
-                System.err.println("[DH-VulkanMod] Failed to load config, using defaults: " + e.getMessage());
+                LOGGER.warn("Failed to load config, using defaults: {}", e.getMessage());
             }
         }
         // Create default config
@@ -70,7 +86,7 @@ public class DhVulkanConfig {
             Files.createDirectories(CONFIG_PATH.getParent());
             Files.writeString(CONFIG_PATH, GSON.toJson(this));
         } catch (IOException e) {
-            System.err.println("[DH-VulkanMod] Failed to save config: " + e.getMessage());
+            LOGGER.warn("Failed to save config: {}", e.getMessage());
         }
     }
 }

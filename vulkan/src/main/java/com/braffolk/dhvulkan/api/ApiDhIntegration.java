@@ -23,7 +23,7 @@ public class ApiDhIntegration implements DhIntegration {
         this.backend = backend;
         this.renderApi = new VkRenderApiDefinition(backend);
         instance = this;
-        LOGGER.info("[DH-VulkanMod] DH 3.0 API integration created (renderer binding deferred to DH setup).");
+        LOGGER.debug("[DH-VulkanMod] DH 3.0 API integration created (renderer binding deferred to DH setup).");
     }
 
     @Override
@@ -40,7 +40,7 @@ public class ApiDhIntegration implements DhIntegration {
     public void bindRenderApi() {
         if (renderApi != null) {
             renderApi.bindRenderers();
-            LOGGER.info("[DH-VulkanMod] Vulkan renderers bound into DH's SingletonInjector.");
+            LOGGER.info("[DH-VulkanMod] Vulkan LOD renderer active for Distant Horizons 3.0.");
         }
     }
 

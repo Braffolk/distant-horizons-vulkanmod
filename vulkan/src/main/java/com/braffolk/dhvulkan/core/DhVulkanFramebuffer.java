@@ -29,6 +29,11 @@ public class DhVulkanFramebuffer {
     private static final DhLogger LOGGER = new DhLoggerBuilder().build();
 
     // Vulkan constants (from VK10) — inlined to avoid compile-time LWJGL dependency
+    // RGBA8 UNORM for DH's LOD framebuffer. DH's terrain shader outputs LDR
+    // values (0-1 range from vertex color). Using RGBA16F would work but
+    // provides no benefit since DH doesn't produce HDR values.
+    // The composite shader handles the final color space conversion when
+    // writing into Beryl's RGBA16F HDR framebuffer.
     private static final int VK_FORMAT_R8G8B8A8_UNORM = 37;
     private static final int VK_FORMAT_D32_SFLOAT = 126;
     private static final int VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT = 16; // 0x10
@@ -58,7 +63,7 @@ public class DhVulkanFramebuffer {
         // Recreate when VulkanMod resizes the swap chain
         Renderer.getInstance().addOnResizeCallback(this::onResize);
 
-        LOGGER.info("[DH-Vulkan] DhVulkanFramebuffer created ({}x{})", width, height);
+        LOGGER.debug("[DH-Vulkan] DhVulkanFramebuffer created ({}x{})", width, height);
     }
 
     private void createFramebufferAndPass() {
@@ -117,7 +122,7 @@ public class DhVulkanFramebuffer {
             return; // No change
         }
 
-        LOGGER.info("[DH-Vulkan] Resizing DhVulkanFramebuffer: {}x{} -> {}x{}",
+        LOGGER.debug("[DH-Vulkan] Resizing DhVulkanFramebuffer: {}x{} -> {}x{}",
                 this.width, this.height, newWidth, newHeight);
 
         // Clean up old render pass and framebuffer
@@ -163,6 +168,6 @@ public class DhVulkanFramebuffer {
             this.framebuffer.cleanUp();
             this.framebuffer = null;
         }
-        LOGGER.info("[DH-Vulkan] DhVulkanFramebuffer cleaned up.");
+        LOGGER.debug("[DH-Vulkan] DhVulkanFramebuffer cleaned up.");
     }
 }

@@ -53,13 +53,15 @@ public class DhDepthReaderPipeline {
     private static final int VK_ATTACHMENT_STORE_OP_STORE = 0;
     private static final int VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL = 5;
 
-    // Reuse composite's DH color slot (3) — not active during depth reader's pass
-    private static final int MC_DEPTH_READ_SLOT = 3;
+    // Slot 7 — reused from SSAO/Fog slots (DepthReader runs before them in endFrame).
+    // CRITICAL: VulkanMod VTextureSelector has 12-element array (slots 0-11).
+    // bindTexture(slot>=12) silently fails!
+    private static final int MC_DEPTH_READ_SLOT = 7;
 
     private static final VertexFormat QUAD_FORMAT;
     static {
         VertexFormatElement position = Compat.vertexFormatElement(0, 0,
-                VertexFormatElement.Type.FLOAT, VertexFormatElement.Usage.POSITION, 2);
+                VertexFormatElement.Type.FLOAT, Compat.ElementUsage.POSITION, 2);
         QUAD_FORMAT = Compat.buildVertexFormat(
                 new String[] { "Position" },
                 new VertexFormatElement[] { position });
@@ -87,7 +89,7 @@ public class DhDepthReaderPipeline {
         createPipeline();
         Renderer.getInstance().addOnResizeCallback(this::onResize);
         this.initialized = true;
-        LOGGER.info("[DH-Vulkan] DhDepthReaderPipeline initialized ({}x{})", width, height);
+        LOGGER.debug("[DH-Vulkan] DhDepthReaderPipeline initialized ({}x{})", width, height);
     }
 
     private void createQuadBuffers() {
@@ -118,7 +120,7 @@ public class DhDepthReaderPipeline {
         String fragSource = readShaderResource("shaders/vulkan/dh_depth_read.frag");
 
         Pipeline.Builder builder = new Pipeline.Builder(QUAD_FORMAT);
-        builder.compileShaders("dh_depth_read", vertSource, fragSource);
+        Compat.compileShaders(builder, "dh_depth_read", vertSource, fragSource);
 
         List<UBO> ubos = new ArrayList<>();
         AlignedStruct.Builder uboBuilder = new AlignedStruct.Builder();
@@ -135,7 +137,7 @@ public class DhDepthReaderPipeline {
         ubos.add(mainUbo);
 
         List<ImageDescriptor> imageDescriptors = new ArrayList<>();
-        imageDescriptors.add(new ImageDescriptor(1, "sampler2D", "gMcDepthTexture", MC_DEPTH_READ_SLOT));
+        imageDescriptors.add(Compat.imageDescriptor(1, "sampler2D", "gMcDepthTexture", MC_DEPTH_READ_SLOT));
         builder.setUniforms(ubos, imageDescriptors);
 
         this.pipeline = builder.createGraphicsPipeline();
@@ -202,7 +204,7 @@ public class DhDepthReaderPipeline {
         if (newWidth == this.width && newHeight == this.height)
             return;
 
-        LOGGER.info("[DH-Vulkan] Resizing DhDepthReaderPipeline: {}x{} -> {}x{}",
+        LOGGER.debug("[DH-Vulkan] Resizing DhDepthReaderPipeline: {}x{} -> {}x{}",
                 this.width, this.height, newWidth, newHeight);
 
         // Free old framebuffer and render pass
@@ -241,7 +243,7 @@ public class DhDepthReaderPipeline {
             this.dummyBuf = null;
         }
         this.initialized = false;
-        LOGGER.info("[DH-Vulkan] DhDepthReaderPipeline cleaned up.");
+        LOGGER.debug("[DH-Vulkan] DhDepthReaderPipeline cleaned up.");
     }
 
     private String readShaderResource(String path) {

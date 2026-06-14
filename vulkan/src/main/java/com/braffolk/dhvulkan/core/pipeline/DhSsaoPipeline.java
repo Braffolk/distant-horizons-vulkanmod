@@ -67,17 +67,19 @@ public class DhSsaoPipeline {
     private static final int VK_ATTACHMENT_STORE_OP_STORE = 0;
     private static final int VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL = 5;
 
-    // VTextureSelector slots for SSAO textures
-    // Using slots 5-7 to avoid conflict with DH composite (3-4) and lightmap (2)
-    private static final int SSAO_DEPTH_TEXTURE_SLOT = 5;
-    private static final int SSAO_RAW_TEXTURE_SLOT = 6;
-    private static final int SSAO_APPLY_DEPTH_TEXTURE_SLOT = 7;
+    // VTextureSelector slots for SSAO textures.
+    // CRITICAL: VulkanMod VTextureSelector has a 12-element array (slots 0-11).
+    // bindTexture(slot>=12) silently fails. SSAO reuses slots 7-9 which are
+    // also used by Fog and Composite (all run sequentially in endFrame).
+    private static final int SSAO_DEPTH_TEXTURE_SLOT = 7;
+    private static final int SSAO_RAW_TEXTURE_SLOT = 8;
+    private static final int SSAO_APPLY_DEPTH_TEXTURE_SLOT = 9;
 
     /** Fullscreen quad vertex format: vec2 position */
     private static final VertexFormat QUAD_FORMAT;
     static {
         VertexFormatElement position = Compat.vertexFormatElement(0, 0,
-                VertexFormatElement.Type.FLOAT, VertexFormatElement.Usage.POSITION, 2);
+                VertexFormatElement.Type.FLOAT, Compat.ElementUsage.POSITION, 2);
         QUAD_FORMAT = Compat.buildVertexFormat(
                 new String[] { "Position" },
                 new VertexFormatElement[] { position });
@@ -238,7 +240,7 @@ public class DhSsaoPipeline {
         String fragSource = readShaderResource("shaders/vulkan/dh_ssao.frag");
 
         Pipeline.Builder builder = new Pipeline.Builder(QUAD_FORMAT);
-        builder.compileShaders("dh_ssao_compute", vertSource, fragSource);
+        Compat.compileShaders(builder, "dh_ssao_compute", vertSource, fragSource);
 
         // UBO at binding 0: SSAO parameters
         List<UBO> ubos = new ArrayList<>();
@@ -268,7 +270,7 @@ public class DhSsaoPipeline {
 
         // Image descriptor: DH depth at binding 1
         List<ImageDescriptor> imageDescriptors = new ArrayList<>();
-        imageDescriptors.add(new ImageDescriptor(1, "sampler2D", "uDepthMap", SSAO_DEPTH_TEXTURE_SLOT));
+        imageDescriptors.add(Compat.imageDescriptor(1, "sampler2D", "uDepthMap", SSAO_DEPTH_TEXTURE_SLOT));
 
         builder.setUniforms(ubos, imageDescriptors);
         this.ssaoComputePipeline = builder.createGraphicsPipeline();
@@ -284,7 +286,7 @@ public class DhSsaoPipeline {
         String fragSource = readShaderResource("shaders/vulkan/dh_ssao_apply.frag");
 
         Pipeline.Builder builder = new Pipeline.Builder(QUAD_FORMAT);
-        builder.compileShaders("dh_ssao_apply", vertSource, fragSource);
+        Compat.compileShaders(builder, "dh_ssao_apply", vertSource, fragSource);
 
         // UBO at binding 0: blur parameters
         List<UBO> ubos = new ArrayList<>();
@@ -302,8 +304,8 @@ public class DhSsaoPipeline {
 
         // Image descriptors: raw SSAO at binding 1, DH depth at binding 2
         List<ImageDescriptor> imageDescriptors = new ArrayList<>();
-        imageDescriptors.add(new ImageDescriptor(1, "sampler2D", "gSSAOMap", SSAO_RAW_TEXTURE_SLOT));
-        imageDescriptors.add(new ImageDescriptor(2, "sampler2D", "gDepthMap", SSAO_APPLY_DEPTH_TEXTURE_SLOT));
+        imageDescriptors.add(Compat.imageDescriptor(1, "sampler2D", "gSSAOMap", SSAO_RAW_TEXTURE_SLOT));
+        imageDescriptors.add(Compat.imageDescriptor(2, "sampler2D", "gDepthMap", SSAO_APPLY_DEPTH_TEXTURE_SLOT));
 
         builder.setUniforms(ubos, imageDescriptors);
         this.ssaoApplyPipeline = builder.createGraphicsPipeline();
