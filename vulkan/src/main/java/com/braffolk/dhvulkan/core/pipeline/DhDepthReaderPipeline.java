@@ -118,7 +118,7 @@ public class DhDepthReaderPipeline {
         String fragSource = readShaderResource("shaders/vulkan/dh_depth_read.frag");
 
         Pipeline.Builder builder = new Pipeline.Builder(QUAD_FORMAT);
-        builder.compileShaders("dh_depth_read", vertSource, fragSource);
+        com.braffolk.dhvulkan.compat.Compat.compilePipelineShaders(builder, "dh_depth_read", vertSource, fragSource);
 
         List<UBO> ubos = new ArrayList<>();
         AlignedStruct.Builder uboBuilder = new AlignedStruct.Builder();
@@ -135,7 +135,7 @@ public class DhDepthReaderPipeline {
         ubos.add(mainUbo);
 
         List<ImageDescriptor> imageDescriptors = new ArrayList<>();
-        imageDescriptors.add(new ImageDescriptor(1, "sampler2D", "gMcDepthTexture", MC_DEPTH_READ_SLOT));
+        imageDescriptors.add(com.braffolk.dhvulkan.compat.Compat.createImageDescriptor(1, "sampler2D", "gMcDepthTexture", MC_DEPTH_READ_SLOT));
         builder.setUniforms(ubos, imageDescriptors);
 
         this.pipeline = builder.createGraphicsPipeline();

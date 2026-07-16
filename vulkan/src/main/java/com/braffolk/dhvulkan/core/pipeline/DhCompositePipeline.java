@@ -138,7 +138,7 @@ public class DhCompositePipeline {
         String fragSource = readShaderResource("shaders/vulkan/dh_apply.frag");
 
         Pipeline.Builder builder = new Pipeline.Builder(QUAD_FORMAT);
-        builder.compileShaders("dh_composite", vertSource, fragSource);
+        com.braffolk.dhvulkan.compat.Compat.compilePipelineShaders(builder, "dh_composite", vertSource, fragSource);
 
         // UBO at binding 0: mat4 uInvProj (64 bytes) + int uDebugMode (4 bytes) + int
         // uUseMcDepth (4 bytes)
@@ -202,11 +202,11 @@ public class DhCompositePipeline {
 
         // Image descriptors — DH color/depth + SSAO/fog debug + MC depth
         List<ImageDescriptor> imageDescriptors = new ArrayList<>();
-        imageDescriptors.add(new ImageDescriptor(1, "sampler2D", "gDhColorTexture", DH_COLOR_TEXTURE_SLOT));
-        imageDescriptors.add(new ImageDescriptor(2, "sampler2D", "gDhDepthTexture", DH_DEPTH_TEXTURE_SLOT));
-        imageDescriptors.add(new ImageDescriptor(3, "sampler2D", "gSsaoTexture", DEBUG_SSAO_TEXTURE_SLOT));
-        imageDescriptors.add(new ImageDescriptor(4, "sampler2D", "gFogTexture", DEBUG_FOG_TEXTURE_SLOT));
-        imageDescriptors.add(new ImageDescriptor(5, "sampler2D", "gMcDepthTexture", MC_DEPTH_TEXTURE_SLOT));
+        imageDescriptors.add(com.braffolk.dhvulkan.compat.Compat.createImageDescriptor(1, "sampler2D", "gDhColorTexture", DH_COLOR_TEXTURE_SLOT));
+        imageDescriptors.add(com.braffolk.dhvulkan.compat.Compat.createImageDescriptor(2, "sampler2D", "gDhDepthTexture", DH_DEPTH_TEXTURE_SLOT));
+        imageDescriptors.add(com.braffolk.dhvulkan.compat.Compat.createImageDescriptor(3, "sampler2D", "gSsaoTexture", DEBUG_SSAO_TEXTURE_SLOT));
+        imageDescriptors.add(com.braffolk.dhvulkan.compat.Compat.createImageDescriptor(4, "sampler2D", "gFogTexture", DEBUG_FOG_TEXTURE_SLOT));
+        imageDescriptors.add(com.braffolk.dhvulkan.compat.Compat.createImageDescriptor(5, "sampler2D", "gMcDepthTexture", MC_DEPTH_TEXTURE_SLOT));
 
         builder.setUniforms(ubos, imageDescriptors);
         this.compositePipeline = builder.createGraphicsPipeline();

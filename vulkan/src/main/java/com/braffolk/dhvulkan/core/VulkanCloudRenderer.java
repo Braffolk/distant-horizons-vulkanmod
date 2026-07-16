@@ -4,7 +4,7 @@ import com.braffolk.dhvulkan.compat.Compat;
 import com.seibel.distanthorizons.core.config.Config;
 import com.seibel.distanthorizons.core.dependencyInjection.SingletonInjector;
 import com.seibel.distanthorizons.core.wrapperInterfaces.minecraft.IMinecraftRenderWrapper;
-import com.seibel.distanthorizons.core.util.math.Mat4f;
+import com.seibel.distanthorizons.core.util.math.DhMat4f;
 import net.minecraft.client.CloudStatus;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.multiplayer.ClientLevel;
@@ -99,7 +99,7 @@ public class VulkanCloudRenderer {
         return !this.reflectionFailed;
     }
 
-    public void renderIfEnabled(float partialTicks, Mat4f mcProjection, Mat4f mcModelView) {
+    public void renderIfEnabled(float partialTicks, DhMat4f mcProjection, DhMat4f mcModelView) {
         // Periodic config check
         if (--this.configRefreshCounter <= 0) {
             this.configRefreshCounter = CONFIG_REFRESH_INTERVAL;
@@ -141,7 +141,7 @@ public class VulkanCloudRenderer {
     }
 
     private void renderClouds(ClientLevel level, Minecraft mc, int cloudHeight,
-            float partialTicks, Mat4f mcProjection, Mat4f mcModelView) throws Throwable {
+            float partialTicks, DhMat4f mcProjection, DhMat4f mcModelView) throws Throwable {
         if (!mcRenderResolved) {
             MC_RENDER = SingletonInjector.INSTANCE.get(IMinecraftRenderWrapper.class);
             mcRenderResolved = true;
@@ -506,8 +506,8 @@ public class VulkanCloudRenderer {
         this.needsRebuild = true;
     }
 
-    /** Copy DH Mat4f into a reusable JOML Matrix4f (column-major). */
-    private static void copyToJoml(Mat4f src, Matrix4f dst) {
+    /** Copy DH DhMat4f into a reusable JOML Matrix4f (column-major). */
+    private static void copyToJoml(DhMat4f src, Matrix4f dst) {
         dst.set(src.m00, src.m10, src.m20, src.m30,
                 src.m01, src.m11, src.m21, src.m31,
                 src.m02, src.m12, src.m22, src.m32,

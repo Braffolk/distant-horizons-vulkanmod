@@ -326,8 +326,13 @@ public final class Compat {
      * Renderer state — we must fix up boundFramebuffer/boundRenderPass afterward.
      */
     public static void rebindMainTarget() {
-        net.vulkanmod.vulkan.pass.DefaultMainPass mainPass =
-                (net.vulkanmod.vulkan.pass.DefaultMainPass) Renderer.getInstance().getMainPass();
+        // Use the MainPass interface, not the concrete DefaultMainPass: shader mods
+        // (e.g. Beryl) swap in their own MainPass impl (net.beryl.render.ShaderMainPass),
+        // and rebindMainTarget() is declared on the interface. Hard-casting to
+        // DefaultMainPass threw ClassCastException every frame under Beryl → DH composite
+        // aborted → no LODs. VM 0.4.2's aux-field fixup below still needs the concrete
+        // type, but that path is pre-1.21.1 only (Field.get accepts the interface ref).
+        net.vulkanmod.vulkan.pass.MainPass mainPass = Renderer.getInstance().getMainPass();
         mainPass.rebindMainTarget();
 
         #if MC_VER < MC_1_21_1
@@ -356,7 +361,8 @@ public final class Compat {
         net.vulkanmod.vulkan.shader.layout.Uniform.Info info =
                 net.vulkanmod.vulkan.shader.layout.Uniform.createUniformInfo(type, name, count);
         info.setBufferSupplier(bufferSupplier);
-        builder.addUniformInfo(info);
+        // VM 0.6.7: AlignedStruct.Builder.addUniform(Uniform.Info) (was addUniformInfo on 0.6.1)
+        builder.addUniform(info);
         #else
         builder.addUniformInfo(type, name, count);
         #endif
@@ -398,12 +404,16 @@ public final class Compat {
         net.vulkanmod.vulkan.shader.layout.Uniform.Info info =
                 net.vulkanmod.vulkan.shader.layout.Uniform.createUniformInfo(type, name, count);
         info.setBufferSupplier(bufferSupplier);
-        pcBuilder.addUniformInfo(info);
+        // VM 0.6.7: addUniform(Info) (was addUniformInfo); buildPushConstant now
+        // takes the VkShaderStageFlags the push constant is visible to. The DH
+        // terrain push_constant block (uModelOffset) lives only in the vertex shader.
+        pcBuilder.addUniform(info);
         try {
             java.lang.reflect.Field pcField =
                     net.vulkanmod.vulkan.shader.Pipeline.Builder.class.getDeclaredField("pushConstants");
             pcField.setAccessible(true);
-            pcField.set(pipelineBuilder, pcBuilder.buildPushConstant());
+            pcField.set(pipelineBuilder,
+                    pcBuilder.buildPushConstant(org.lwjgl.vulkan.VK10.VK_SHADER_STAGE_VERTEX_BIT));
         } catch (Exception e) {
             throw new RuntimeException("[DH-Vulkan] Failed to set push constants on pipeline builder", e);
         }
@@ -443,12 +453,57 @@ public final class Compat {
     }
 
     // ========================= //
+    // Pipeline shader source    //
+    // ========================= //
+
+    /**
+     * Attach vertex + fragment GLSL sources to a pipeline builder.
+     * VM 0.6.7 replaced {@code Pipeline.Builder.compileShaders(name, vert, frag)}
+     * with per-stage {@code setShaderSrc(ShaderKind, src)} (compilation is deferred
+     * to createGraphicsPipeline()).
+     */
+    public static void compilePipelineShaders(
+            net.vulkanmod.vulkan.shader.Pipeline.Builder builder,
+            String name, String vertSource, String fragSource) {
+        #if MC_VER >= MC_1_21_1
+        builder.setShaderSrc(net.vulkanmod.vulkan.shader.SPIRVUtils.ShaderKind.VERTEX_SHADER, vertSource);
+        builder.setShaderSrc(net.vulkanmod.vulkan.shader.SPIRVUtils.ShaderKind.FRAGMENT_SHADER, fragSource);
+        #else
+        builder.compileShaders(name, vertSource, fragSource);
+        #endif
+    }
+
+    // ========================= //
+    // Image descriptors         //
+    // ========================= //
+
+    /**
+     * Build a combined-image-sampler descriptor.
+     * VM 0.6.7's {@code ImageDescriptor} constructor added a trailing
+     * {@code descriptorType} arg; {@code sampler2D} maps to
+     * VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER.
+     */
+    public static net.vulkanmod.vulkan.shader.descriptor.ImageDescriptor createImageDescriptor(
+            int binding, String qualifier, String name, int imageIdx) {
+        #if MC_VER >= MC_1_21_1
+        return new net.vulkanmod.vulkan.shader.descriptor.ImageDescriptor(
+                binding, qualifier, name, imageIdx,
+                org.lwjgl.vulkan.VK10.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER);
+        #else
+        return new net.vulkanmod.vulkan.shader.descriptor.ImageDescriptor(
+                binding, qualifier, name, imageIdx);
+        #endif
+    }
+
+    // ========================= //
     // GlTexture / Lightmap //
     // ========================= //
 
     public static VulkanImage getLightmapVulkanImage() {
         try {
-            #if MC_VER >= MC_1_21_1
+            #if MC_VER >= MC_1_21_5
+            // MC 1.21.5+ (Blaze3D GPU rewrite): the lightmap exposes a GpuTextureView
+            // backed by a GlTexture under VulkanMod's GL emulation.
             var lightmapView = net.minecraft.client.Minecraft.getInstance()
                     .gameRenderer.lightTexture().getTextureView();
             if (lightmapView == null) return null;
@@ -457,6 +512,14 @@ public final class Compat {
             net.vulkanmod.gl.VkGlTexture vkGlTex =
                     net.vulkanmod.gl.VkGlTexture.getTexture(glTex.glId());
             return vkGlTex != null ? vkGlTex.getVulkanImage() : null;
+            #elif MC_VER >= MC_1_21_1
+            // MC 1.21.1-1.21.4 (pre-GPU-rewrite): the lightmap is a DynamicTexture
+            // whose GL texture id VulkanMod maps to a VkGlTexture. VM 0.6.x keeps
+            // the emulated GL texture map, so look the id up there directly.
+            int glId = getLightmapGlId();
+            if (glId <= 0) return null;
+            net.vulkanmod.gl.VkGlTexture vkGlTex = net.vulkanmod.gl.VkGlTexture.getTexture(glId);
+            return vkGlTex != null ? vkGlTex.getVulkanImage() : null;
             #else
             // VM 0.4.2: MC already binds lightmap to slot 2 before our hook fires.
             // Just read it directly from VTextureSelector.
@@ -464,6 +527,77 @@ public final class Compat {
             #endif
         } catch (Exception e) {
             return null;
+        }
+    }
+
+    #if MC_VER < MC_1_21_5
+    /** Cached LightTexture->DynamicTexture field (resolved by TYPE so it survives
+     *  intermediary remapping at runtime; string field names would not). */
+    private static java.lang.reflect.Field lightmapDynTexField;
+    private static boolean lightmapDynTexResolved = false;
+
+    /**
+     * Get the GL texture id of MC's lightmap the pre-GPU-rewrite way
+     * (LightTexture wraps a DynamicTexture / AbstractTexture with a GL id).
+     * @return the GL id, or -1 if unavailable.
+     */
+    private static int getLightmapGlId() throws Exception {
+        net.minecraft.client.renderer.LightTexture lt =
+                net.minecraft.client.Minecraft.getInstance().gameRenderer.lightTexture();
+        if (lt == null) return -1;
+        if (!lightmapDynTexResolved) {
+            lightmapDynTexResolved = true;
+            for (java.lang.reflect.Field f : net.minecraft.client.renderer.LightTexture.class.getDeclaredFields()) {
+                if (net.minecraft.client.renderer.texture.DynamicTexture.class.isAssignableFrom(f.getType())) {
+                    f.setAccessible(true);
+                    lightmapDynTexField = f;
+                    break;
+                }
+            }
+        }
+        if (lightmapDynTexField == null) return -1;
+        net.minecraft.client.renderer.texture.DynamicTexture dyn =
+                (net.minecraft.client.renderer.texture.DynamicTexture) lightmapDynTexField.get(lt);
+        return dyn != null ? dyn.getId() : -1;
+    }
+    #endif
+
+    // ---- DH lightmap-wrapper validation gate (DH 3.2.0-b) ----
+    // DH gates LOD rendering behind RenderParams.getValidationErrorMessage(), which returns
+    // "No Lightmap Loaded" unless IMinecraftRenderWrapper.getLightmapWrapper(level) != null.
+    // That wrapper is normally registered by DH's MixinLightTexture → MinecraftRenderWrapper
+    // .updateLightmap() (which computeIfAbsent-creates the LightMapWrapper). Under VulkanMod that
+    // hook never produces a registered wrapper (VM doesn't drive MC's LightTexture the vanilla
+    // way), so DH refuses to draw LODs. We register the wrapper ourselves via the GL-free
+    // setLightmapId(int) path: MinecraftRenderWrapper.setLightmapId computeIfAbsent-creates+stores
+    // the wrapper, and LightMapWrapper.setLightmapId is a pure field setter (no GL). The bridge
+    // feeds the actual lightmap to the Vulkan renderer separately (getLightmapVulkanImage), so this
+    // wrapper is only a validation token. Must run on the render thread (client level present) or
+    // setLightmapId early-returns. setLightmapId is not on IMinecraftRenderWrapper and the concrete
+    // class name is loader-suffixed (_fabric/_neoforge) → resolve reflectively.
+    private static java.lang.reflect.Method dhSetLightmapIdMethod;
+    private static boolean dhSetLightmapIdResolved = false;
+
+    public static void ensureDhLightmapWrapperRegistered() {
+        try {
+            Object renderWrapper = com.seibel.distanthorizons.core.dependencyInjection.SingletonInjector.INSTANCE
+                    .get(com.seibel.distanthorizons.core.wrapperInterfaces.minecraft.IMinecraftRenderWrapper.class);
+            if (renderWrapper == null) return;
+            if (!dhSetLightmapIdResolved) {
+                dhSetLightmapIdResolved = true;
+                try {
+                    dhSetLightmapIdMethod = renderWrapper.getClass().getMethod("setLightmapId", int.class);
+                    dhSetLightmapIdMethod.setAccessible(true);
+                } catch (NoSuchMethodException ignored) { }
+            }
+            if (dhSetLightmapIdMethod == null) return;
+            int glId = 0;
+            #if MC_VER < MC_1_21_5
+            try { glId = Math.max(getLightmapGlId(), 0); } catch (Exception ignored) { }
+            #endif
+            dhSetLightmapIdMethod.invoke(renderWrapper, glId);
+        } catch (Exception ignored) {
+            // best-effort: never let validation-registration break the frame
         }
     }
 
@@ -817,7 +951,8 @@ public final class Compat {
      * MC 1.21.x has options.cloudRange(), MC 1.20.x uses renderDistance.
      */
     public static int getCloudRenderRange() {
-        #if MC_VER <= MC_1_20_6
+        #if MC_VER <= MC_1_21_4
+        // MC <= 1.21.4: no Options.cloudRange(); fall back to render distance.
         return net.minecraft.client.Minecraft.getInstance().options.renderDistance().get() * 16;
         #else
         return Math.min(net.minecraft.client.Minecraft.getInstance().options.cloudRange().get(), 128) * 16;
@@ -829,7 +964,9 @@ public final class Compat {
      * MC 1.21.x has getPixelsABGR(), MC 1.20.x has getPixelRGBA per-pixel.
      */
     public static int[] getCloudPixels(com.mojang.blaze3d.platform.NativeImage image) {
-        #if MC_VER <= MC_1_20_6
+        #if MC_VER <= MC_1_21_4
+        // MC <= 1.21.4: no NativeImage.getPixelsABGR(); read per-pixel.
+        // getPixelRGBA returns the raw ABGR-packed int (same layout as getPixelsABGR).
         int width = image.getWidth();
         int height = image.getHeight();
         int[] pixels = new int[width * height];
@@ -861,6 +998,9 @@ public final class Compat {
                 return opt.orElse(-1);
             }
             return 192; // fallback overworld
+            #elif MC_VER <= MC_1_21_4
+            // MC 1.21.1-1.21.4: no DimensionType.cloudHeight(); overworld clouds at y=192
+            return level.dimensionType().hasSkyLight() ? 192 : -1;
             #elif MC_VER <= MC_1_21_10
             java.util.Optional<Integer> opt = level.dimensionType().cloudHeight();
             return opt.orElse(-1);

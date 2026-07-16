@@ -2,7 +2,7 @@ package com.braffolk.dhvulkan.core;
 
 import com.braffolk.dhvulkan.core.data.RenderUniforms;
 import com.braffolk.dhvulkan.core.data.VkVertexData;
-import com.seibel.distanthorizons.core.util.math.Vec3f;
+import com.seibel.distanthorizons.core.util.math.DhVec3f;
 
 /**
  * Central rendering interface for the Vulkan backend.
@@ -28,7 +28,7 @@ public interface VulkanBackend {
      * Set the per-buffer model offset uniform.
      * Called once per LOD section, before drawing its VBOs.
      */
-    void setModelOffset(Vec3f modelOffset);
+    void setModelOffset(DhVec3f modelOffset);
 
     /**
      * Draw a vertex buffer. Called per-VBO in the render loop.

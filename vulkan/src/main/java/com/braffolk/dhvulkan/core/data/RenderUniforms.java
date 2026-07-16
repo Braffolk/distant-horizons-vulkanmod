@@ -1,6 +1,7 @@
 package com.braffolk.dhvulkan.core.data;
 
-import com.seibel.distanthorizons.core.util.math.Mat4f;
+import com.seibel.distanthorizons.api.objects.math.DhApiMat4f;
+import com.seibel.distanthorizons.core.util.math.DhMat4f;
 
 /**
  * DH-agnostic uniform data for a single render frame.
@@ -9,13 +10,13 @@ import com.seibel.distanthorizons.core.util.math.Mat4f;
  */
 public class RenderUniforms {
     /** DH's projection matrix (extended near clip for high altitudes) */
-    public final Mat4f dhProjectionMatrix = new Mat4f();
+    public final DhMat4f dhProjectionMatrix = new DhMat4f();
 
     /** DH's model-view matrix */
-    public final Mat4f dhModelViewMatrix = new Mat4f();
+    public final DhMat4f dhModelViewMatrix = new DhMat4f();
 
     /** MC's projection matrix (for depth remapping in composite) */
-    public final Mat4f mcProjectionMatrix = new Mat4f();
+    public final DhMat4f mcProjectionMatrix = new DhMat4f();
 
     /** World Y offset for terrain rendering */
     public double worldYOffset;
@@ -26,8 +27,12 @@ public class RenderUniforms {
     /**
      * Set all fields from source matrices.
      * Callers should set worldYOffset and partialTicks directly.
+     *
+     * <p>Parameters are typed as the API base ({@link DhApiMat4f}) because
+     * DH 3.x's {@code RenderParams} exposes matrices as {@code DhApiMat4f};
+     * {@link DhMat4f#set(DhApiMat4f)} (inherited) copies the values.
      */
-    public void set(Mat4f dhProj, Mat4f dhModelView, Mat4f mcProj) {
+    public void set(DhApiMat4f dhProj, DhApiMat4f dhModelView, DhApiMat4f mcProj) {
         this.dhProjectionMatrix.set(dhProj);
         this.dhModelViewMatrix.set(dhModelView);
         this.mcProjectionMatrix.set(mcProj);

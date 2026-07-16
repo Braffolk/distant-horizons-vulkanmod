@@ -17,8 +17,8 @@ import com.braffolk.dhvulkan.core.pipeline.DhFogPipeline;
 import com.braffolk.dhvulkan.core.pipeline.DhSsaoPipeline;
 import com.seibel.distanthorizons.core.config.Config;
 import com.seibel.distanthorizons.core.config.types.enums.EConfigEntryAppearance;
-import com.seibel.distanthorizons.core.util.math.Mat4f;
-import com.seibel.distanthorizons.core.util.math.Vec3f;
+import com.seibel.distanthorizons.core.util.math.DhMat4f;
+import com.seibel.distanthorizons.core.util.math.DhVec3f;
 import net.minecraft.client.Minecraft;
 import net.vulkanmod.vulkan.Renderer;
 import net.vulkanmod.vulkan.VRenderSystem;
@@ -44,11 +44,11 @@ import java.util.concurrent.ConcurrentLinkedQueue;
  */
 public class VulkanRenderEngine implements VulkanBackend {
     private static final Logger LOGGER = LogManager.getLogger("DH-VulkanEngine");
-    private static final Vec3f VEC3F_ZERO = new Vec3f(0, 0, 0);
+    private static final DhVec3f VEC3F_ZERO = new DhVec3f(0, 0, 0);
 
     // Pre-allocated reusable objects to avoid per-frame heap allocations
-    private final Mat4f tempCombinedMatrix = new Mat4f();
-    private final Mat4f tempInvProj = new Mat4f();
+    private final DhMat4f tempCombinedMatrix = new DhMat4f();
+    private final DhMat4f tempInvProj = new DhMat4f();
     private final float[] tempInvProjArray = new float[16];
     private final float[] tempMcProjArray = new float[16];
     private final float[] tempInvMcMvmProjArray = new float[16];
@@ -236,7 +236,10 @@ public class VulkanRenderEngine implements VulkanBackend {
             return;
         }
 
-        // Bind MC's lightmap texture
+        // Bind MC's lightmap texture. (The DH lightmap-wrapper *registration* that opens
+        // DH's render-validation gate happens earlier and ungated, at renderLevel HEAD in
+        // MixinLevelRenderer — doing it here would be too late, since the gate skips this
+        // whole render path until the wrapper exists. Here we only bind the actual texture.)
         try {
             VulkanImage lightmapImage = Compat.getLightmapVulkanImage();
             if (lightmapImage != null) {
@@ -339,7 +342,7 @@ public class VulkanRenderEngine implements VulkanBackend {
     }
 
     @Override
-    public void setModelOffset(Vec3f modelOffset) {
+    public void setModelOffset(DhVec3f modelOffset) {
         if (this.initFailed)
             return;
         this.renderContext.setModelOffset(modelOffset);
@@ -771,12 +774,11 @@ public class VulkanRenderEngine implements VulkanBackend {
         Config.Client.Advanced.Debugging.DebugWireframe.showWorldGenQueue.setApiValue(false);
         Config.Client.Advanced.Debugging.DebugWireframe.showNetworkSyncOnLoadQueue.setApiValue(false);
         Config.Client.Advanced.Debugging.DebugWireframe.showRenderSectionStatus.setApiValue(false);
-        Config.Client.Advanced.Debugging.DebugWireframe.showRenderSectionToggling.setApiValue(false);
         Config.Client.Advanced.Debugging.DebugWireframe.showQuadTreeRenderStatus.setApiValue(false);
         Config.Client.Advanced.Debugging.DebugWireframe.showFullDataUpdateStatus.setApiValue(false);
 
-        Config.Client.Advanced.Graphics.GenericRendering.enableInstancedRendering
-                .setAppearance(EConfigEntryAppearance.ONLY_IN_FILE);
+        // NOTE: DH 3.2.0-b removed GenericRendering.enableInstancedRendering and
+        // OpenGl.glUploadMode / DebugWireframe.showRenderSectionToggling — dropped here.
         Config.Client.Advanced.Graphics.Fog.enableVanillaFog
                 .setAppearance(EConfigEntryAppearance.ONLY_IN_FILE);
         Config.Client.Advanced.Debugging.OpenGl.overrideVanillaGLLogger
@@ -784,8 +786,6 @@ public class VulkanRenderEngine implements VulkanBackend {
         Config.Client.Advanced.Debugging.OpenGl.onlyLogGlErrorsOnce
                 .setAppearance(EConfigEntryAppearance.ONLY_IN_FILE);
         Config.Client.Advanced.Debugging.OpenGl.glErrorHandlingMode
-                .setAppearance(EConfigEntryAppearance.ONLY_IN_FILE);
-        Config.Client.Advanced.Debugging.OpenGl.glUploadMode
                 .setAppearance(EConfigEntryAppearance.ONLY_IN_FILE);
     }
 }

@@ -15,7 +15,7 @@ import com.mojang.blaze3d.vertex.VertexFormat;
 import com.mojang.blaze3d.vertex.VertexFormatElement;
 import com.seibel.distanthorizons.core.config.Config;
 import com.seibel.distanthorizons.core.util.RenderUtil;
-import com.seibel.distanthorizons.core.util.math.Mat4f;
+import com.seibel.distanthorizons.core.util.math.DhMat4f;
 import net.vulkanmod.vulkan.Renderer;
 import net.vulkanmod.vulkan.VRenderSystem;
 import net.vulkanmod.vulkan.framebuffer.Framebuffer;
@@ -108,7 +108,7 @@ public class DhSsaoPipeline {
     private boolean initialized = false;
 
     // Pre-allocated temp matrix to avoid per-frame heap allocation
-    private final Mat4f tempInvProj = new Mat4f();
+    private final DhMat4f tempInvProj = new DhMat4f();
 
     // [DH 2.4 COMPAT] RenderUtil.getFarClipPlaneDistanceInBlocks() returns int in
     // DH 2.4 but float in DH 3.0. JVM treats return type as part of the method
@@ -238,7 +238,7 @@ public class DhSsaoPipeline {
         String fragSource = readShaderResource("shaders/vulkan/dh_ssao.frag");
 
         Pipeline.Builder builder = new Pipeline.Builder(QUAD_FORMAT);
-        builder.compileShaders("dh_ssao_compute", vertSource, fragSource);
+        com.braffolk.dhvulkan.compat.Compat.compilePipelineShaders(builder, "dh_ssao_compute", vertSource, fragSource);
 
         // UBO at binding 0: SSAO parameters
         List<UBO> ubos = new ArrayList<>();
@@ -268,7 +268,7 @@ public class DhSsaoPipeline {
 
         // Image descriptor: DH depth at binding 1
         List<ImageDescriptor> imageDescriptors = new ArrayList<>();
-        imageDescriptors.add(new ImageDescriptor(1, "sampler2D", "uDepthMap", SSAO_DEPTH_TEXTURE_SLOT));
+        imageDescriptors.add(com.braffolk.dhvulkan.compat.Compat.createImageDescriptor(1, "sampler2D", "uDepthMap", SSAO_DEPTH_TEXTURE_SLOT));
 
         builder.setUniforms(ubos, imageDescriptors);
         this.ssaoComputePipeline = builder.createGraphicsPipeline();
@@ -284,7 +284,7 @@ public class DhSsaoPipeline {
         String fragSource = readShaderResource("shaders/vulkan/dh_ssao_apply.frag");
 
         Pipeline.Builder builder = new Pipeline.Builder(QUAD_FORMAT);
-        builder.compileShaders("dh_ssao_apply", vertSource, fragSource);
+        com.braffolk.dhvulkan.compat.Compat.compilePipelineShaders(builder, "dh_ssao_apply", vertSource, fragSource);
 
         // UBO at binding 0: blur parameters
         List<UBO> ubos = new ArrayList<>();
@@ -302,8 +302,8 @@ public class DhSsaoPipeline {
 
         // Image descriptors: raw SSAO at binding 1, DH depth at binding 2
         List<ImageDescriptor> imageDescriptors = new ArrayList<>();
-        imageDescriptors.add(new ImageDescriptor(1, "sampler2D", "gSSAOMap", SSAO_RAW_TEXTURE_SLOT));
-        imageDescriptors.add(new ImageDescriptor(2, "sampler2D", "gDepthMap", SSAO_APPLY_DEPTH_TEXTURE_SLOT));
+        imageDescriptors.add(com.braffolk.dhvulkan.compat.Compat.createImageDescriptor(1, "sampler2D", "gSSAOMap", SSAO_RAW_TEXTURE_SLOT));
+        imageDescriptors.add(com.braffolk.dhvulkan.compat.Compat.createImageDescriptor(2, "sampler2D", "gDepthMap", SSAO_APPLY_DEPTH_TEXTURE_SLOT));
 
         builder.setUniforms(ubos, imageDescriptors);
         this.ssaoApplyPipeline = builder.createGraphicsPipeline();
@@ -324,7 +324,7 @@ public class DhSsaoPipeline {
      *                         rendering
      * @param projectionMatrix DH's projection matrix for depth reconstruction
      */
-    public void render(DhVulkanFramebuffer dhFramebuffer, Mat4f projectionMatrix) {
+    public void render(DhVulkanFramebuffer dhFramebuffer, DhMat4f projectionMatrix) {
         if (!this.initialized) {
             return;
         }
@@ -526,7 +526,7 @@ public class DhSsaoPipeline {
         Compat.addUniformWithBuffer(builder, type, name, count, () -> mb);
     }
 
-    private void setUniformMat4(Map<String, MappedBuffer> uniforms, String name, Mat4f matrix) {
+    private void setUniformMat4(Map<String, MappedBuffer> uniforms, String name, DhMat4f matrix) {
         MappedBuffer mb = uniforms.get(name);
         if (mb == null)
             return;

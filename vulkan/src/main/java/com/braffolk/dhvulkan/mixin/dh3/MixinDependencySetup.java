@@ -14,7 +14,11 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
  * By cancelling the original method and binding our VkRenderApiDefinition instead,
  * we ensure DH uses our Vulkan rendering pipeline.
  */
-@Mixin(targets = "loaderCommon.fabric.com.seibel.distanthorizons.common.wrappers.DependencySetup", remap = false)
+// DH 3.2.0-b dropped the `loaderCommon.fabric.` relocation prefix and now emits
+// per-loader classes with a `_fabric` / `_neoforge` suffix. Under Fabric the class
+// actually instantiated (and whose static setRenderingApiBindings() runs) is the
+// _fabric variant. See HANDOFF Open Issue #1.
+@Mixin(targets = "com.seibel.distanthorizons.common.wrappers.DependencySetup_fabric", remap = false)
 public class MixinDependencySetup {
 
     @Inject(method = "setRenderingApiBindings", at = @At("HEAD"), cancellable = true)
