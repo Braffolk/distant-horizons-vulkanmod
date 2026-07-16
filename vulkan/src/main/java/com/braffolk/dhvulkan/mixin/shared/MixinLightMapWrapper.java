@@ -17,7 +17,10 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
  * bind()/unbind() only exist in DH 2.4 (they call glBindTexture/glActiveTexture)
  * — marked require = 0 so the mixin doesn't fail when targeting DH 3.0.
  */
-@Mixin(targets = "loaderCommon.fabric.com.seibel.distanthorizons.common.wrappers.misc.LightMapWrapper", remap = false)
+// DH 3.2.0-b: `loaderCommon.fabric.` relocation prefix gone; class now carries a
+// `_fabric` suffix (see HANDOFF Open Issue #1). uploadLightmap/createLightmap still
+// exist on the _fabric variant; bind/unbind (DH 2.4 only) stay require=0.
+@Mixin(targets = "com.seibel.distanthorizons.common.wrappers.misc.LightMapWrapper_fabric", remap = false)
 public class MixinLightMapWrapper {
 
     @Inject(method = "uploadLightmap", at = @At("HEAD"), cancellable = true)

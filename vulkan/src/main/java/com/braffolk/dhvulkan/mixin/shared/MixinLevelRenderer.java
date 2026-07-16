@@ -48,6 +48,27 @@ public class MixinLevelRenderer {
     }
 
     /**
+     * Register DH's lightmap wrapper at the START of level rendering, BEFORE DH's own
+     * LOD render (and thus before ClientApi's RenderParams validation) fires later in
+     * this same renderLevel call.
+     *
+     * DH 3.2.0-b hard-gates LOD rendering: ClientApi skips rendering entirely when
+     * RenderParams.getValidationErrorMessage() != null, and it returns "No Lightmap Loaded"
+     * unless MinecraftRenderWrapper.getLightmapWrapper(level) is non-null. That wrapper is
+     * normally registered by DH's MixinLightTexture → updateLightmap(), which does not
+     * produce a registered wrapper under VulkanMod (VM overwrites/replaces MC's LightTexture
+     * drive). Registering from inside our render path is too late — the gate skips that path,
+     * so it never runs (chicken-and-egg). Doing it here (ungated, once per frame) opens the
+     * gate; the actual lightmap texture is still supplied to the Vulkan renderer separately
+     * via Compat.getLightmapVulkanImage(). GL-free (setLightmapId is a pure setter).
+     */
+    @Inject(method = "renderLevel", at = @At("HEAD"))
+    private void dhvulkan$registerLightmapWrapper(CallbackInfo ci) {
+        if (!Compat.isVulkanModActive()) return;
+        Compat.ensureDhLightmapWrapperRegistered();
+    }
+
+    /**
      * Phase 2: deferred composite at renderLevel @RETURN.
      * Fires AFTER terrain + weather + everything.
      * Uses GL_LEQUAL depth test so weather pixels (depth < 1.0) are preserved —

@@ -326,8 +326,13 @@ public final class Compat {
      * Renderer state — we must fix up boundFramebuffer/boundRenderPass afterward.
      */
     public static void rebindMainTarget() {
-        net.vulkanmod.vulkan.pass.DefaultMainPass mainPass =
-                (net.vulkanmod.vulkan.pass.DefaultMainPass) Renderer.getInstance().getMainPass();
+        // Use the MainPass interface, not the concrete DefaultMainPass: shader mods
+        // (e.g. Beryl) swap in their own MainPass impl (net.beryl.render.ShaderMainPass),
+        // and rebindMainTarget() is declared on the interface. Hard-casting to
+        // DefaultMainPass threw ClassCastException every frame under Beryl → DH composite
+        // aborted → no LODs. VM 0.4.2's aux-field fixup below still needs the concrete
+        // type, but that path is pre-1.21.1 only (Field.get accepts the interface ref).
+        net.vulkanmod.vulkan.pass.MainPass mainPass = Renderer.getInstance().getMainPass();
         mainPass.rebindMainTarget();
 
         #if MC_VER < MC_1_21_1
@@ -556,6 +561,45 @@ public final class Compat {
         return dyn != null ? dyn.getId() : -1;
     }
     #endif
+
+    // ---- DH lightmap-wrapper validation gate (DH 3.2.0-b) ----
+    // DH gates LOD rendering behind RenderParams.getValidationErrorMessage(), which returns
+    // "No Lightmap Loaded" unless IMinecraftRenderWrapper.getLightmapWrapper(level) != null.
+    // That wrapper is normally registered by DH's MixinLightTexture → MinecraftRenderWrapper
+    // .updateLightmap() (which computeIfAbsent-creates the LightMapWrapper). Under VulkanMod that
+    // hook never produces a registered wrapper (VM doesn't drive MC's LightTexture the vanilla
+    // way), so DH refuses to draw LODs. We register the wrapper ourselves via the GL-free
+    // setLightmapId(int) path: MinecraftRenderWrapper.setLightmapId computeIfAbsent-creates+stores
+    // the wrapper, and LightMapWrapper.setLightmapId is a pure field setter (no GL). The bridge
+    // feeds the actual lightmap to the Vulkan renderer separately (getLightmapVulkanImage), so this
+    // wrapper is only a validation token. Must run on the render thread (client level present) or
+    // setLightmapId early-returns. setLightmapId is not on IMinecraftRenderWrapper and the concrete
+    // class name is loader-suffixed (_fabric/_neoforge) → resolve reflectively.
+    private static java.lang.reflect.Method dhSetLightmapIdMethod;
+    private static boolean dhSetLightmapIdResolved = false;
+
+    public static void ensureDhLightmapWrapperRegistered() {
+        try {
+            Object renderWrapper = com.seibel.distanthorizons.core.dependencyInjection.SingletonInjector.INSTANCE
+                    .get(com.seibel.distanthorizons.core.wrapperInterfaces.minecraft.IMinecraftRenderWrapper.class);
+            if (renderWrapper == null) return;
+            if (!dhSetLightmapIdResolved) {
+                dhSetLightmapIdResolved = true;
+                try {
+                    dhSetLightmapIdMethod = renderWrapper.getClass().getMethod("setLightmapId", int.class);
+                    dhSetLightmapIdMethod.setAccessible(true);
+                } catch (NoSuchMethodException ignored) { }
+            }
+            if (dhSetLightmapIdMethod == null) return;
+            int glId = 0;
+            #if MC_VER < MC_1_21_5
+            try { glId = Math.max(getLightmapGlId(), 0); } catch (Exception ignored) { }
+            #endif
+            dhSetLightmapIdMethod.invoke(renderWrapper, glId);
+        } catch (Exception ignored) {
+            // best-effort: never let validation-registration break the frame
+        }
+    }
 
     // ========================= //
     // Config value scaling //

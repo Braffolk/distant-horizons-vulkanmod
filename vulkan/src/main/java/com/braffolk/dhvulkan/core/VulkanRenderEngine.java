@@ -236,7 +236,10 @@ public class VulkanRenderEngine implements VulkanBackend {
             return;
         }
 
-        // Bind MC's lightmap texture
+        // Bind MC's lightmap texture. (The DH lightmap-wrapper *registration* that opens
+        // DH's render-validation gate happens earlier and ungated, at renderLevel HEAD in
+        // MixinLevelRenderer — doing it here would be too late, since the gate skips this
+        // whole render path until the wrapper exists. Here we only bind the actual texture.)
         try {
             VulkanImage lightmapImage = Compat.getLightmapVulkanImage();
             if (lightmapImage != null) {
