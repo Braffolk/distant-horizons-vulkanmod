@@ -80,7 +80,7 @@ public final class DhConfigHelper {
     // =================== //
 
     public static boolean ssaoEnabled() {
-        return Config.Client.Advanced.Graphics.Ssao.enableSsao.get();
+        return Config.Client.Advanced.Graphics.enableSsao.get();
     }
 
     // =================== //

@@ -5,7 +5,6 @@ import com.braffolk.dhvulkan.bridge.DhVersionDetector;
 import com.braffolk.dhvulkan.config.DhVulkanConfig;
 import com.braffolk.dhvulkan.core.VulkanBackend;
 import com.braffolk.dhvulkan.core.VulkanRenderEngine;
-import com.braffolk.dhvulkan.dh24.Dh24Integration;
 import com.braffolk.dhvulkan.compat.Compat;
 import com.mojang.brigadier.arguments.IntegerArgumentType;
 import net.fabricmc.api.ClientModInitializer;
@@ -81,9 +80,11 @@ public class DhVulkanModEntrypoint implements ClientModInitializer {
                 break;
             case DH_2_4:
             default:
-                activeIntegration = new Dh24Integration();
-                activeIntegration.initialize(backend);
-                break;
+                // This build ships only the DH 3.x (API) integration path.
+                // The legacy DH 2.4 (dh24) module is not compiled in.
+                LOGGER.warn("[DH-VulkanMod] Detected DH {} but this build only supports DH 3.x. "
+                        + "Extension will be inactive.", dhVersion);
+                return;
         }
 
         LOGGER.info("[DH-VulkanMod] Using integration: {}", activeIntegration.getName());
@@ -94,8 +95,8 @@ public class DhVulkanModEntrypoint implements ClientModInitializer {
      * delegate. Only applies to DH 2.4 path.
      */
     public static void wireIfNeeded() {
-        if (activeIntegration instanceof Dh24Integration) {
-            ((Dh24Integration) activeIntegration).wireIfNeeded();
+        if (activeIntegration != null) {
+            activeIntegration.wireIfNeeded();
         }
     }
 

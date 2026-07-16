@@ -39,6 +39,18 @@ def vmJar = fileTree("${rootDir}/jars").matching { include "VulkanMod_${mcVer}-*
 if (dhJar.isEmpty()) throw new GradleException("No DH jar found for MC ${mcVer} in jars/")
 if (vmJar.isEmpty()) throw new GradleException("No VulkanMod jar found for MC ${mcVer} in jars/")
 
+// The legacy DH 2.4 ("dh24") integration only compiles against a DH 2.x jar
+// (uses GLProxy / GLVertexBuffer / LodBufferContainer.vbos, etc.). When no DH 2.x
+// jar is present in jars/, exclude that module and build the DH 3.x path only.
+def dh24Jar = fileTree("${rootDir}/jars").matching { include "DistantHorizons-2.*-${mcVer}-*.jar" }.files
+if (dh24Jar.isEmpty()) {
+    sourceSets.main.java {
+        exclude "com/braffolk/dhvulkan/dh24/**"
+        exclude "com/braffolk/dhvulkan/mixin/dh24/**"
+    }
+    logger.lifecycle("[DH-VulkanMod] No DH 2.x jar for MC ${mcVer} — excluding legacy dh24 module (DH 3.x-only build).")
+}
+
 dependencies {
     minecraft "com.mojang:minecraft:${mcVer}"
     mappings loom.layered() {

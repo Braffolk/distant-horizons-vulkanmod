@@ -17,4 +17,12 @@ public interface DhIntegration {
 
     /** Human-readable name for logging */
     String getName();
+
+    /**
+     * Late wiring hook. Only the DH 2.4 path needs this (it wires its render
+     * delegate from a mixin before the first render pass); DH 3.x wires via the
+     * API at init, so the default is a no-op. Keeping it on the interface lets the
+     * entrypoint stay decoupled from the (optional) dh24 module.
+     */
+    default void wireIfNeeded() {}
 }

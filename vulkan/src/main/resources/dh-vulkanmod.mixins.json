@@ -4,12 +4,6 @@
     "compatibilityLevel": "JAVA_21",
     "plugin": "com.braffolk.dhvulkan.DhVulkanMixinPlugin",
     "client": [
-        "dh24.MixinGLProxy",
-        "dh24.MixinGLState",
-        "dh24.MixinGLBuffer",
-        "dh24.MixinGLVertexBuffer",
-        "dh24.MixinLodRenderer",
-        "dh24.MixinLodBufferContainer",
         "dh3.MixinDependencySetup",
         "shared.MixinLevelRenderer",
         "shared.MixinLightMapWrapper"

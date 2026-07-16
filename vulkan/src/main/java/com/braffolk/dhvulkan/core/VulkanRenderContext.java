@@ -12,9 +12,8 @@ import com.mojang.blaze3d.vertex.VertexFormat;
 import com.mojang.blaze3d.vertex.VertexFormatElement;
 import com.seibel.distanthorizons.core.logging.DhLogger;
 import com.seibel.distanthorizons.core.logging.DhLoggerBuilder;
-import com.seibel.distanthorizons.core.render.glObject.GLProxy;
-import com.seibel.distanthorizons.core.util.math.Mat4f;
-import com.seibel.distanthorizons.core.util.math.Vec3f;
+import com.seibel.distanthorizons.core.util.math.DhMat4f;
+import com.seibel.distanthorizons.core.util.math.DhVec3f;
 import net.vulkanmod.vulkan.Drawer;
 import net.vulkanmod.vulkan.Renderer;
 import net.vulkanmod.vulkan.shader.GraphicsPipeline;
@@ -157,7 +156,7 @@ public class VulkanRenderContext {
         }
 
         Pipeline.Builder builder = new Pipeline.Builder(DH_TERRAIN_FORMAT);
-        builder.compileShaders("dh_terrain", vertSource, fragSource);
+        com.braffolk.dhvulkan.compat.Compat.compilePipelineShaders(builder, "dh_terrain", vertSource, fragSource);
 
         // UBOs and samplers
         List<UBO> ubos = new ArrayList<>();
@@ -203,7 +202,7 @@ public class VulkanRenderContext {
         // Binding 1: LightMap sampler
         // VulkanMod hardcodes lightmap at texture slot 2 (see
         // VTextureSelector.setLightTexture())
-        imageDescriptors.add(new ImageDescriptor(1, "sampler2D", "uLightMap", 2));
+        imageDescriptors.add(com.braffolk.dhvulkan.compat.Compat.createImageDescriptor(1, "sampler2D", "uLightMap", 2));
 
         builder.setUniforms(ubos, imageDescriptors);
 
@@ -232,7 +231,7 @@ public class VulkanRenderContext {
     // ===================//
 
     /** Write a mat4 uniform value (column-major for std140 layout) */
-    public void setUniformMat4(String name, Mat4f matrix) {
+    public void setUniformMat4(String name, DhMat4f matrix) {
         MappedBuffer mb = this.uniformBuffers.get(name);
         if (mb == null)
             return;
@@ -260,7 +259,7 @@ public class VulkanRenderContext {
     }
 
     /** Write a vec3 uniform value */
-    public void setUniformVec3f(String name, Vec3f value) {
+    public void setUniformVec3f(String name, DhVec3f value) {
         MappedBuffer mb = this.uniformBuffers.get(name);
         if (mb == null)
             return;
@@ -274,7 +273,7 @@ public class VulkanRenderContext {
      * Write model offset directly (hot path, ~200× per frame).
      * Uses direct field reference — no HashMap lookup.
      */
-    public void setModelOffset(Vec3f value) {
+    public void setModelOffset(DhVec3f value) {
         this.modelOffsetBuffer.putFloat(0, value.x);
         this.modelOffsetBuffer.putFloat(4, value.y);
         this.modelOffsetBuffer.putFloat(8, value.z);

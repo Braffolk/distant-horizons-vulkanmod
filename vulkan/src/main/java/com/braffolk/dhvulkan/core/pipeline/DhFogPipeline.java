@@ -17,7 +17,7 @@ import com.braffolk.dhvulkan.core.DhConfigHelper;
 import com.seibel.distanthorizons.core.config.Config;
 import com.seibel.distanthorizons.core.dependencyInjection.SingletonInjector;
 import com.seibel.distanthorizons.core.util.LodUtil;
-import com.seibel.distanthorizons.core.util.math.Mat4f;
+import com.seibel.distanthorizons.core.util.math.DhMat4f;
 import com.seibel.distanthorizons.core.wrapperInterfaces.minecraft.IMinecraftClientWrapper;
 import com.seibel.distanthorizons.core.wrapperInterfaces.minecraft.IMinecraftRenderWrapper;
 import com.seibel.distanthorizons.api.enums.rendering.EDhApiFogColorMode;
@@ -120,8 +120,8 @@ public class DhFogPipeline {
     private boolean initialized = false;
 
     // Pre-allocated temp matrices to avoid per-frame heap allocations
-    private final Mat4f tempMvpMatrix = new Mat4f();
-    private final Mat4f tempInvMvpMatrix = new Mat4f();
+    private final DhMat4f tempMvpMatrix = new DhMat4f();
+    private final DhMat4f tempInvMvpMatrix = new DhMat4f();
 
     public void init(int width, int height) {
         if (this.initialized)
@@ -188,7 +188,7 @@ public class DhFogPipeline {
         String fragSource = readShaderResource("shaders/vulkan/dh_fog.frag");
 
         Pipeline.Builder builder = new Pipeline.Builder(QUAD_FORMAT);
-        builder.compileShaders("dh_fog_compute", vertSource, fragSource);
+        com.braffolk.dhvulkan.compat.Compat.compilePipelineShaders(builder, "dh_fog_compute", vertSource, fragSource);
 
         List<UBO> ubos = new ArrayList<>();
         AlignedStruct.Builder uboBuilder = new AlignedStruct.Builder();
@@ -236,7 +236,7 @@ public class DhFogPipeline {
         ubos.add(mainUbo);
 
         List<ImageDescriptor> imageDescriptors = new ArrayList<>();
-        imageDescriptors.add(new ImageDescriptor(1, "sampler2D", "uDepthMap", FOG_DEPTH_TEXTURE_SLOT));
+        imageDescriptors.add(com.braffolk.dhvulkan.compat.Compat.createImageDescriptor(1, "sampler2D", "uDepthMap", FOG_DEPTH_TEXTURE_SLOT));
 
         builder.setUniforms(ubos, imageDescriptors);
         this.fogComputePipeline = builder.createGraphicsPipeline();
@@ -252,7 +252,7 @@ public class DhFogPipeline {
         String fragSource = readShaderResource("shaders/vulkan/dh_fog_apply.frag");
 
         Pipeline.Builder builder = new Pipeline.Builder(QUAD_FORMAT);
-        builder.compileShaders("dh_fog_apply", vertSource, fragSource);
+        com.braffolk.dhvulkan.compat.Compat.compilePipelineShaders(builder, "dh_fog_apply", vertSource, fragSource);
 
         List<UBO> ubos = new ArrayList<>();
         AlignedStruct.Builder uboBuilder = new AlignedStruct.Builder();
@@ -263,8 +263,8 @@ public class DhFogPipeline {
         ubos.add(mainUbo);
 
         List<ImageDescriptor> imageDescriptors = new ArrayList<>();
-        imageDescriptors.add(new ImageDescriptor(1, "sampler2D", "uFogTexture", FOG_COLOR_TEXTURE_SLOT));
-        imageDescriptors.add(new ImageDescriptor(2, "sampler2D", "uDepthTexture", FOG_APPLY_DEPTH_TEXTURE_SLOT));
+        imageDescriptors.add(com.braffolk.dhvulkan.compat.Compat.createImageDescriptor(1, "sampler2D", "uFogTexture", FOG_COLOR_TEXTURE_SLOT));
+        imageDescriptors.add(com.braffolk.dhvulkan.compat.Compat.createImageDescriptor(2, "sampler2D", "uDepthTexture", FOG_APPLY_DEPTH_TEXTURE_SLOT));
 
         builder.setUniforms(ubos, imageDescriptors);
         this.fogApplyPipeline = builder.createGraphicsPipeline();
@@ -279,7 +279,7 @@ public class DhFogPipeline {
      * Execute fog pipeline: pass 1 (compute fog) + pass 2 (apply fog).
      * Must be called after SSAO but before composite.
      */
-    public void render(DhVulkanFramebuffer dhFramebuffer, Mat4f modelViewMatrix, Mat4f projectionMatrix,
+    public void render(DhVulkanFramebuffer dhFramebuffer, DhMat4f modelViewMatrix, DhMat4f projectionMatrix,
             float partialTicks) {
         if (!this.initialized)
             return;
@@ -527,7 +527,7 @@ public class DhFogPipeline {
         Compat.addUniformWithBuffer(builder, type, name, count, () -> mb);
     }
 
-    private void setUniformMat4(Map<String, MappedBuffer> uniforms, String name, Mat4f matrix) {
+    private void setUniformMat4(Map<String, MappedBuffer> uniforms, String name, DhMat4f matrix) {
         MappedBuffer mb = uniforms.get(name);
         if (mb == null)
             return;
