@@ -297,5 +297,10 @@ public class VkRenderApiDefinition extends AbstractDhRenderApiDefinition {
         public IDhApiRenderableBoxGroup remove(long id) {
             return null; // Not yet implemented
         }
+
+        // Newer DH 3.x versions require close(); older ones don't have it, so no @Override.
+        public void close() {
+            // nothing to release
+        }
     }
 }

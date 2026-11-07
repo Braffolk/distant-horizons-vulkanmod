@@ -295,8 +295,16 @@ public final class Compat {
     public static void beginRenderPass(
             net.vulkanmod.vulkan.framebuffer.RenderPass renderPass,
             net.vulkanmod.vulkan.framebuffer.Framebuffer framebuffer) {
-        #if MC_VER >= MC_1_21_1
+        #if MC_VER > MC_1_21_4
         Renderer.getInstance().beginRenderPass(renderPass, framebuffer);
+        #elif MC_VER >= MC_1_21_1
+        // VM 0.5.x (MC 1.21.1 - 1.21.4): the public method is beginRendering(), and unlike
+        // VM 0.6.x it does not record boundRenderPass or reset viewport/scissor. Do both here.
+        if (Renderer.getInstance().beginRendering(renderPass, framebuffer)) {
+            Renderer.getInstance().setBoundRenderPass(renderPass);
+            Renderer.setViewportState(0, 0, framebuffer.getWidth(), framebuffer.getHeight());
+            Renderer.setScissor(0, 0, framebuffer.getWidth(), framebuffer.getHeight());
+        }
         #else
         try {
             // End any currently active render pass first
@@ -330,13 +338,17 @@ public final class Compat {
                 (net.vulkanmod.vulkan.pass.DefaultMainPass) Renderer.getInstance().getMainPass();
         mainPass.rebindMainTarget();
 
-        #if MC_VER < MC_1_21_1
-        // VM 0.4.2: rebindMainTarget starts auxRenderPass on swapChain but doesn't
+        #if MC_VER <= MC_1_21_4
+        // VM 0.4.2 and 0.5.x: rebindMainTarget starts auxRenderPass on swapChain but doesn't
         // update Renderer state. Fix up so bindGraphicsPipeline/endRenderPass work.
         try {
             net.vulkanmod.vulkan.framebuffer.RenderPass auxPass =
                     (net.vulkanmod.vulkan.framebuffer.RenderPass) defaultMainPassAuxField.get(mainPass);
+            #if MC_VER < MC_1_21_1
             Renderer.getInstance().setBoundFramebuffer(net.vulkanmod.vulkan.Vulkan.getSwapChain());
+            #else
+            Renderer.getInstance().setBoundFramebuffer(Renderer.getInstance().getSwapChain());
+            #endif
             Renderer.getInstance().setBoundRenderPass(auxPass);
         } catch (Exception e) {
             throw new RuntimeException("[DH-Vulkan] Failed to rebind main target on VM 0.4.2", e);
@@ -448,7 +460,7 @@ public final class Compat {
 
     public static VulkanImage getLightmapVulkanImage() {
         try {
-            #if MC_VER >= MC_1_21_1
+            #if MC_VER > MC_1_21_4
             var lightmapView = net.minecraft.client.Minecraft.getInstance()
                     .gameRenderer.lightTexture().getTextureView();
             if (lightmapView == null) return null;
@@ -458,7 +470,8 @@ public final class Compat {
                     net.vulkanmod.gl.VkGlTexture.getTexture(glTex.glId());
             return vkGlTex != null ? vkGlTex.getVulkanImage() : null;
             #else
-            // VM 0.4.2: MC already binds lightmap to slot 2 before our hook fires.
+            // VM 0.4.2 / 0.5.x (MC <= 1.21.4, before the blaze3d GpuTexture rewrite):
+            // MC already binds lightmap to slot 2 before our hook fires.
             // Just read it directly from VTextureSelector.
             return VTextureSelector.getBoundTexture(2);
             #endif
@@ -817,7 +830,8 @@ public final class Compat {
      * MC 1.21.x has options.cloudRange(), MC 1.20.x uses renderDistance.
      */
     public static int getCloudRenderRange() {
-        #if MC_VER <= MC_1_20_6
+        #if MC_VER <= MC_1_21_4
+        // options.cloudRange() only exists from MC 1.21.5; older versions use render distance
         return net.minecraft.client.Minecraft.getInstance().options.renderDistance().get() * 16;
         #else
         return Math.min(net.minecraft.client.Minecraft.getInstance().options.cloudRange().get(), 128) * 16;
@@ -861,6 +875,11 @@ public final class Compat {
                 return opt.orElse(-1);
             }
             return 192; // fallback overworld
+            #elif MC_VER <= MC_1_21_5
+            // MC 1.21.1 - 1.21.5: DimensionType has no cloudHeight yet (added in 1.21.6).
+            // Cloud height lives on the dimension's special effects; NaN means no clouds.
+            float effectsCloudHeight = level.effects().getCloudHeight();
+            return Float.isNaN(effectsCloudHeight) ? -1 : (int) effectsCloudHeight;
             #elif MC_VER <= MC_1_21_10
             java.util.Optional<Integer> opt = level.dimensionType().cloudHeight();
             return opt.orElse(-1);
