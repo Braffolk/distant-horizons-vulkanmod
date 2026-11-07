@@ -17,12 +17,17 @@ remapJar {
 }
 
 processResources {
-    def vmMinVersion = rootProject.minecraft_version.startsWith("1.20") ? ">=0.4.2" : ">=0.6.0"
+    def mcv = rootProject.minecraft_version
+    // VulkanMod line per MC version: 0.4.x (1.20), 0.5.x (1.21.1 - 1.21.4), 0.6.x (newer)
+    def vmMinVersion = mcv.startsWith("1.20") ? ">=0.4.2" : (["1.21.1", "1.21.3", "1.21.4"].contains(mcv) ? ">=0.5.5" : ">=0.6.0")
+    // MC 1.21.4 runs on Fabric loader 0.16.x; newer MC versions need 0.17+
+    def loaderConstraint = ["1.21.1", "1.21.3", "1.21.4"].contains(mcv) ? ">=0.16.9" : ">=0.17.0"
     inputs.property "version", project.version
-    inputs.property "minecraft_version", rootProject.minecraft_version
+    inputs.property "minecraft_version", mcv
     inputs.property "vulkanmod_min_version", vmMinVersion
+    inputs.property "fabric_loader_constraint", loaderConstraint
     filesMatching("fabric.mod.json") {
-        expand "version": project.version, "minecraft_version": rootProject.minecraft_version, "vulkanmod_min_version": vmMinVersion
+        expand "version": project.version, "minecraft_version": mcv, "vulkanmod_min_version": vmMinVersion, "fabric_loader_constraint": loaderConstraint
     }
 }
 
